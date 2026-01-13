@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Results
+results/*/
+!results/archived/
+*.png
+*.jpg
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+
+# Marimo
+__marimo__/
