@@ -10,9 +10,9 @@ import numpy as np
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
-from self_distilled_mae_anomaly_detection import (
-    Config, set_seed, TimeSeriesAnomalyDataset,
-    SelfDistilledMAE, Trainer, Evaluator
+from mae_anomaly import (
+    Config, set_seed, MultivariateTimeSeriesDataset,
+    SelfDistilledMAEMultivariate, Trainer, Evaluator
 )
 
 
@@ -32,19 +32,19 @@ def example_1_basic_usage():
     config.num_epochs = 10  # Quick demo
 
     # Create datasets
-    train_dataset = TimeSeriesAnomalyDataset(
+    train_dataset = MultivariateTimeSeriesDataset(
         num_samples=500,
         seq_length=config.seq_length,
+        num_features=config.num_features,
         anomaly_ratio=0.05,
-        is_train=True,
         seed=42
     )
 
-    test_dataset = TimeSeriesAnomalyDataset(
+    test_dataset = MultivariateTimeSeriesDataset(
         num_samples=200,
         seq_length=config.seq_length,
+        num_features=config.num_features,
         anomaly_ratio=0.25,
-        is_train=False,
         seed=43
     )
 
@@ -53,7 +53,7 @@ def example_1_basic_usage():
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     # Initialize model
-    model = SelfDistilledMAE(config)
+    model = SelfDistilledMAEMultivariate(config)
 
     # Train
     trainer = Trainer(model, config, train_loader, test_loader)
@@ -69,13 +69,13 @@ def example_1_basic_usage():
 
 
 # ============================================================================
-# Example 2: Custom Configuration
+# Example 2: Custom Configuration with Patchify Mode
 # ============================================================================
 
 def example_2_custom_config():
-    """Use custom hyperparameters"""
+    """Use custom hyperparameters and patchify mode"""
     print("\n" + "=" * 80)
-    print("Example 2: Custom Configuration")
+    print("Example 2: Custom Configuration with Patchify Mode")
     print("=" * 80)
 
     set_seed(42)
@@ -85,8 +85,8 @@ def example_2_custom_config():
     config.d_model = 128  # Larger embedding
     config.num_encoder_layers = 4  # Deeper encoder
     config.num_teacher_decoder_layers = 6  # Even deeper teacher
-    config.masking_ratio = 0.75  # More aggressive masking
-    config.margin = 2.0  # Larger margin for discrepancy
+    config.masking_ratio = 0.5  # 50% masking
+    config.patchify_mode = 'patch_cnn'  # Use patch CNN mode
     config.num_epochs = 5
 
     print(f"Custom Config:")
@@ -94,38 +94,96 @@ def example_2_custom_config():
     print(f"  Encoder layers: {config.num_encoder_layers}")
     print(f"  Teacher decoder layers: {config.num_teacher_decoder_layers}")
     print(f"  Masking ratio: {config.masking_ratio}")
+    print(f"  Patchify mode: {config.patchify_mode}")
 
     # Quick training
-    train_dataset = TimeSeriesAnomalyDataset(200, config.seq_length, 0.05, True, 42)
-    test_dataset = TimeSeriesAnomalyDataset(100, config.seq_length, 0.25, False, 43)
+    train_dataset = MultivariateTimeSeriesDataset(
+        200, config.seq_length, config.num_features, 0.05, 42
+    )
+    test_dataset = MultivariateTimeSeriesDataset(
+        100, config.seq_length, config.num_features, 0.25, 43
+    )
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-    model = SelfDistilledMAE(config)
+    model = SelfDistilledMAEMultivariate(config)
     trainer = Trainer(model, config, train_loader, test_loader)
     trainer.train()
 
 
 # ============================================================================
-# Example 3: Single Sample Inference
+# Example 3: Compare Patchify Modes
 # ============================================================================
 
-def example_3_single_sample_inference():
+def example_3_compare_patchify_modes():
+    """Compare different patchify modes"""
+    print("\n" + "=" * 80)
+    print("Example 3: Compare Patchify Modes")
+    print("=" * 80)
+
+    set_seed(42)
+
+    # Create shared datasets
+    config = Config()
+    config.num_epochs = 5
+
+    train_dataset = MultivariateTimeSeriesDataset(
+        300, config.seq_length, config.num_features, 0.05, 42
+    )
+    test_dataset = MultivariateTimeSeriesDataset(
+        100, config.seq_length, config.num_features, 0.25, 43
+    )
+
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+    results = {}
+
+    for mode in ['linear', 'cnn_first', 'patch_cnn']:
+        print(f"\n--- Training with patchify_mode='{mode}' ---")
+        set_seed(42)
+
+        config = Config()
+        config.num_epochs = 5
+        config.patchify_mode = mode
+
+        model = SelfDistilledMAEMultivariate(config)
+        trainer = Trainer(model, config, train_loader, test_loader)
+        trainer.train()
+
+        evaluator = Evaluator(model, config, test_loader)
+        metrics = evaluator.evaluate()
+
+        results[mode] = metrics['roc_auc']
+        print(f"  ROC-AUC: {metrics['roc_auc']:.4f}")
+
+    print("\n--- Summary ---")
+    for mode, auc in results.items():
+        print(f"  {mode}: {auc:.4f}")
+
+
+# ============================================================================
+# Example 4: Single Sample Inference
+# ============================================================================
+
+def example_4_single_sample_inference():
     """Perform inference on a single time series"""
     print("\n" + "=" * 80)
-    print("Example 3: Single Sample Inference")
+    print("Example 4: Single Sample Inference")
     print("=" * 80)
 
     set_seed(42)
     config = Config()
 
     # Create a trained model (using small dataset for demo)
-    train_dataset = TimeSeriesAnomalyDataset(200, config.seq_length, 0.05, True, 42)
+    train_dataset = MultivariateTimeSeriesDataset(
+        200, config.seq_length, config.num_features, 0.05, 42
+    )
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
 
-    model = SelfDistilledMAE(config)
+    model = SelfDistilledMAEMultivariate(config)
     config.num_epochs = 5
     trainer = Trainer(model, config, train_loader, test_loader)
     trainer.train()
@@ -135,73 +193,22 @@ def example_3_single_sample_inference():
     with torch.no_grad():
         # Get a sample
         sample_sequence, sample_label = train_dataset[0]
-        sample_sequence = sample_sequence.unsqueeze(0).to(config.device)  # (1, seq_len, 1)
+        sample_sequence = sample_sequence.unsqueeze(0).to(config.device)
 
-        # Create mask for last 10 positions
-        mask = torch.ones(1, config.seq_length, device=config.device)
-        mask[:, -10:] = 0
+        # Create mask for last patch
+        mask = torch.ones(1, config.num_patches, device=config.device)
+        mask[:, -1] = 0  # Mask last patch
 
         # Forward pass
         teacher_out, student_out, _, _ = model(sample_sequence, mask=mask)
 
-        # Compute anomaly score
-        masked_positions = (mask == 0).unsqueeze(-1)
-        discrepancy = ((teacher_out - student_out) ** 2) * masked_positions
-        anomaly_score = discrepancy.sum() / masked_positions.sum()
+        # Compute anomaly score (discrepancy in masked region)
+        discrepancy = (teacher_out - student_out) ** 2
+        anomaly_score = discrepancy.mean().item()
 
         print(f"Sample Label: {'Anomaly' if sample_label == 1 else 'Normal'}")
-        print(f"Anomaly Score: {anomaly_score.item():.6f}")
+        print(f"Anomaly Score: {anomaly_score:.6f}")
         print(f"Higher score = More anomalous")
-
-
-# ============================================================================
-# Example 4: Batch Inference with Custom Threshold
-# ============================================================================
-
-def example_4_batch_inference():
-    """Process multiple sequences and use custom threshold"""
-    print("\n" + "=" * 80)
-    print("Example 4: Batch Inference with Custom Threshold")
-    print("=" * 80)
-
-    set_seed(42)
-    config = Config()
-
-    # Train model
-    train_dataset = TimeSeriesAnomalyDataset(200, config.seq_length, 0.05, True, 42)
-    test_dataset = TimeSeriesAnomalyDataset(100, config.seq_length, 0.30, False, 43)
-
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-
-    model = SelfDistilledMAE(config)
-    config.num_epochs = 5
-    trainer = Trainer(model, config, train_loader, test_loader)
-    trainer.train()
-
-    # Batch inference
-    evaluator = Evaluator(model, config, test_loader)
-    scores, labels = evaluator.compute_anomaly_scores()
-
-    # Use custom threshold
-    custom_threshold = np.percentile(scores, 70)  # Top 30% are anomalies
-
-    predictions = (scores > custom_threshold).astype(int)
-
-    # Calculate metrics manually
-    true_positives = np.sum((predictions == 1) & (labels == 1))
-    false_positives = np.sum((predictions == 1) & (labels == 0))
-    false_negatives = np.sum((predictions == 0) & (labels == 1))
-
-    precision = true_positives / (true_positives + false_positives + 1e-8)
-    recall = true_positives / (true_positives + false_negatives + 1e-8)
-    f1 = 2 * precision * recall / (precision + recall + 1e-8)
-
-    print(f"Custom Threshold: {custom_threshold:.4f}")
-    print(f"Detected Anomalies: {predictions.sum()} / {len(predictions)}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall: {recall:.4f}")
-    print(f"F1-Score: {f1:.4f}")
 
 
 # ============================================================================
@@ -219,11 +226,13 @@ def example_5_save_load_model():
     config.num_epochs = 5
 
     # Train model
-    train_dataset = TimeSeriesAnomalyDataset(200, config.seq_length, 0.05, True, 42)
+    train_dataset = MultivariateTimeSeriesDataset(
+        200, config.seq_length, config.num_features, 0.05, 42
+    )
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
 
-    model = SelfDistilledMAE(config)
+    model = SelfDistilledMAEMultivariate(config)
     trainer = Trainer(model, config, train_loader, test_loader)
     trainer.train()
 
@@ -233,27 +242,28 @@ def example_5_save_load_model():
         'model_state_dict': model.state_dict(),
         'config': config,
     }, save_path)
-    print(f"✓ Model saved to {save_path}")
+    print(f"Model saved to {save_path}")
 
     # Load model
     checkpoint = torch.load(save_path)
     loaded_config = checkpoint['config']
 
-    new_model = SelfDistilledMAE(loaded_config)
+    new_model = SelfDistilledMAEMultivariate(loaded_config)
     new_model.load_state_dict(checkpoint['model_state_dict'])
     new_model.eval()
-    print(f"✓ Model loaded from {save_path}")
+    print(f"Model loaded from {save_path}")
 
     # Verify loaded model works
-    test_dataset = TimeSeriesAnomalyDataset(50, config.seq_length, 0.25, False, 43)
+    test_dataset = MultivariateTimeSeriesDataset(
+        50, config.seq_length, config.num_features, 0.25, 43
+    )
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     evaluator = Evaluator(new_model, loaded_config, test_loader)
-    scores, labels = evaluator.compute_anomaly_scores()
+    metrics = evaluator.evaluate()
 
-    print(f"✓ Inference on {len(scores)} samples successful")
-    print(f"  Mean score: {scores.mean():.4f}")
-    print(f"  Std score: {scores.std():.4f}")
+    print(f"Inference successful")
+    print(f"  ROC-AUC: {metrics['roc_auc']:.4f}")
 
 
 # ============================================================================
@@ -271,13 +281,17 @@ def example_6_visualize_detection():
     config.num_epochs = 10
 
     # Train model
-    train_dataset = TimeSeriesAnomalyDataset(500, config.seq_length, 0.05, True, 42)
-    test_dataset = TimeSeriesAnomalyDataset(100, config.seq_length, 0.30, False, 43)
+    train_dataset = MultivariateTimeSeriesDataset(
+        500, config.seq_length, config.num_features, 0.05, 42
+    )
+    test_dataset = MultivariateTimeSeriesDataset(
+        100, config.seq_length, config.num_features, 0.30, 43
+    )
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-    model = SelfDistilledMAE(config)
+    model = SelfDistilledMAEMultivariate(config)
     trainer = Trainer(model, config, train_loader, test_loader)
     trainer.train()
 
@@ -297,16 +311,16 @@ def example_6_visualize_detection():
         sample, label = test_dataset[sample_idx]
         sample = sample.unsqueeze(0).to(config.device)
 
-        # Create mask
-        mask = torch.ones(1, config.seq_length, device=config.device)
-        mask[:, -10:] = 0
+        # Create mask for last patch
+        mask = torch.ones(1, config.num_patches, device=config.device)
+        mask[:, -1] = 0
 
         # Forward
         model.eval()
         with torch.no_grad():
             teacher_out, student_out, _, _ = model(sample, mask=mask)
 
-        # Plot
+        # Plot first feature
         sample_np = sample.cpu().numpy()[0, :, 0]
         teacher_np = teacher_out.cpu().numpy()[0, :, 0]
         student_np = student_out.cpu().numpy()[0, :, 0]
@@ -317,21 +331,21 @@ def example_6_visualize_detection():
         axes[idx, 0].plot(t, sample_np, label='Original', linewidth=2)
         axes[idx, 0].plot(t, teacher_np, label='Teacher', linewidth=2, alpha=0.7)
         axes[idx, 0].plot(t, student_np, label='Student', linewidth=2, alpha=0.7)
-        axes[idx, 0].axvspan(config.seq_length - 10, config.seq_length, alpha=0.2, color='gray')
-        axes[idx, 0].set_title(f'{title} Sample - Reconstructions')
+        axes[idx, 0].axvspan(config.seq_length - config.patch_size, config.seq_length, alpha=0.2, color='gray')
+        axes[idx, 0].set_title(f'{title} Sample - Reconstructions (Feature 0)')
         axes[idx, 0].legend()
         axes[idx, 0].grid(True, alpha=0.3)
 
         # Discrepancy
         discrepancy = (teacher_np - student_np) ** 2
         axes[idx, 1].plot(t, discrepancy, color='red', linewidth=2)
-        axes[idx, 1].axvspan(config.seq_length - 10, config.seq_length, alpha=0.2, color='gray')
+        axes[idx, 1].axvspan(config.seq_length - config.patch_size, config.seq_length, alpha=0.2, color='gray')
         axes[idx, 1].set_title(f'{title} Sample - Discrepancy (Score: {scores[sample_idx]:.4f})')
         axes[idx, 1].grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.savefig('example_anomaly_detection.png', dpi=150, bbox_inches='tight')
-    print("✓ Visualization saved to example_anomaly_detection.png")
+    print("Visualization saved to example_anomaly_detection.png")
     plt.show()
 
 
@@ -347,12 +361,12 @@ def main():
 
     # Uncomment the examples you want to run:
 
-    # example_1_basic_usage()  # Basic training and evaluation
-    # example_2_custom_config()  # Custom hyperparameters
-    # example_3_single_sample_inference()  # Single sequence inference
-    # example_4_batch_inference()  # Batch processing with custom threshold
+    example_1_basic_usage()  # Basic training and evaluation
+    # example_2_custom_config()  # Custom hyperparameters with patchify mode
+    # example_3_compare_patchify_modes()  # Compare linear vs cnn_first vs patch_cnn
+    # example_4_single_sample_inference()  # Single sequence inference
     # example_5_save_load_model()  # Model persistence
-    example_6_visualize_detection()  # Visualization
+    # example_6_visualize_detection()  # Visualization
 
     print("\n" + "=" * 80)
     print("Examples completed!")
