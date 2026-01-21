@@ -31,6 +31,7 @@ Thumbs.db
 
 # Claude
 .claude/
+CLAUDE.md
 
 # Marimo
 __marimo__/
