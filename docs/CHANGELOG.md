@@ -1,5 +1,139 @@
 # Changelog
 
+## 2026-01-23 (Update 15): Reduce Periodicity in Complex Normal Data
+
+### Summary
+
+Improved normal data generation to be less strictly periodic, making anomaly detection more challenging and realistic.
+
+### Changes
+
+#### 1. Remove Hard Clipping
+- **Before**: Normal data was clipped to `[0.05, 0.70]` range
+- **After**: No clipping - natural value distribution
+- Reason: Hard clipping made normal data unrealistically bounded and easy to classify
+
+#### 2. Irrational Frequency Ratios
+- **Before**: `freq2 ≈ freq1/10`, `freq3 ≈ freq1/50` (integer-like ratios)
+- **After**: `freq2 = freq1/(π×[2.8-3.5])`, `freq3 = freq1/(π²×[1.5-2.5])`
+- Reason: Integer ratios cause beat patterns to repeat; irrational ratios (π-based) prevent exact repetition
+
+#### 3. Phase Jitter
+- **New feature**: Slowly-varying phase offset added to sinusoidal components
+- Parameters: `enable_phase_jitter=True`, `phase_jitter_sigma=0.002`, `phase_jitter_smoothing=500`
+- Applied with decreasing weight per frequency: fast (1.0), medium (0.7), slow (0.4)
+- Result: Even with same frequencies, patterns drift over time
+
+### New NormalDataComplexity Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_phase_jitter` | True | Enable phase jitter |
+| `phase_jitter_sigma` | 0.002 | Random walk step size |
+| `phase_jitter_smoothing` | 500 | Smoothing window |
+
+### Files Modified
+- `mae_anomaly/dataset_sliding.py`
+- `docs/DATASET.md`
+- `docs/CHANGELOG.md`
+
+---
+
+## 2026-01-23 (Update 14): Experiment Configuration Updates
+
+### Summary
+
+Simplified num_patches options, doubled full search dataset, and improved warning thresholds.
+
+### Changes
+
+#### 1. `num_patches` Grid Reduction
+- **Before**: `[10, 25, 50]` (3 values)
+- **After**: `[10, 25]` (2 values)
+- Reason: 50 patches = 2 timesteps per patch, too granular for effective pattern learning
+
+#### 2. Full Search Dataset Size Doubled
+- **Before**: `full_length = 220000`
+- **After**: `full_length = 440000`
+- Provides more training data for Stage 2 full search
+
+#### 3. Warning Threshold for Sample Count
+- Warnings now only appear when sample count < 200 (previously: any shortage)
+- Reduces noise during quick searches with limited data
+
+#### 4. Grid Combinations
+- **Before**: 2×2×3×3×2×2×2×2×2 = 1152 combinations
+- **After**: 2×2×2×3×2×2×2×2×2 = 768 combinations
+
+### Files Modified
+- `scripts/run_experiments.py`
+- `mae_anomaly/dataset_sliding.py`
+- `docs/ABLATION_STUDIES.md`
+- `docs/VISUALIZATIONS.md`
+
+---
+
+## 2026-01-23 (Update 13): MAE Architecture Enhancements
+
+### Summary
+
+Added two new architecture parameters for standard MAE masking and separate mask tokens, along with experiment infrastructure improvements.
+
+### New Parameters
+
+#### 1. `mask_after_encoder` (config.py)
+- **False (default)**: Mask tokens go through encoder (current behavior)
+- **True**: Standard MAE - encode visible patches only, insert mask tokens before decoder
+
+**Implementation**:
+- Added `_encode_visible_only()` method: Encodes only visible patches
+- Added `_insert_mask_tokens_and_unshuffle()` method: Inserts mask tokens at correct positions
+- Modified `forward()` to support both modes
+
+#### 2. `shared_mask_token` (config.py)
+- **True (default)**: Single mask token shared between teacher/student
+- **False**: Separate learnable mask tokens for teacher and student decoders
+
+**Implementation**:
+- Added `_get_mask_token(for_decoder)` method to retrieve appropriate token
+- Separate `teacher_mask_token` and `student_mask_token` when not shared
+
+### Experiment Changes
+
+**Modified Files**:
+- `scripts/run_experiments.py`
+- `scripts/visualize_all.py`
+
+**Parameter Grid Updates**:
+```python
+DEFAULT_PARAM_GRID = {
+    # ... existing parameters ...
+    'mask_after_encoder': [False, True],
+    'shared_mask_token': [True, False],
+}
+# Total combinations: 2*2*3*3*2*2*2*2*2 = 1152
+```
+
+**Dataset Size Changes**:
+- `quick_length`: 200000 → 66000 (1/3 reduction)
+- `full_length`: 440000 → 220000 (1/2 reduction)
+- `full_epochs`: fixed at 2
+
+**Stage 2 Selection Updates**:
+- Added `mask_after_encoder` (top 5 per value)
+- Added `shared_mask_token` (top 5 per value)
+
+**Output Cleanup**:
+- Removed "Train: X, Test: Y" from Stage 1/2 headers (values were outdated)
+
+### Documentation Updates
+
+**Modified Files**:
+- `docs/ARCHITECTURE.md`: Added MAE Masking Architecture and Mask Token Configuration sections
+- `docs/ABLATION_STUDIES.md`: Added sections 8 (Mask After Encoder) and 9 (Shared Mask Token)
+
+---
+
 ## 2026-01-23 (Update 12.2): Complexity Visualization
 
 ### Summary

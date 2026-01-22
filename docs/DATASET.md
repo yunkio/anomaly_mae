@@ -136,6 +136,7 @@ complexity = NormalDataComplexity(
     enable_varying_correlations=True,     # Time-varying correlations
     enable_drift=True,                    # O-U mean-reverting drift
     enable_normal_bumps=True,             # Small load bumps
+    enable_phase_jitter=True,             # Break strict periodicity
 )
 
 # Create generator with complexity
@@ -191,19 +192,21 @@ complexity = NormalDataComplexity(
 |-----------|---------|-------------|
 | `enable_multi_scale_periodicity` | True | On/off switch |
 
-**Frequency scales**:
+**Frequency scales** (using irrational ratios to prevent beat pattern repetition):
 ```
-freq1: 0.8-1.5    # Fast (hourly-like)
-freq2: 0.08-0.15  # Medium (daily-like, ~10x slower)
-freq3: 0.015-0.03 # Slow (weekly-like, ~50x slower)
+freq1: 0.8-1.5                      # Fast (hourly-like)
+freq2: freq1 / (π * [2.8-3.5])      # Medium (~1/9 to 1/11 of freq1)
+freq3: freq1 / (π² * [1.5-2.5])     # Slow (~1/15 to 1/25 of freq1)
 
-signal = base + amp1*sin(freq1*t) + amp2*sin(freq2*t) + amp3*sin(freq3*t)
+signal = base + amp1*sin(freq1*t + jitter) + amp2*sin(freq2*t + jitter*0.7) + amp3*sin(freq3*t + jitter*0.4)
 ```
+
+**Irrational frequency ratios**: Using π-based ratios (instead of integer ratios like 1:10:50) ensures that beat patterns never repeat exactly, making the signal more realistic.
 
 **Why NOT confused with anomalies**:
 - All patterns are smooth sinusoids (no sudden changes)
 - Total amplitude stays bounded (sum of amps < 0.25)
-- Patterns are predictable and continuous
+- Patterns are continuous (no discontinuities)
 
 ---
 
@@ -303,12 +306,34 @@ x = clip(x + dx, -drift_max, drift_max)
 
 ---
 
+### 7. Phase Jitter
+
+**Purpose**: Break strict periodicity by adding slowly-varying phase offsets to sinusoidal components.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_phase_jitter` | True | On/off switch |
+| `phase_jitter_sigma` | 0.002 | Random walk step size |
+| `phase_jitter_smoothing` | 500 | Smoothing window for phase |
+
+**How it works**:
+- Generates a smoothed random walk as phase offset
+- Applied to each frequency component with decreasing weight (1.0, 0.7, 0.4)
+- Combined with irrational frequency ratios, ensures patterns never repeat exactly
+
+**Why NOT confused with anomalies**:
+- Phase changes are extremely gradual (smoothed over 500 timesteps)
+- Does not change amplitude or value range
+- Only affects timing of peaks/valleys, not their magnitude
+
+---
+
 ### Safety Constraints Summary
 
 | Constraint | Value | Reason |
 |------------|-------|--------|
 | Transition time | >= 1000 ts | Anomalies are much shorter |
-| Value range | [0.05, 0.70] | Anomalies push to 0.7-1.0 |
+| Value range | Natural (no clipping) | Anomalies push to higher ranges |
 | Drift magnitude | max ±0.08 | Memory leak grows 0.3-0.5 |
 | Bump magnitude | max 0.10 | Spike adds 0.3-0.6 |
 | Bump duration | 100-300 ts | Spike is 10-25 ts |

@@ -46,7 +46,7 @@ DEFAULT_PARAM_GRID = {
     # Masking (high impact)
     'masking_ratio': [0.4, 0.7],
     'masking_strategy': ['patch', 'feature_wise'],  # Masking strategy
-    'num_patches': [10, 25, 50],
+    'num_patches': [10, 25],
 
     # Discrepancy loss strategy
     'margin_type': ['hinge', 'softplus', 'dynamic'],
@@ -65,7 +65,7 @@ DEFAULT_PARAM_GRID = {
     'shared_mask_token': [True, False],   # Share mask token between teacher/student
 }
 # Note: margin=0.5, lambda_disc=0.5 are fixed (not in grid)
-# Total combinations: 2*2*3*3*2*2*2*2*2 = 1152
+# Total combinations: 2*2*2*3*2*2*2*2*2 = 768
 
 
 # =============================================================================
@@ -969,7 +969,7 @@ def run_experiments(
     full_train: int = 2000,
     full_test: int = 500,
     quick_length: int = 66000,   # Reduced from 200000 (1/3)
-    full_length: int = 220000,   # Reduced from 440000 (1/2)
+    full_length: int = 440000,   # Full search dataset
     two_stage: bool = True,
     use_complexity: bool = True,
     output_dir: str = 'results/experiments'
@@ -1065,7 +1065,7 @@ if __name__ == "__main__":
     parser.add_argument('--full-train', type=int, default=2000, help='Training samples for full search')
     parser.add_argument('--full-test', type=int, default=500, help='Test samples for full search')
     parser.add_argument('--quick-length', type=int, default=66000, help='Time series length for quick search dataset')
-    parser.add_argument('--full-length', type=int, default=220000, help='Time series length for full search dataset')
+    parser.add_argument('--full-length', type=int, default=440000, help='Time series length for full search dataset')
     parser.add_argument('--no-two-stage', action='store_true', help='Disable two-stage search')
     parser.add_argument('--no-complexity', action='store_true', help='Disable normal data complexity features')
     parser.add_argument('--output-dir', type=str, default='results/experiments', help='Output directory')

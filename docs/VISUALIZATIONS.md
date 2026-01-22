@@ -416,7 +416,7 @@ Stage 2 selects ~50-70 diverse candidates for full training using a 3-phase appr
 | combination_id | Unique identifier for parameter combination |
 | masking_ratio | Masking ratio (0.4, 0.7) |
 | masking_strategy | Masking strategy (patch, feature_wise) |
-| num_patches | Number of patches (10, 25, 50) |
+| num_patches | Number of patches (10, 25) |
 | margin_type | Margin type (hinge, softplus, dynamic) |
 | force_mask_anomaly | Whether to force mask anomaly patches (True/False) |
 | patch_level_loss | Whether to use patch-level loss (True/False) |

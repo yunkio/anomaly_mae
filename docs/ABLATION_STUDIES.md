@@ -263,7 +263,7 @@ All ablations are tested via grid search in `scripts/run_experiments.py`:
 DEFAULT_PARAM_GRID = {
     'masking_ratio': [0.4, 0.7],
     'masking_strategy': ['patch', 'feature_wise'],
-    'num_patches': [10, 25, 50],
+    'num_patches': [10, 25],
     'margin_type': ['hinge', 'softplus', 'dynamic'],
     'force_mask_anomaly': [False, True],
     'patch_level_loss': [True, False],
@@ -271,7 +271,7 @@ DEFAULT_PARAM_GRID = {
     'mask_after_encoder': [False, True],
     'shared_mask_token': [True, False],
 }
-# Total combinations: 2*2*3*3*2*2*2*2*2 = 1152
+# Total combinations: 2*2*2*3*2*2*2*2*2 = 768
 
 # Two-stage grid search
 runner = ExperimentRunner(param_grid=DEFAULT_PARAM_GRID)
@@ -314,7 +314,7 @@ The experiment runner uses a two-stage grid search approach:
 DEFAULT_PARAM_GRID = {
     'masking_ratio': [0.4, 0.7],
     'masking_strategy': ['patch', 'feature_wise'],
-    'num_patches': [10, 25, 50],
+    'num_patches': [10, 25],
     'margin_type': ['hinge', 'softplus', 'dynamic'],
     'force_mask_anomaly': [False, True],
     'patch_level_loss': [True, False],
@@ -322,7 +322,7 @@ DEFAULT_PARAM_GRID = {
     'mask_after_encoder': [False, True],
     'shared_mask_token': [True, False],
 }
-# Total combinations: 2*2*3*3*2*2*2*2*2 = 1152
+# Total combinations: 2*2*2*3*2*2*2*2*2 = 768
 ```
 
 ---

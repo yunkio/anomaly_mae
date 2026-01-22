@@ -116,6 +116,11 @@ class NormalDataComplexity:
     bump_magnitude_max: float = 0.10  # Max magnitude (much less than anomaly's 0.3+)
     bump_features_affected: int = 2  # Only 1-2 features affected (not correlated degradation)
 
+    # 7. Phase Jitter - Slowly varying phase to break strict periodicity
+    enable_phase_jitter: bool = True
+    phase_jitter_sigma: float = 0.002  # Random walk step size for phase
+    phase_jitter_smoothing: int = 500  # Smoothing window for phase changes
+
 
 class SlidingWindowTimeSeriesGenerator:
     """
@@ -178,24 +183,32 @@ class SlidingWindowTimeSeriesGenerator:
             regimes = [{'start': 0, 'end': self.total_length, 'params': self._random_regime_params()}]
 
         # === Step 2: Generate base CPU signal with regime-aware multi-scale periodicity ===
+        # Generate phase jitter for the entire series (breaks strict periodicity)
+        if c.enable_phase_jitter:
+            phase_jitter = self._generate_phase_jitter(self.total_length)
+        else:
+            phase_jitter = np.zeros(self.total_length)
+
         for regime in regimes:
             start, end = regime['start'], regime['end']
             params = regime['params']
             length = end - start
             t = np.arange(length) * 0.01  # Time scale
+            jitter = phase_jitter[start:end]  # Phase jitter for this segment
 
             if c.enable_multi_scale_periodicity:
-                # Three overlapping frequencies
+                # Three overlapping frequencies with phase jitter
+                # Irrational frequency ratios + phase jitter = non-repeating patterns
                 signals[start:end, 0] = (
                     params['cpu_base'] +
-                    params['cpu_amp1'] * np.sin(params['freq1'] * t) +  # Fast (hourly-like)
-                    params['cpu_amp2'] * np.sin(params['freq2'] * t) +  # Medium (daily-like)
-                    params['cpu_amp3'] * np.sin(params['freq3'] * t)    # Slow (weekly-like)
+                    params['cpu_amp1'] * np.sin(params['freq1'] * t + jitter) +  # Fast (hourly-like)
+                    params['cpu_amp2'] * np.sin(params['freq2'] * t + jitter * 0.7) +  # Medium (daily-like)
+                    params['cpu_amp3'] * np.sin(params['freq3'] * t + jitter * 0.4)    # Slow (weekly-like)
                 )
             else:
                 signals[start:end, 0] = (
                     params['cpu_base'] +
-                    params['cpu_amp1'] * np.sin(params['freq1'] * t)
+                    params['cpu_amp1'] * np.sin(params['freq1'] * t + jitter)
                 )
 
         # === Step 3: Apply smooth regime transitions ===
@@ -222,9 +235,8 @@ class SlidingWindowTimeSeriesGenerator:
         if c.enable_normal_bumps:
             signals = self._add_normal_bumps(signals)
 
-        # === Step 8: Safety clip to [0.05, 0.70] ===
-        # This keeps values in "normal" range, below anomaly thresholds
-        signals = np.clip(signals, 0.05, 0.70)
+        # No hard clipping - let normal data have natural range
+        # This makes the task more challenging and realistic
 
         return signals.astype(np.float32)
 
@@ -262,7 +274,25 @@ class SlidingWindowTimeSeriesGenerator:
         return np.clip(signals, 0, 1).astype(np.float32)
 
     def _random_regime_params(self) -> Dict:
-        """Generate random parameters for a single regime."""
+        """Generate random parameters for a single regime.
+
+        Uses irrational frequency ratios (π, √2, φ) to prevent
+        beat pattern repetition and reduce strict periodicity.
+        """
+        # Base fast frequency
+        freq1 = np.random.uniform(0.8, 1.5)
+
+        # Use irrational ratios to prevent beat pattern repetition
+        # π ≈ 3.14159, √2 ≈ 1.41421, φ (golden ratio) ≈ 1.61803
+        PI = np.pi
+        SQRT2 = np.sqrt(2)
+        PHI = (1 + np.sqrt(5)) / 2  # Golden ratio
+
+        # Medium frequency: divide by π with small random variation
+        freq2 = freq1 / (PI * np.random.uniform(2.8, 3.5))  # ~1/9 to 1/11
+        # Slow frequency: divide by π² with variation
+        freq3 = freq1 / (PI * PI * np.random.uniform(1.5, 2.5))  # ~1/15 to 1/25
+
         return {
             # Base values (kept in safe range 0.25-0.55)
             'cpu_base': np.random.uniform(0.28, 0.48),
@@ -273,13 +303,13 @@ class SlidingWindowTimeSeriesGenerator:
             'thread_base': np.random.uniform(0.30, 0.48),
             'error_base': np.random.uniform(0.03, 0.08),
             'queue_base': np.random.uniform(0.12, 0.25),
-            # Multi-scale periodicity parameters
+            # Multi-scale periodicity parameters with irrational ratios
             'cpu_amp1': np.random.uniform(0.06, 0.12),  # Fast cycle amplitude
             'cpu_amp2': np.random.uniform(0.04, 0.08),  # Medium cycle amplitude
             'cpu_amp3': np.random.uniform(0.02, 0.05),  # Slow cycle amplitude
-            'freq1': np.random.uniform(0.8, 1.5),       # Fast frequency
-            'freq2': np.random.uniform(0.08, 0.15),     # Medium frequency (~10x slower)
-            'freq3': np.random.uniform(0.015, 0.03),    # Slow frequency (~50x slower)
+            'freq1': freq1,       # Fast frequency
+            'freq2': freq2,       # Medium frequency (irrational ratio)
+            'freq3': freq3,       # Slow frequency (irrational ratio)
             # Correlation strengths (will vary over time if enabled)
             'corr_cpu_mem': np.random.uniform(0.20, 0.30),
             'corr_cpu_resp': np.random.uniform(0.20, 0.30),
@@ -307,6 +337,26 @@ class SlidingWindowTimeSeriesGenerator:
             current_pos = end_pos
 
         return regimes
+
+    def _generate_phase_jitter(self, length: int) -> np.ndarray:
+        """Generate smoothly varying phase jitter using random walk.
+
+        This breaks strict periodicity by adding a slowly-changing phase offset
+        to sinusoidal components, making patterns less predictable.
+
+        Returns:
+            Array of phase offsets (in radians) for each timestep.
+        """
+        c = self.complexity
+
+        # Generate random walk
+        random_steps = np.random.normal(0, c.phase_jitter_sigma, length)
+        phase_walk = np.cumsum(random_steps)
+
+        # Smooth the random walk to avoid sudden jumps
+        smoothed_phase = gaussian_filter1d(phase_walk, sigma=c.phase_jitter_smoothing)
+
+        return smoothed_phase
 
     def _apply_regime_transitions(self, signal: np.ndarray, regimes: List[Dict]) -> np.ndarray:
         """Apply smooth sigmoid transitions between regimes."""
@@ -905,15 +955,18 @@ class SlidingWindowDataset(Dataset):
             target_disturb = target_counts.get('disturbing_normal', len(disturb_indices))
             target_anomaly = target_counts.get('anomaly', len(anomaly_indices))
 
-            # Check if we have enough samples
+            # Check if we have enough samples (warn only if very low: < 200)
             if len(anomaly_indices) < target_anomaly:
-                print(f"Warning: Not enough anomaly samples ({len(anomaly_indices)} < {target_anomaly})")
+                if len(anomaly_indices) < 200:
+                    print(f"Warning: Not enough anomaly samples ({len(anomaly_indices)} < {target_anomaly})")
                 target_anomaly = len(anomaly_indices)
             if len(disturb_indices) < target_disturb:
-                print(f"Warning: Not enough disturbing samples ({len(disturb_indices)} < {target_disturb})")
+                if len(disturb_indices) < 200:
+                    print(f"Warning: Not enough disturbing samples ({len(disturb_indices)} < {target_disturb})")
                 target_disturb = len(disturb_indices)
             if len(pure_indices) < target_pure:
-                print(f"Warning: Not enough pure normal samples ({len(pure_indices)} < {target_pure})")
+                if len(pure_indices) < 200:
+                    print(f"Warning: Not enough pure normal samples ({len(pure_indices)} < {target_pure})")
                 target_pure = len(pure_indices)
 
             # Sample from each category
