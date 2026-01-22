@@ -48,6 +48,12 @@ class Config:
     patchify_mode: str = 'linear'  # 'patch_cnn', 'linear'
     # - 'patch_cnn': Patchify first, then CNN per patch (no cross-patch leakage)
     # - 'linear': Patchify then linear embedding (MAE original style, no CNN)
+    mask_after_encoder: bool = False  # Standard MAE masking architecture
+    # - False: Mask tokens go through encoder (current behavior)
+    # - True: Encode visible patches only, insert mask tokens before decoder (standard MAE)
+    shared_mask_token: bool = True  # Share mask token between teacher and student
+    # - True: Single mask token shared (current behavior)
+    # - False: Separate mask tokens for teacher and student decoders
 
     # Loss parameters
     margin: float = 0.5

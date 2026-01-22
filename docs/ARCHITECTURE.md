@@ -304,6 +304,98 @@ Each feature independently selects which patches to mask.
 
 ---
 
+## MAE Masking Architecture
+
+The model supports two masking architectures, controlled by `config.mask_after_encoder`:
+
+### Standard Mode (`mask_after_encoder=False`, default)
+
+**Current behavior**: Mask tokens are inserted before encoder
+
+```
+Input: (batch, 100, 8)
+    ↓
+[Embed Input] → (num_patches, batch, d_model)
+    ↓
+[Insert Mask Tokens at masked positions]
+    ↓
+[Positional Encoding]
+    ↓
+[Encoder processes ALL patches including mask tokens]
+    ↓
+[Decoder]
+    ↓
+Output
+```
+
+**Characteristics**:
+- Mask tokens participate in encoder attention
+- Encoder sees full sequence length
+- Simpler implementation
+
+### MAE-Style Mode (`mask_after_encoder=True`)
+
+**Standard MAE approach**: Encode visible patches only, insert mask tokens before decoder
+
+```
+Input: (batch, 100, 8)
+    ↓
+[Embed Input] → (num_patches, batch, d_model)
+    ↓
+[Remove masked patches (keep visible only)]
+    ↓
+[Positional Encoding (visible patches only)]
+    ↓
+[Encoder processes ONLY visible patches]
+    ↓
+[Insert mask tokens at masked positions]
+    ↓
+[Decoder]
+    ↓
+Output
+```
+
+**Characteristics**:
+- Encoder is more efficient (processes fewer tokens)
+- Follows original MAE paper design
+- Mask tokens don't influence encoder representations
+- Better separation between visible and masked information
+
+---
+
+## Mask Token Configuration
+
+The model supports shared or separate mask tokens, controlled by `config.shared_mask_token`:
+
+### Shared Mode (`shared_mask_token=True`, default)
+
+**Single mask token**: Both teacher and student decoders use the same learnable mask token
+
+```python
+self.mask_token = nn.Parameter(...)  # Shared between teacher/student
+```
+
+**Characteristics**:
+- Simpler model (fewer parameters)
+- Teacher and student see identical masked representations
+- Default behavior
+
+### Separate Mode (`shared_mask_token=False`)
+
+**Separate mask tokens**: Teacher and student decoders have independent mask tokens
+
+```python
+self.teacher_mask_token = nn.Parameter(...)  # For teacher decoder
+self.student_mask_token = nn.Parameter(...)  # For student decoder
+```
+
+**Characteristics**:
+- Each decoder can learn its own mask representation
+- More flexibility in reconstruction approach
+- May help differentiate teacher/student behavior on masked regions
+
+---
+
 ## Self-Distillation Mechanism
 
 ### Training Loss
@@ -431,6 +523,8 @@ anomaly_score = MSE(student_out - original)
 | patchify_mode | linear | Patchify mode (linear/patch_cnn) |
 | masking_strategy | patch | Masking strategy (patch/feature_wise) |
 | masking_ratio | 0.4 | Training masking ratio |
+| mask_after_encoder | False | Standard MAE masking (encode visible only) |
+| shared_mask_token | True | Share mask token between teacher/student |
 | num_encoder_layers | 3 | Encoder layers |
 | num_teacher_decoder_layers | 4 | Teacher decoder layers |
 | num_student_decoder_layers | 1 | Student decoder layers |

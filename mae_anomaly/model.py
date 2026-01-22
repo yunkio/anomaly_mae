@@ -111,8 +111,18 @@ class SelfDistilledMAEMultivariate(nn.Module):
         if config.use_student:
             self.student_output_projection = nn.Linear(config.d_model, output_dim)
 
-        # Mask token
-        self.mask_token = nn.Parameter(torch.randn(1, 1, config.d_model))
+        # Mask token(s) - shared or separate for teacher/student
+        self.shared_mask_token = getattr(config, 'shared_mask_token', True)
+        self.mask_after_encoder = getattr(config, 'mask_after_encoder', False)
+
+        if self.shared_mask_token:
+            self.mask_token = nn.Parameter(torch.randn(1, 1, config.d_model))
+        else:
+            # Separate mask tokens for teacher and student
+            if config.use_teacher:
+                self.teacher_mask_token = nn.Parameter(torch.randn(1, 1, config.d_model))
+            if config.use_student:
+                self.student_mask_token = nn.Parameter(torch.randn(1, 1, config.d_model))
 
     def _build_embedding_layers(self, config: Config):
         """Build embedding layers based on patchify_mode"""
@@ -243,8 +253,9 @@ class SelfDistilledMAEMultivariate(nn.Module):
         mask[:num_keep, :] = 1
         mask = torch.gather(mask, dim=0, index=ids_restore)
 
-        # Apply mask
-        mask_tokens = self.mask_token.repeat(seq_len, batch_size, 1)
+        # Apply mask (use default mask token - teacher for consistency)
+        mask_token = self._get_mask_token('teacher')
+        mask_tokens = mask_token.repeat(seq_len, batch_size, 1)
         x_masked = x * mask.unsqueeze(-1) + mask_tokens * (1 - mask.unsqueeze(-1))
 
         return x_masked, mask
@@ -315,11 +326,103 @@ class SelfDistilledMAEMultivariate(nn.Module):
         patch_mask = mask.min(dim=2)[0]  # (batch, num_patches)
         patch_mask = patch_mask.transpose(0, 1)  # (num_patches, batch)
 
-        # Apply patch-level masking to embedded input
-        mask_tokens = self.mask_token.repeat(seq_len, batch_size, 1)
+        # Apply patch-level masking to embedded input (use default mask token)
+        mask_token = self._get_mask_token('teacher')
+        mask_tokens = mask_token.repeat(seq_len, batch_size, 1)
         x_masked = x * patch_mask.unsqueeze(-1) + mask_tokens * (1 - patch_mask.unsqueeze(-1))
 
         return x_masked, mask
+
+    def _get_mask_token(self, for_decoder: str = 'shared') -> torch.Tensor:
+        """Get the appropriate mask token based on configuration.
+
+        Args:
+            for_decoder: 'teacher', 'student', or 'shared'
+        Returns:
+            mask_token: (1, 1, d_model)
+        """
+        if self.shared_mask_token:
+            return self.mask_token
+        else:
+            if for_decoder == 'teacher':
+                return self.teacher_mask_token if hasattr(self, 'teacher_mask_token') else self.mask_token
+            elif for_decoder == 'student':
+                return self.student_mask_token if hasattr(self, 'student_mask_token') else self.mask_token
+            else:
+                # Fallback to teacher token
+                return self.teacher_mask_token if hasattr(self, 'teacher_mask_token') else self.mask_token
+
+    def _encode_visible_only(
+        self,
+        x_embed: torch.Tensor,
+        mask: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Encode only visible patches (standard MAE style).
+
+        Args:
+            x_embed: (seq_len, batch, d_model) - embedded patches
+            mask: (seq_len, batch) - binary mask (1=keep, 0=masked)
+        Returns:
+            latent: (num_visible, batch, d_model) - encoded visible patches
+            ids_restore: (seq_len, batch) - indices to restore original order
+        """
+        seq_len, batch_size, d_model = x_embed.shape
+        num_keep = int(mask.sum(dim=0)[0].item())  # Assumes uniform masking across batch
+
+        # Sort patches: visible first, then masked
+        # noise gives same order for patches with same mask value, preserving relative order
+        noise = torch.rand(seq_len, batch_size, device=x_embed.device)
+        # Make visible patches (mask=1) have lower sorting values
+        ids_shuffle = torch.argsort(mask * 1000 + noise, dim=0, descending=True)
+        ids_restore = torch.argsort(ids_shuffle, dim=0)
+
+        # Keep only visible patches
+        ids_keep = ids_shuffle[:num_keep, :]  # (num_keep, batch)
+
+        # Gather visible patches
+        ids_keep_expanded = ids_keep.unsqueeze(-1).expand(-1, -1, d_model)
+        x_visible = torch.gather(x_embed, dim=0, index=ids_keep_expanded)  # (num_keep, batch, d_model)
+
+        # Add positional encoding to visible patches
+        # Use the original positions for positional encoding
+        x_visible_with_pos = self.pos_encoder(x_visible)
+
+        # Encode only visible patches
+        latent = self.encoder(x_visible_with_pos)  # (num_keep, batch, d_model)
+
+        return latent, ids_restore
+
+    def _insert_mask_tokens_and_unshuffle(
+        self,
+        latent: torch.Tensor,
+        ids_restore: torch.Tensor,
+        seq_len: int,
+        mask_token: torch.Tensor
+    ) -> torch.Tensor:
+        """Insert mask tokens at masked positions and restore original order.
+
+        Args:
+            latent: (num_visible, batch, d_model) - encoded visible patches
+            ids_restore: (seq_len, batch) - indices to restore original order
+            seq_len: original sequence length (num_patches)
+            mask_token: (1, 1, d_model) - mask token to insert
+        Returns:
+            latent_full: (seq_len, batch, d_model) - full sequence with mask tokens
+        """
+        num_visible, batch_size, d_model = latent.shape
+        num_masked = seq_len - num_visible
+
+        # Create mask tokens for masked positions
+        mask_tokens = mask_token.expand(num_masked, batch_size, -1)  # (num_masked, batch, d_model)
+
+        # Concatenate visible patches and mask tokens
+        latent_with_masks = torch.cat([latent, mask_tokens], dim=0)  # (seq_len, batch, d_model)
+
+        # Unshuffle to restore original order
+        ids_restore_expanded = ids_restore.unsqueeze(-1).expand(-1, -1, d_model)
+        latent_full = torch.gather(latent_with_masks, dim=0, index=ids_restore_expanded)
+
+        return latent_full
 
     def forward(
         self,
@@ -344,17 +447,26 @@ class SelfDistilledMAEMultivariate(nn.Module):
 
         # Embed input based on patchify_mode
         x_embed = self._embed_input(x)  # (seq_len, batch, d_model)
+        seq_len = x_embed.size(0)
 
         # Masking based on strategy
         mask_provided_externally = mask is not None
+        is_feature_wise = self.config.masking_strategy == 'feature_wise'
+
+        # Get default mask token for pre-masking (used when mask_after_encoder=False)
+        default_mask_token = self._get_mask_token('teacher')
+
         if mask is None:
-            if self.config.masking_strategy == 'feature_wise':
+            if is_feature_wise:
                 # feature_wise handles force_mask_anomaly internally
                 x_masked, mask = self.feature_wise_masking(x_embed, x, masking_ratio, point_labels)
                 # mask is (batch, num_patches, num_features) for feature_wise
+                # Convert to patch-level mask for encoding
+                patch_mask = mask.min(dim=2)[0].transpose(0, 1)  # (seq_len, batch)
             else:  # 'patch' strategy (default)
                 x_masked, mask = self.random_masking(x_embed, masking_ratio)
                 # mask is (seq_len, batch) for patch strategy
+                patch_mask = mask
         else:
             # Handle pre-defined mask (from external source like evaluator)
             # External mask is always (batch, seq_length) format
@@ -363,14 +475,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 mask = mask_reshaped[:, :, -1]
 
             mask = mask.transpose(0, 1)  # (seq_len, batch)
-            mask_tokens = self.mask_token.repeat(x_embed.size(0), x_embed.size(1), 1)
+            patch_mask = mask
+            mask_tokens = default_mask_token.repeat(x_embed.size(0), x_embed.size(1), 1)
             x_masked = x_embed * mask.unsqueeze(-1) + mask_tokens * (1 - mask.unsqueeze(-1))
 
         # Force mask patches containing anomalies during training (patch strategy only)
         # Note: feature_wise strategy handles force_mask_anomaly in feature_wise_masking()
         if (self.training and self.config.force_mask_anomaly and
             point_labels is not None and self.config.masking_strategy == 'patch'):
-            seq_len = mask.shape[0]
+            current_seq_len = patch_mask.shape[0]
 
             if self.use_patch:
                 patch_labels = point_labels.reshape(batch_size, self.num_patches, self.patch_size)
@@ -380,42 +493,57 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 anomaly_patches = point_labels.transpose(0, 1).float()
 
             # Force anomaly patches to be masked
-            mask = mask * (1 - anomaly_patches)
+            patch_mask = patch_mask * (1 - anomaly_patches)
+            mask = patch_mask  # Update mask for patch strategy
 
             # Add random masking if needed to maintain masking ratio
-            target_num_masked = round(seq_len * masking_ratio)
-            current_num_masked = (1 - mask).sum(dim=0)
+            target_num_masked = round(current_seq_len * masking_ratio)
+            current_num_masked = (1 - patch_mask).sum(dim=0)
 
             for b in range(batch_size):
                 additional_needed = int(target_num_masked - current_num_masked[b].item())
                 if additional_needed > 0:
-                    available_mask = (mask[:, b] == 1) & (anomaly_patches[:, b] == 0)
+                    available_mask = (patch_mask[:, b] == 1) & (anomaly_patches[:, b] == 0)
                     available_indices = torch.where(available_mask)[0]
 
                     if len(available_indices) > 0:
                         num_to_mask = min(additional_needed, len(available_indices))
-                        perm = torch.randperm(len(available_indices), device=mask.device)[:num_to_mask]
+                        perm = torch.randperm(len(available_indices), device=patch_mask.device)[:num_to_mask]
                         indices_to_mask = available_indices[perm]
-                        mask[indices_to_mask, b] = 0
+                        patch_mask[indices_to_mask, b] = 0
+                        mask = patch_mask
 
-            # Re-apply masking
-            mask_tokens = self.mask_token.repeat(x_embed.size(0), x_embed.size(1), 1)
-            x_masked = x_embed * mask.unsqueeze(-1) + mask_tokens * (1 - mask.unsqueeze(-1))
+            # Re-apply masking for non-mask_after_encoder mode
+            if not self.mask_after_encoder:
+                mask_tokens = default_mask_token.repeat(x_embed.size(0), x_embed.size(1), 1)
+                x_masked = x_embed * patch_mask.unsqueeze(-1) + mask_tokens * (1 - patch_mask.unsqueeze(-1))
 
-        # Positional encoding
-        x_masked = self.pos_encoder(x_masked)
+        # === Encoding ===
+        if self.mask_after_encoder:
+            # Standard MAE: encode visible patches only, insert mask tokens before decoder
+            latent_visible, ids_restore = self._encode_visible_only(x_embed, patch_mask)
+        else:
+            # Current behavior: mask tokens go through encoder
+            x_masked = self.pos_encoder(x_masked)
+            latent = self.encoder(x_masked)
 
-        # Encode
-        latent = self.encoder(x_masked)
-
-        # Decode
+        # === Decoding ===
         tgt = self.pos_encoder(torch.zeros_like(x_embed))
 
         teacher_output = None
         student_output = None
 
         if self.config.use_teacher and self.teacher_decoder is not None:
-            teacher_hidden = self.teacher_decoder(tgt, latent)
+            if self.mask_after_encoder:
+                # Insert mask tokens before teacher decoder
+                teacher_mask_token = self._get_mask_token('teacher')
+                teacher_latent = self._insert_mask_tokens_and_unshuffle(
+                    latent_visible, ids_restore, seq_len, teacher_mask_token
+                )
+            else:
+                teacher_latent = latent
+
+            teacher_hidden = self.teacher_decoder(tgt, teacher_latent)
             teacher_output = self.teacher_output_projection(teacher_hidden)
             teacher_output = teacher_output.transpose(0, 1)
 
@@ -423,7 +551,16 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 teacher_output = self.unpatchify(teacher_output)
 
         if self.config.use_student and self.student_decoder is not None:
-            student_hidden = self.student_decoder(tgt, latent)
+            if self.mask_after_encoder:
+                # Insert mask tokens before student decoder
+                student_mask_token = self._get_mask_token('student')
+                student_latent = self._insert_mask_tokens_and_unshuffle(
+                    latent_visible, ids_restore, seq_len, student_mask_token
+                )
+            else:
+                student_latent = latent
+
+            student_hidden = self.student_decoder(tgt, student_latent)
             student_output = self.student_output_projection(student_hidden)
             student_output = student_output.transpose(0, 1)
 
@@ -444,17 +581,17 @@ class SelfDistilledMAEMultivariate(nn.Module):
             if self.use_patch and mask.shape[1] == self.num_patches:
                 mask = mask.unsqueeze(-1).repeat(1, 1, self.patch_size)
                 mask = mask.reshape(batch_size, seq_length)
-        elif self.config.masking_strategy == 'feature_wise':
+        elif is_feature_wise:
             # mask is (batch, num_patches, num_features)
             # Convert to (batch, seq_length) by:
             # 1. Take min across features (position masked if ANY feature masked)
             # 2. Expand patches to time steps
-            patch_mask = mask.min(dim=2)[0]  # (batch, num_patches)
+            patch_mask_out = mask.min(dim=2)[0]  # (batch, num_patches)
             if self.use_patch:
-                patch_mask = patch_mask.unsqueeze(-1).repeat(1, 1, self.patch_size)
-                mask = patch_mask.reshape(batch_size, seq_length)
+                patch_mask_out = patch_mask_out.unsqueeze(-1).repeat(1, 1, self.patch_size)
+                mask = patch_mask_out.reshape(batch_size, seq_length)
             else:
-                mask = patch_mask
+                mask = patch_mask_out
         else:
             # patch strategy: mask is (seq_len, batch)
             mask = mask.transpose(0, 1)  # (batch, seq_len)

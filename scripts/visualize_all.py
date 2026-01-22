@@ -117,7 +117,8 @@ def main():
     if not param_keys:
         print("WARNING: Could not determine param_keys, using defaults")
         param_keys = ['masking_ratio', 'masking_strategy', 'num_patches',
-                      'margin_type', 'force_mask_anomaly', 'patch_level_loss', 'patchify_mode']
+                      'margin_type', 'force_mask_anomaly', 'patch_level_loss', 'patchify_mode',
+                      'mask_after_encoder', 'shared_mask_token']
 
     # 1. Data Visualizations
     if not args.skip_data:

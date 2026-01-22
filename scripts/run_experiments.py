@@ -59,9 +59,13 @@ DEFAULT_PARAM_GRID = {
 
     # Patchify mode (CNN vs Linear embedding)
     'patchify_mode': ['patch_cnn', 'linear'],
+
+    # MAE architecture options
+    'mask_after_encoder': [False, True],  # Standard MAE: encode visible only
+    'shared_mask_token': [True, False],   # Share mask token between teacher/student
 }
 # Note: margin=0.5, lambda_disc=0.5 are fixed (not in grid)
-# Total combinations: 2*2*3*3*2*2*2 = 288
+# Total combinations: 2*2*3*3*2*2*2*2*2 = 1152
 
 
 # =============================================================================
@@ -481,7 +485,7 @@ class ExperimentRunner:
         # Stage 1: Quick Search
         print("\n" + "-"*80)
         print("STAGE 1: Quick Search")
-        print(f"Epochs: {quick_epochs}, Train: {quick_train}, Test: {quick_test}")
+        print(f"Epochs: {quick_epochs}")
         print("-"*80)
 
         self.base_config.num_epochs = quick_epochs
@@ -548,7 +552,7 @@ class ExperimentRunner:
         if two_stage:
             print("\n" + "-"*80)
             print("STAGE 2: Full Search (Diverse Selection)")
-            print(f"Epochs: {full_epochs}, Train: {full_train}, Test: {full_test}")
+            print(f"Epochs: {full_epochs}")
             print("-"*80)
 
             # Use diverse selection method
@@ -721,6 +725,20 @@ class ExperimentRunner:
                 added = add_candidates(df_subset, f'num_patches={val}', n_per_value)
                 print(f"    num_patches={val}: {added} models")
 
+        # mask_after_encoder: True and False
+        if 'mask_after_encoder' in quick_df.columns:
+            for val in [True, False]:
+                df_subset = quick_df[quick_df['mask_after_encoder'] == val].sort_values('roc_auc', ascending=False)
+                added = add_candidates(df_subset, f'mask_after_encoder={val}', n_per_value)
+                print(f"    mask_after_encoder={val}: {added} models")
+
+        # shared_mask_token: True and False
+        if 'shared_mask_token' in quick_df.columns:
+            for val in [True, False]:
+                df_subset = quick_df[quick_df['shared_mask_token'] == val].sort_values('roc_auc', ascending=False)
+                added = add_candidates(df_subset, f'shared_mask_token={val}', n_per_value)
+                print(f"    shared_mask_token={val}: {added} models")
+
         print(f"  After Phase 1: {len(selected_ids)} unique models")
 
         # 2. Add top 10 by overall ROC-AUC (excluding already selected)
@@ -761,6 +779,8 @@ class ExperimentRunner:
             ('margin_type', ['hinge', 'softplus', 'dynamic']),
             ('patchify_mode', ['patch_cnn', 'linear']),
             ('masking_strategy', ['patch', 'feature_wise']),
+            ('mask_after_encoder', [True, False]),
+            ('shared_mask_token', [True, False]),
         ]
 
         # Add masking_ratio and num_patches if present
@@ -948,8 +968,8 @@ def run_experiments(
     full_epochs: int = 2,
     full_train: int = 2000,
     full_test: int = 500,
-    quick_length: int = 200000,
-    full_length: int = 440000,
+    quick_length: int = 66000,   # Reduced from 200000 (1/3)
+    full_length: int = 220000,   # Reduced from 440000 (1/2)
     two_stage: bool = True,
     use_complexity: bool = True,
     output_dir: str = 'results/experiments'
@@ -1044,8 +1064,8 @@ if __name__ == "__main__":
     parser.add_argument('--full-epochs', type=int, default=2, help='Epochs for full search')
     parser.add_argument('--full-train', type=int, default=2000, help='Training samples for full search')
     parser.add_argument('--full-test', type=int, default=500, help='Test samples for full search')
-    parser.add_argument('--quick-length', type=int, default=200000, help='Time series length for quick search dataset')
-    parser.add_argument('--full-length', type=int, default=440000, help='Time series length for full search dataset')
+    parser.add_argument('--quick-length', type=int, default=66000, help='Time series length for quick search dataset')
+    parser.add_argument('--full-length', type=int, default=220000, help='Time series length for full search dataset')
     parser.add_argument('--no-two-stage', action='store_true', help='Disable two-stage search')
     parser.add_argument('--no-complexity', action='store_true', help='Disable normal data complexity features')
     parser.add_argument('--output-dir', type=str, default='results/experiments', help='Output directory')

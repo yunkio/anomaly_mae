@@ -157,6 +157,43 @@ Test the impact of different patchification strategies on anomaly detection:
 
 ---
 
+### 8. Mask After Encoder Experiments
+
+**Configuration**:
+- `mask_after_encoder=False` (default): Mask tokens go through encoder
+- `mask_after_encoder=True`: Standard MAE - encode visible patches only
+
+**Pipeline Comparison**:
+
+| Mode | Encoder Input | Mask Token Insertion |
+|------|---------------|---------------------|
+| False (current) | All patches (visible + mask tokens) | Before encoder |
+| True (standard MAE) | Only visible patches | Before decoder |
+
+**Purpose**:
+Test whether standard MAE masking architecture (encode visible only) outperforms the current approach.
+
+**Hypothesis**:
+- Standard MAE may learn better representations by not letting mask tokens influence encoding
+- Current approach may benefit from mask token attention patterns
+
+---
+
+### 9. Shared vs Separate Mask Token Experiments
+
+**Configuration**:
+- `shared_mask_token=True` (default): Single mask token shared by teacher/student
+- `shared_mask_token=False`: Separate learnable mask tokens
+
+**Purpose**:
+Test whether independent mask representations help differentiate teacher/student behavior.
+
+**Hypothesis**:
+- Separate mask tokens may allow each decoder to learn optimal representations for its capacity
+- Shared mask token provides simpler, more consistent learning signal
+
+---
+
 ## Comparison Table
 
 ### Patch Size Comparison
@@ -231,14 +268,16 @@ DEFAULT_PARAM_GRID = {
     'force_mask_anomaly': [False, True],
     'patch_level_loss': [True, False],
     'patchify_mode': ['patch_cnn', 'linear'],
+    'mask_after_encoder': [False, True],
+    'shared_mask_token': [True, False],
 }
-# Total combinations: 2*2*3*3*2*2*2 = 288
+# Total combinations: 2*2*3*3*2*2*2*2*2 = 1152
 
 # Two-stage grid search
 runner = ExperimentRunner(param_grid=DEFAULT_PARAM_GRID)
 results = runner.run_grid_search(
     quick_epochs=1,       # Stage 1: quick screening
-    full_epochs=3,        # Stage 2: full training
+    full_epochs=2,        # Stage 2: full training (fixed at 2)
     two_stage=True
 )
 ```
@@ -280,8 +319,10 @@ DEFAULT_PARAM_GRID = {
     'force_mask_anomaly': [False, True],
     'patch_level_loss': [True, False],
     'patchify_mode': ['patch_cnn', 'linear'],
+    'mask_after_encoder': [False, True],
+    'shared_mask_token': [True, False],
 }
-# Total combinations: 2*2*3*3*2*2*2 = 288
+# Total combinations: 2*2*3*3*2*2*2*2*2 = 1152
 ```
 
 ---
@@ -298,6 +339,8 @@ Stage 2 uses a 3-phase diverse selection strategy:
 - `masking_strategy`: patch (5) + feature_wise (5)
 - `masking_ratio`: each value (5)
 - `num_patches`: each value (5)
+- `mask_after_encoder`: True (5) + False (5)
+- `shared_mask_token`: True (5) + False (5)
 
 **Phase 2: Overall Performance (Phase 1 제외)**
 - Top 10 by overall ROC-AUC (Phase 1에서 선택되지 않은 모델만)
