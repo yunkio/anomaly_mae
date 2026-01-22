@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-01-23 (Update 19): Enhanced Dataset Statistics Display
+
+### Changes
+- Now displays **3 dataset views**: Train Set (Raw), Test Set (Raw), Test Set (Downsampled)
+- Each view shows **Anomaly Types** distribution (per sample, not per region)
+- Clearer output format for experiment monitoring
+
+### Output Format
+```
+[Quick Dataset - Train Set (Raw)]
+  - Pure Normal: X,XXX (XX.X%)
+  - Anomaly: XXX (X.X%)
+  Anomaly Types:
+    - spike: XX
+    - memory_leak: XX
+    ...
+
+[Quick Dataset - Test Set (Raw)]
+  ...
+
+[Quick Dataset - Test Set (Downsampled to 65%:15%:25%)]
+  ...
+```
+
+### Files Modified
+- `scripts/run_experiments.py`
+
+---
+
 ## 2026-01-23 (Update 18): Train/Test Set Composition Fix
 
 ### Problem
