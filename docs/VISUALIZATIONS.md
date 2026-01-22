@@ -124,13 +124,14 @@ Understanding the dataset, anomaly types, and experiment settings.
 
 | File | Description |
 |------|-------------|
-| `anomaly_types.png` | Examples of different anomaly types (point, contextual, collective, frequency, trend) |
-| `sample_types.png` | Comparison of pure normal, disturbing normal, and anomaly samples |
-| `feature_examples.png` | Multivariate feature visualization for normal and anomaly samples |
+| `sample_types.png` | Comparison of pure normal, disturbing normal, and anomaly samples (diverse sampling for variety) |
+| `feature_examples.png` | All 8 features with actual FEATURE_NAMES (CPU, Memory, DiskIO, etc.) for normal and anomaly samples |
 | `dataset_statistics.png` | Label and sample type distributions |
-| `anomaly_generation_rules.png` | **NEW**: Detailed rules for each anomaly type (spike, memory_leak, noise, drift, network_congestion, disturbing) |
-| `feature_correlations.png` | **NEW**: Feature correlation matrix and generation rules explanation |
-| `experiment_settings.png` | **NEW**: Experiment settings summary (Stage 1/2 epochs, data counts, seeds) |
+| `anomaly_generation_rules.png` | Detailed rules for each anomaly type with actual dataset examples |
+| `feature_correlations.png` | Feature correlation matrix and generation rules explanation |
+| `experiment_settings.png` | Experiment settings summary (Stage 1/2 epochs, data counts, seeds) |
+
+**Note**: `anomaly_types.png` was removed (redundant with `anomaly_generation_rules.png`).
 
 ### 2. Architecture Visualizations (`architecture/`)
 
@@ -139,7 +140,7 @@ Understanding the model architecture and concepts.
 | File | Description |
 |------|-------------|
 | `model_pipeline.png` | Overall Self-Distilled MAE pipeline diagram |
-| `patchify_modes.png` | Comparison of cnn_first, patch_cnn, and linear modes |
+| `patchify_modes.png` | Conceptual flow diagrams showing processing pipeline differences (CNN-First, Patch-CNN, Linear) |
 | `masking_visualization.png` | Step-by-step visualization of the masking process |
 | `self_distillation_concept.png` | Teacher vs Student behavior on normal/anomaly data |
 | `margin_types.png` | Hinge, softplus, and dynamic margin loss functions |
@@ -196,7 +197,7 @@ Detailed analysis of the single best performing model, including qualitative cas
 | `best_model_detection_examples.png` | TP, TN, FP, FN example time series |
 | `best_model_summary.png` | Summary statistics and configuration |
 | `pure_vs_disturbing_normal.png` | Detailed comparison of pure normal vs disturbing normal |
-| `discrepancy_trend.png` | Discrepancy trend analysis across time steps |
+| `discrepancy_trend.png` | Discrepancy trend with std bands, zoomed last-patch view, and box plots by sample type |
 | `hypothesis_verification.png` | **NEW**: Verification of hypotheses about disturbing normal performance |
 | `case_study_gallery.png` | Representative TP/TN/FP/FN case studies with detailed analysis |
 | `anomaly_type_case_studies.png` | **NEW**: Per-anomaly-type case studies (TP vs FN) |
@@ -257,14 +258,13 @@ from mae_anomaly.visualization import (
 from mae_anomaly.visualization import DataVisualizer
 
 data_vis = DataVisualizer(output_dir='output/data', config=config)
-data_vis.plot_anomaly_types()
-data_vis.plot_sample_types()
-data_vis.plot_feature_examples()
+data_vis.plot_sample_types()           # Diverse sampling for variety
+data_vis.plot_feature_examples()       # All 8 features with FEATURE_NAMES
 data_vis.plot_dataset_statistics()
 data_vis.plot_anomaly_generation_rules()  # Dynamic: uses ANOMALY_TYPE_NAMES
 data_vis.plot_feature_correlations()
 data_vis.plot_experiment_settings()
-data_vis.generate_all()  # Generate all
+data_vis.generate_all()  # Generate all (excludes redundant anomaly_types)
 ```
 
 ### ArchitectureVisualizer

@@ -1,5 +1,99 @@
 # Changelog
 
+## 2026-01-23 (Update 11): Visualization Quality Improvements
+
+### Changes
+
+#### 1. Removed Redundant anomaly_types Visualization
+
+**Modified Files**:
+- `mae_anomaly/visualization/data_visualizer.py`
+
+**Changes**:
+- Removed `plot_anomaly_types()` from `generate_all()` - redundant with `plot_anomaly_generation_rules()`
+- The `anomaly_generation_rules.png` provides more informative visualization using actual dataset samples
+
+---
+
+#### 2. Improved feature_examples Visualization
+
+**Modified Files**:
+- `mae_anomaly/visualization/data_visualizer.py`
+
+**Changes**:
+- Now displays ALL 8 features (was hardcoded to 5)
+- Uses actual `FEATURE_NAMES` for labels (CPU_Usage, Memory_Usage, etc.)
+- Dynamic subplot layout based on feature count
+
+---
+
+#### 3. Improved sample_types Visualization with Diverse Sampling
+
+**Modified Files**:
+- `mae_anomaly/visualization/data_visualizer.py`
+
+**Changes**:
+- Added `select_diverse()` function to randomly sample from shuffled data
+- Prevents showing overlapping/similar samples due to stride=10
+- Ensures visual diversity in sample type comparison
+
+---
+
+#### 4. Improved patchify_modes as Conceptual Flow Diagrams
+
+**Modified Files**:
+- `mae_anomaly/visualization/architecture_visualizer.py`
+
+**Changes**:
+- Complete rewrite of `plot_patchify_modes()`
+- Now shows conceptual processing pipeline with boxes and arrows
+- Three modes clearly differentiated:
+  - **CNN-First**: Input → CNN → Patchify → Embed
+  - **Patch-CNN**: Input → Patchify → CNN (per patch) → Embed
+  - **Linear (MAE)**: Input → Patchify → Linear Projection
+- Removed meaningless bar chart comparison
+
+---
+
+#### 5. Improved discrepancy_trend Visualization
+
+**Modified Files**:
+- `mae_anomaly/visualization/best_model_visualizer.py`
+
+**Changes**:
+- Added standard deviation bands (mean ± std shading)
+- Added zoomed view of last patch region (masked region)
+- Added box plots showing discrepancy distribution by sample type
+- Added statistics text box with mean ± std values
+- More informative for analyzing masked region behavior
+
+---
+
+#### 6. Fixed METRIC_COLUMNS in Stage2Visualizer
+
+**Modified Files**:
+- `mae_anomaly/visualization/stage2_visualizer.py`
+
+**Changes**:
+- Added missing metrics to `METRIC_COLUMNS`:
+  - `disturbing_roc_auc`, `disturbing_f1`, `disturbing_precision`, `disturbing_recall`
+  - `quick_roc_auc`, `quick_f1`, `quick_disturbing_roc_auc`
+  - `roc_auc_improvement`, `selection_criterion`, `stage2_rank`
+- Prevents metrics from being incorrectly treated as hyperparameters
+
+---
+
+### Benefits
+
+1. **Cleaner visualizations**: Removed redundant plots, improved clarity
+2. **More informative**: All features shown with proper names
+3. **Better diversity**: Sample type visualization shows varied data
+4. **Conceptual clarity**: Patchify modes now explain the processing pipeline
+5. **Statistical rigor**: Discrepancy trend includes uncertainty bands
+6. **Correct hyperparameter analysis**: Metrics no longer appear as hyperparameters in Stage 2 plots
+
+---
+
 ## 2026-01-23 (Update 10): Dynamic Hyperparameter and Configuration Management
 
 ### Changes
