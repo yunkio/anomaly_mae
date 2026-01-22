@@ -120,7 +120,7 @@ class DataVisualizer:
         set_seed(42)
         generator = SlidingWindowTimeSeriesGenerator(
             total_length=50000,  # Small dataset for visualization
-            num_features=1,
+            num_features=self.config.num_features,  # Use config value (must be >= 2 for point_spike)
             interval_scale=1.5,
             seed=42
         )

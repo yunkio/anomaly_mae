@@ -82,7 +82,9 @@ class ExperimentRunner:
         self,
         param_grid: Dict[str, List] = None,
         base_config: Config = None,
-        output_dir: str = 'results/experiments'
+        output_dir: str = 'results/experiments',
+        quick_length: int = 200000,
+        full_length: int = None
     ):
         self.param_grid = param_grid or DEFAULT_PARAM_GRID
         self.base_config = base_config or Config()
@@ -99,7 +101,7 @@ class ExperimentRunner:
         self.best_metrics = None
 
         # Generate sliding window dataset once (shared across all experiments)
-        self._generate_dataset()
+        self._generate_dataset(quick_length=quick_length, full_length=full_length)
 
         print(f"\nExperiment results will be saved to: {self.output_dir}")
 
@@ -195,7 +197,7 @@ class ExperimentRunner:
         )
 
         # Get sample type distribution
-        sample_types = temp_dataset.sample_type_labels
+        sample_types = temp_dataset.sample_types
         n_pure_normal = (sample_types == 0).sum()
         n_disturbing_normal = (sample_types == 1).sum()
         n_anomaly = (sample_types == 2).sum()
@@ -933,6 +935,8 @@ def run_experiments(
     full_epochs: int = 2,
     full_train: int = 2000,
     full_test: int = 500,
+    quick_length: int = 200000,
+    full_length: int = 440000,
     two_stage: bool = True,
     output_dir: str = 'results/experiments'
 ) -> Tuple[pd.DataFrame, str]:
@@ -950,6 +954,8 @@ def run_experiments(
         full_epochs: Epochs for full search
         full_train: Training samples for full search
         full_test: Test samples for full search
+        quick_length: Time series length for quick search dataset
+        full_length: Time series length for full search dataset
         two_stage: If True, run quick then full search
         output_dir: Directory to save results
 
@@ -963,7 +969,9 @@ def run_experiments(
     # Initialize runner
     runner = ExperimentRunner(
         param_grid=param_grid,
-        output_dir=output_dir
+        output_dir=output_dir,
+        quick_length=quick_length,
+        full_length=full_length
     )
 
     # Run grid search
@@ -1020,6 +1028,8 @@ if __name__ == "__main__":
     parser.add_argument('--full-epochs', type=int, default=2, help='Epochs for full search')
     parser.add_argument('--full-train', type=int, default=2000, help='Training samples for full search')
     parser.add_argument('--full-test', type=int, default=500, help='Test samples for full search')
+    parser.add_argument('--quick-length', type=int, default=200000, help='Time series length for quick search dataset')
+    parser.add_argument('--full-length', type=int, default=440000, help='Time series length for full search dataset')
     parser.add_argument('--no-two-stage', action='store_true', help='Disable two-stage search')
     parser.add_argument('--output-dir', type=str, default='results/experiments', help='Output directory')
     args = parser.parse_args()
@@ -1031,6 +1041,8 @@ if __name__ == "__main__":
         full_epochs=args.full_epochs,
         full_train=args.full_train,
         full_test=args.full_test,
+        quick_length=args.quick_length,
+        full_length=args.full_length,
         two_stage=not args.no_two_stage,
         output_dir=args.output_dir
     )
