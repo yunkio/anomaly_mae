@@ -13,6 +13,7 @@ import torch
 from torch.utils.data import Dataset
 from typing import Tuple, Optional, List, Dict
 from dataclasses import dataclass
+from scipy.ndimage import gaussian_filter1d
 
 
 # Feature names (8 features for server monitoring)
@@ -163,8 +164,6 @@ class SlidingWindowTimeSeriesGenerator:
         5. Bounded drift (Ornstein-Uhlenbeck process)
         6. Normal bumps (small, gradual load increases)
         """
-        from scipy.ndimage import gaussian_filter1d
-
         signals = np.zeros((self.total_length, self.num_features), dtype=np.float32)
         c = self.complexity  # Shorthand
 
@@ -231,8 +230,6 @@ class SlidingWindowTimeSeriesGenerator:
 
     def _generate_simple_normal_series(self) -> np.ndarray:
         """Simple normal series generation (when complexity is disabled)."""
-        from scipy.ndimage import gaussian_filter1d
-
         t = np.linspace(0, self.total_length * 0.1, self.total_length)
         signals = np.zeros((self.total_length, self.num_features), dtype=np.float32)
 
@@ -343,7 +340,6 @@ class SlidingWindowTimeSeriesGenerator:
 
     def _generate_correlated_features(self, signals: np.ndarray, regimes: List[Dict]) -> np.ndarray:
         """Generate correlated features with optional time-varying correlations."""
-        from scipy.ndimage import gaussian_filter1d
         c = self.complexity
 
         # Time-varying correlation modifier
