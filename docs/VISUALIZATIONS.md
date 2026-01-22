@@ -7,13 +7,47 @@
 
 ## Overview
 
-This project generates comprehensive visualizations through a unified script (`visualize_all.py`). Visualizations are organized into five main categories:
+This project generates comprehensive visualizations through a modular visualization package (`mae_anomaly.visualization`) with a unified entry script (`scripts/visualize_all.py`). Visualizations are organized into six main categories:
 
 1. **Data Visualizations** - Dataset characteristics, anomaly generation rules, feature correlations
 2. **Architecture Visualizations** - Model pipeline, patchify modes, self-distillation concept
 3. **Stage 1 Visualizations** - Quick search (hyperparameter screening) results
 4. **Stage 2 Visualizations** - Full training results with per-hyperparameter analysis
 5. **Best Model Visualizations** - Detailed analysis including pure/disturbing normal comparison
+6. **Training Progress Visualizations** - Model learning evolution over training epochs
+
+---
+
+## Module Structure
+
+The visualization code is organized in `mae_anomaly/visualization/`:
+
+```
+mae_anomaly/visualization/
+├── __init__.py                  # Module exports
+├── base.py                      # Common utilities and color functions
+├── data_visualizer.py           # DataVisualizer class
+├── architecture_visualizer.py   # ArchitectureVisualizer class
+├── experiment_visualizer.py     # ExperimentVisualizer (Stage 1)
+├── stage2_visualizer.py         # Stage2Visualizer class
+├── best_model_visualizer.py     # BestModelVisualizer class
+└── training_visualizer.py       # TrainingProgressVisualizer class
+```
+
+### Dynamic Color Management
+
+All visualizers use dynamic color functions from `base.py`:
+
+```python
+from mae_anomaly.visualization import (
+    get_anomaly_colors,       # Returns dict mapping anomaly types to colors
+    get_feature_colors,       # Returns dict mapping feature names to colors
+    SAMPLE_TYPE_COLORS,       # {0: '#3498DB', 1: '#F39C12', 2: '#E74C3C'}
+    SAMPLE_TYPE_NAMES,        # {0: 'Pure Normal', 1: 'Disturbing Normal', 2: 'Anomaly'}
+)
+```
+
+This ensures consistency when anomaly types or features change.
 
 ---
 
@@ -192,26 +226,51 @@ Visualizations showing how the model learns over training epochs (requires `--re
 
 ## Visualization Classes
 
+All visualizers are now imported from the `mae_anomaly.visualization` module:
+
+```python
+from mae_anomaly.visualization import (
+    # Base utilities
+    setup_style,
+    find_latest_experiment,
+    load_experiment_data,
+    load_best_model,
+    collect_predictions,
+    collect_detailed_data,
+    get_anomaly_colors,
+    get_feature_colors,
+    SAMPLE_TYPE_NAMES,
+    SAMPLE_TYPE_COLORS,
+    # Visualizers
+    DataVisualizer,
+    ArchitectureVisualizer,
+    ExperimentVisualizer,
+    Stage2Visualizer,
+    BestModelVisualizer,
+    TrainingProgressVisualizer,
+)
+```
+
 ### DataVisualizer
 
 ```python
-from scripts.visualize_all import DataVisualizer
+from mae_anomaly.visualization import DataVisualizer
 
 data_vis = DataVisualizer(output_dir='output/data', config=config)
 data_vis.plot_anomaly_types()
 data_vis.plot_sample_types()
 data_vis.plot_feature_examples()
 data_vis.plot_dataset_statistics()
-data_vis.plot_anomaly_generation_rules()  # NEW
-data_vis.plot_feature_correlations()       # NEW
-data_vis.plot_experiment_settings()        # NEW
+data_vis.plot_anomaly_generation_rules()  # Dynamic: uses ANOMALY_TYPE_NAMES
+data_vis.plot_feature_correlations()
+data_vis.plot_experiment_settings()
 data_vis.generate_all()  # Generate all
 ```
 
 ### ArchitectureVisualizer
 
 ```python
-from scripts.visualize_all import ArchitectureVisualizer
+from mae_anomaly.visualization import ArchitectureVisualizer
 
 arch_vis = ArchitectureVisualizer(output_dir='output/architecture', config=config)
 arch_vis.plot_model_pipeline()
@@ -226,7 +285,7 @@ arch_vis.generate_all()  # Generate all
 ### ExperimentVisualizer (Stage 1)
 
 ```python
-from scripts.visualize_all import ExperimentVisualizer
+from mae_anomaly.visualization import ExperimentVisualizer
 import pandas as pd
 
 results_df = pd.read_csv('results/experiments/20260122/quick_search_results.csv')
@@ -248,7 +307,7 @@ stage1_vis.generate_all()  # Generate all
 ### Stage2Visualizer
 
 ```python
-from scripts.visualize_all import Stage2Visualizer
+from mae_anomaly.visualization import Stage2Visualizer
 import pandas as pd
 import json
 
@@ -262,16 +321,16 @@ stage2_vis.plot_quick_vs_full()
 stage2_vis.plot_selection_criterion_analysis()
 stage2_vis.plot_learning_curves(top_k=10)
 stage2_vis.plot_summary_dashboard()
-stage2_vis.plot_all_hyperparameters()          # NEW: Per-hyperparameter analysis
-stage2_vis.plot_hyperparameter_interactions()  # NEW: Interaction heatmaps
-stage2_vis.plot_best_config_summary()          # NEW: Best config summary
+stage2_vis.plot_all_hyperparameters()
+stage2_vis.plot_hyperparameter_interactions()
+stage2_vis.plot_best_config_summary()
 stage2_vis.generate_all()  # Generate all
 ```
 
 ### BestModelVisualizer
 
 ```python
-from scripts.visualize_all import BestModelVisualizer, load_best_model
+from mae_anomaly.visualization import BestModelVisualizer, load_best_model
 
 model, config, test_loader, metrics = load_best_model('results/experiments/20260122/best_model.pt')
 
@@ -286,19 +345,19 @@ best_vis.plot_detection_examples()
 best_vis.plot_summary_statistics()
 best_vis.plot_pure_vs_disturbing_normal()
 best_vis.plot_discrepancy_trend()
-best_vis.plot_hypothesis_verification()   # NEW: Hypothesis verification
+best_vis.plot_hypothesis_verification()
 # Qualitative case studies
-best_vis.plot_case_study_gallery()           # NEW: TP/TN/FP/FN gallery
-best_vis.plot_anomaly_type_case_studies()    # NEW: Per-anomaly-type
-best_vis.plot_feature_contribution_analysis() # NEW: Feature importance
-best_vis.plot_hardest_samples()              # NEW: Hardest samples
+best_vis.plot_case_study_gallery()
+best_vis.plot_anomaly_type_case_studies()
+best_vis.plot_feature_contribution_analysis()
+best_vis.plot_hardest_samples()
 best_vis.generate_all()  # Generate all
 ```
 
 ### TrainingProgressVisualizer
 
 ```python
-from scripts.visualize_all import TrainingProgressVisualizer
+from mae_anomaly.visualization import TrainingProgressVisualizer
 import json
 
 with open('results/experiments/20260122/best_config.json') as f:
@@ -311,10 +370,10 @@ progress_vis.generate_all()  # Re-trains model and generates all plots
 progress_vis.plot_score_evolution()
 progress_vis.plot_sample_trajectories()
 progress_vis.plot_metrics_evolution()
-progress_vis.plot_late_bloomer_analysis()      # UPDATED: Per-epoch thresholds
-progress_vis.plot_late_bloomer_case_studies()  # NEW: Detailed case studies
+progress_vis.plot_late_bloomer_analysis()
+progress_vis.plot_late_bloomer_case_studies()
 progress_vis.plot_anomaly_type_learning()
-progress_vis.plot_reconstruction_evolution()   # UPDATED: Includes student & discrepancy
+progress_vis.plot_reconstruction_evolution()
 progress_vis.plot_decision_boundary_evolution()
 ```
 
@@ -425,4 +484,4 @@ Consistent colors across all visualizations:
 
 ---
 
-**Status**: Documentation complete. All visualizations implemented and tested.
+**Status**: Documentation complete. Visualization module modularized (Update 9). All visualizers use dynamic color management.

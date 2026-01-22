@@ -1,5 +1,252 @@
 # Changelog
 
+## 2026-01-23 (Update 9): Visualization Module Modularization
+
+### Changes
+
+#### 1. Modular Visualization Package
+
+**New Directory Structure**:
+```
+mae_anomaly/
+└── visualization/
+    ├── __init__.py              # Module exports
+    ├── base.py                  # Common utilities, colors, data loading
+    ├── data_visualizer.py       # DataVisualizer class
+    ├── architecture_visualizer.py  # ArchitectureVisualizer class
+    ├── experiment_visualizer.py # ExperimentVisualizer (Stage 1)
+    ├── stage2_visualizer.py     # Stage2Visualizer class
+    ├── best_model_visualizer.py # BestModelVisualizer class
+    └── training_visualizer.py   # TrainingProgressVisualizer class
+```
+
+**Modified Files**:
+- [scripts/visualize_all.py](../scripts/visualize_all.py): Reduced from ~4900 lines to ~166 lines
+- [mae_anomaly/visualization/](../mae_anomaly/visualization/): New modular package
+
+**Benefits**:
+- Cleaner, more maintainable code structure
+- Each visualizer class in its own file
+- Common utilities centralized in `base.py`
+- Easy to extend with new visualizers
+
+---
+
+#### 2. Dynamic Color Management
+
+**Modified Files**:
+- `mae_anomaly/visualization/base.py`
+- `mae_anomaly/visualization/best_model_visualizer.py`
+- `mae_anomaly/visualization/training_visualizer.py`
+
+**Changes**:
+- Created `get_anomaly_colors()` function that dynamically generates colors for all anomaly types
+- Created `SAMPLE_TYPE_COLORS` and `SAMPLE_TYPE_NAMES` constants
+- Replaced all hardcoded color dictionaries with dynamic functions
+- Colors now automatically adapt when anomaly types are added/removed
+
+**Before** (hardcoded):
+```python
+colors = {
+    'normal': '#3498DB',
+    'spike': '#E74C3C',
+    # ... manually maintained
+}
+```
+
+**After** (dynamic):
+```python
+from mae_anomaly.visualization import get_anomaly_colors
+colors = get_anomaly_colors()  # Automatically includes all anomaly types
+```
+
+---
+
+#### 3. Dynamic plot_anomaly_generation_rules
+
+**Modified Files**:
+- `mae_anomaly/visualization/data_visualizer.py`
+
+**Changes**:
+- `plot_anomaly_generation_rules()` now dynamically generates visualizations based on `ANOMALY_TYPE_NAMES`
+- Uses actual dataset examples instead of synthetic simulation
+- Automatically adapts grid size based on number of anomaly types
+- Gets anomaly info (length_range, characteristics) from `ANOMALY_TYPE_CONFIGS`
+
+---
+
+#### 4. Usage Update
+
+**New Import Pattern**:
+```python
+# Old (from script)
+from scripts.visualize_all import DataVisualizer, load_best_model
+
+# New (from module)
+from mae_anomaly.visualization import (
+    DataVisualizer,
+    ArchitectureVisualizer,
+    ExperimentVisualizer,
+    Stage2Visualizer,
+    BestModelVisualizer,
+    TrainingProgressVisualizer,
+    setup_style,
+    load_best_model,
+    get_anomaly_colors,
+)
+```
+
+**Running visualizations** (unchanged):
+```bash
+python scripts/visualize_all.py  # Still works the same way
+```
+
+---
+
+## 2026-01-23 (Update 8): Point Spike Duration Change and Visualization Fixes
+
+### Changes
+
+#### 1. Point Spike Duration Change
+
+**Modified Files**:
+- [mae_anomaly/dataset_sliding.py](../mae_anomaly/dataset_sliding.py)
+- [docs/DATASET.md](DATASET.md)
+
+**Changes**:
+- Point spike duration: (1, 3) → **(3, 5)** timesteps
+- Still the shortest anomaly type, but more detectable
+
+```python
+# Before
+7: {'length_range': (1, 3), 'interval_mean': 4000}
+
+# After
+7: {'length_range': (3, 5), 'interval_mean': 4000}
+```
+
+---
+
+#### 2. Visualization Color Map Update
+
+**Modified Files**:
+- [scripts/visualize_all.py](../scripts/visualize_all.py)
+
+**Changes**:
+- Updated `plot_loss_by_anomaly_type()` colors: Added `point_spike` color
+- Updated `plot_loss_scatter_by_anomaly_type()` colors: Fixed outdated anomaly type names (`noise`, `drift` → actual types)
+
+**Before** (incorrect):
+```python
+colors = {
+    'normal': '#3498DB',
+    'spike': '#E74C3C',
+    'memory_leak': '#F39C12',
+    'noise': '#9B59B6',        # ← Wrong
+    'drift': '#1ABC9C',         # ← Wrong
+    'network_congestion': '#E67E22'
+}
+```
+
+**After** (correct):
+```python
+colors = {
+    'normal': '#3498DB',
+    'spike': '#E74C3C',
+    'memory_leak': '#F39C12',
+    'cpu_saturation': '#9B59B6',
+    'network_congestion': '#E67E22',
+    'cascading_failure': '#1ABC9C',
+    'resource_contention': '#16A085',
+    'point_spike': '#E91E63',
+}
+```
+
+---
+
+#### 3. Anomaly-Type Performance Comparison Verification
+
+**Existing Functions (Best Model)**:
+- `plot_loss_by_anomaly_type()`: Loss distribution per anomaly type ✓
+- `plot_performance_by_anomaly_type()`: Detection rate & mean score per type ✓
+- `plot_loss_scatter_by_anomaly_type()`: Loss scatter per type ✓
+- `plot_anomaly_type_case_studies()`: TP/FN examples per type ✓
+
+**Existing Functions (Training Progress)**:
+- `plot_anomaly_type_learning()`: Detection rate over epochs per type ✓
+
+**Stage 1/2**: Designed for hyperparameter comparison, not anomaly-type analysis (by design)
+
+---
+
+## 2026-01-23 (Update 7): Point Spike Anomaly and Dataset Statistics
+
+### Changes
+
+#### 1. New Anomaly Type: Point Spike
+
+**Modified Files**:
+- [mae_anomaly/dataset_sliding.py](../mae_anomaly/dataset_sliding.py)
+- [docs/DATASET.md](DATASET.md)
+
+**New Anomaly Type**:
+- **point_spike** (type 7): True point anomaly lasting only 3-5 timesteps
+- **Unique characteristic**: 2+ random features spike simultaneously
+- Makes threshold-based detection on individual features less effective
+
+```python
+# Point spike configuration
+7: {'length_range': (3, 5), 'interval_mean': 4000}
+
+# Injection logic
+def _inject_point_spike(self, signals, start, end):
+    # Select 2+ random features
+    num_features_to_spike = np.random.randint(2, self.num_features + 1)
+    features_to_spike = np.random.choice(self.num_features, num_features_to_spike, replace=False)
+    # Apply spike magnitude +0.3 to +0.6 to each selected feature
+```
+
+---
+
+#### 2. Dataset Statistics Output
+
+**Modified Files**:
+- [scripts/run_experiments.py](../scripts/run_experiments.py)
+
+**New Feature**: When running experiments, dataset statistics are now printed:
+
+```
+[Quick Dataset Statistics - Test Set (Raw)]
+Sample Types:
+  - Pure Normal:       XXXX (XX.X%)
+  - Disturbing Normal: XXX (XX.X%)
+  - Anomaly:           XXX (XX.X%)
+  - Total:             XXXX
+
+Anomaly Types (region count):
+  - spike: XX
+  - memory_leak: XX
+  - cpu_saturation: XX
+  - network_congestion: XX
+  - cascading_failure: XX
+  - resource_contention: XX
+  - point_spike: XX
+```
+
+---
+
+#### 3. Visualization Code Update
+
+**Modified Files**:
+- [scripts/visualize_all.py](../scripts/visualize_all.py)
+
+**Changes**:
+- `plot_anomaly_type_case_studies()`: Now dynamically uses `ANOMALY_TYPE_NAMES` instead of hardcoded list
+- `plot_anomaly_type_learning()`: Now dynamically uses `ANOMALY_TYPE_NAMES` instead of hardcoded list
+- Handles any number of anomaly types automatically
+
+---
+
 ## 2026-01-23 (Update 6): Reduce Full Search Epochs
 
 ### Changes

@@ -131,8 +131,17 @@ class ExperimentRunner:
         print(f"  Quick: {len(self.quick_signals):,} timesteps, {len(self.quick_anomaly_regions)} anomaly regions", flush=True)
         print(f"         train_ratio={self.quick_train_ratio} -> ~{int(quick_length/10*self.quick_train_ratio):,} train, ~{int(quick_length/10*(1-self.quick_train_ratio)):,} test", flush=True)
 
+        # Print quick dataset statistics
+        self._print_dataset_statistics(
+            "Quick Dataset",
+            self.quick_signals,
+            self.quick_point_labels,
+            self.quick_anomaly_regions,
+            self.quick_train_ratio
+        )
+
         # Generate full search time series (longer for thorough training)
-        print("Generating full search dataset...", flush=True)
+        print("\nGenerating full search dataset...", flush=True)
         full_generator = SlidingWindowTimeSeriesGenerator(
             total_length=full_length,
             num_features=config.num_features,
@@ -142,6 +151,77 @@ class ExperimentRunner:
         self.signals, self.point_labels, self.anomaly_regions = full_generator.generate()
         print(f"  Full: {len(self.signals):,} timesteps, {len(self.anomaly_regions)} anomaly regions", flush=True)
         print(f"        train_ratio={self.full_train_ratio} -> ~{int(full_length/10*self.full_train_ratio):,} train, ~{int(full_length/10*(1-self.full_train_ratio)):,} test", flush=True)
+
+        # Print full dataset statistics
+        self._print_dataset_statistics(
+            "Full Dataset",
+            self.signals,
+            self.point_labels,
+            self.anomaly_regions,
+            self.full_train_ratio
+        )
+
+    def _print_dataset_statistics(
+        self,
+        name: str,
+        signals: np.ndarray,
+        point_labels: np.ndarray,
+        anomaly_regions: list,
+        train_ratio: float
+    ):
+        """Print detailed statistics about the dataset
+
+        Args:
+            name: Dataset name (e.g., "Quick Dataset", "Full Dataset")
+            signals: Time series signals
+            point_labels: Point-level anomaly labels
+            anomaly_regions: List of AnomalyRegion objects
+            train_ratio: Train/test split ratio
+        """
+        config = self.base_config
+
+        # Create temporary test dataset to get sample-level statistics
+        temp_dataset = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=config.seq_length,
+            stride=config.sliding_window_stride,
+            mask_last_n=config.mask_last_n,
+            split='test',
+            train_ratio=train_ratio,
+            seed=config.random_seed
+            # No target_counts - get raw distribution
+        )
+
+        # Get sample type distribution
+        sample_types = temp_dataset.sample_type_labels
+        n_pure_normal = (sample_types == 0).sum()
+        n_disturbing_normal = (sample_types == 1).sum()
+        n_anomaly = (sample_types == 2).sum()
+        total = len(sample_types)
+
+        print(f"\n  [{name} Statistics - Test Set (Raw)]")
+        print(f"  Sample Types:")
+        print(f"    - Pure Normal:       {n_pure_normal:,} ({100*n_pure_normal/total:.1f}%)")
+        print(f"    - Disturbing Normal: {n_disturbing_normal:,} ({100*n_disturbing_normal/total:.1f}%)")
+        print(f"    - Anomaly:           {n_anomaly:,} ({100*n_anomaly/total:.1f}%)")
+        print(f"    - Total:             {total:,}")
+
+        # Get anomaly type distribution (from anomaly_regions)
+        anomaly_type_counts = {}
+        for region in anomaly_regions:
+            atype = region.anomaly_type
+            anomaly_type_counts[atype] = anomaly_type_counts.get(atype, 0) + 1
+
+        print(f"\n  Anomaly Types (region count):")
+        for atype_idx in sorted(anomaly_type_counts.keys()):
+            atype_name = SLIDING_ANOMALY_TYPE_NAMES[atype_idx] if atype_idx < len(SLIDING_ANOMALY_TYPE_NAMES) else f"type_{atype_idx}"
+            count = anomaly_type_counts[atype_idx]
+            print(f"    - {atype_name}: {count}")
+
+        # Clean up temporary dataset
+        del temp_dataset
 
     def generate_combinations(self) -> List[Dict]:
         """Generate all parameter combinations"""

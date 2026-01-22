@@ -27,7 +27,7 @@ FEATURE_NAMES = [
     'QueueLength',   # 7: Request queue (correlated with CPU, ThreadCount)
 ]
 
-# Anomaly type constants (6 types + normal)
+# Anomaly type constants (7 types + normal)
 ANOMALY_TYPE_NAMES = [
     'normal',              # 0
     'spike',               # 1: Traffic spike / DDoS
@@ -36,6 +36,7 @@ ANOMALY_TYPE_NAMES = [
     'network_congestion',  # 4: Network bottleneck
     'cascading_failure',   # 5: Error propagation
     'resource_contention', # 6: Thread/queue competition
+    'point_spike',         # 7: Point anomaly (3-5 timesteps, 2+ features)
 ]
 ANOMALY_TYPES = {name: idx for idx, name in enumerate(ANOMALY_TYPE_NAMES)}
 NUM_FEATURES = len(FEATURE_NAMES)
@@ -56,6 +57,8 @@ ANOMALY_TYPE_CONFIGS = {
     5: {'length_range': (60, 120), 'interval_mean': 6500},
     # resource_contention: Medium with oscillation
     6: {'length_range': (35, 65), 'interval_mean': 4500},
+    # point_spike: Very short point anomaly (3-5 timesteps)
+    7: {'length_range': (3, 5), 'interval_mean': 4000},
 }
 
 
@@ -64,7 +67,7 @@ class AnomalyRegion:
     """Represents an anomaly region in the time series"""
     start: int
     end: int
-    anomaly_type: int  # 1-6 (not 0, which is normal)
+    anomaly_type: int  # 1-7 (not 0, which is normal)
 
 
 class SlidingWindowTimeSeriesGenerator:
@@ -320,6 +323,25 @@ class SlidingWindowTimeSeriesGenerator:
         if self.num_features > 1:
             signals[start:end, 1] += np.random.uniform(0.15, 0.3)
 
+    def _inject_point_spike(self, signals: np.ndarray, start: int, end: int) -> None:
+        """Inject point spike anomaly (3-5 timesteps, 2+ random features)
+
+        This is a true point anomaly - very short duration with random features spiking.
+        Unlike other anomalies, which features spike is random (but at least 2).
+        """
+        # Select 2 or more random features to spike
+        num_features_to_spike = np.random.randint(2, self.num_features + 1)
+        features_to_spike = np.random.choice(
+            self.num_features,
+            size=num_features_to_spike,
+            replace=False
+        )
+
+        # Apply spike to selected features
+        for feat_idx in features_to_spike:
+            spike_magnitude = np.random.uniform(0.3, 0.6)
+            signals[start:end, feat_idx] += spike_magnitude
+
     def _distribute_anomalies(self) -> List[AnomalyRegion]:
         """
         Distribute anomalies throughout the time series.
@@ -391,6 +413,7 @@ class SlidingWindowTimeSeriesGenerator:
             4: self._inject_network_congestion,
             5: self._inject_cascading_failure,
             6: self._inject_resource_contention,
+            7: self._inject_point_spike,
         }
 
         for region in anomaly_regions:

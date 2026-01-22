@@ -120,7 +120,7 @@ QueueLength = base + 0.2 * CPU + 0.15 * ThreadCount + noise
 
 ## Anomaly Types
 
-The dataset includes **6 distinct anomaly types** commonly observed in server monitoring systems.
+The dataset includes **7 distinct anomaly types** commonly observed in server monitoring systems.
 
 ### Anomaly Type Summary
 
@@ -133,6 +133,7 @@ The dataset includes **6 distinct anomaly types** commonly observed in server mo
 | 4 | Network Congestion | Medium (30-60) | 4000 | Network bottleneck |
 | 5 | Cascading Failure | Long (60-120) | 6500 | Error propagation chain |
 | 6 | Resource Contention | Medium (35-65) | 4500 | Thread/queue competition |
+| 7 | **Point Spike** | **Very Short (3-5)** | 4000 | **True point anomaly** |
 
 > **Note**: Duration is in timesteps. Interval is the mean number of timesteps between occurrences (before applying `interval_scale`).
 
@@ -258,20 +259,41 @@ The dataset includes **6 distinct anomaly types** commonly observed in server mo
 
 ---
 
+### 7. Point Spike (True Point Anomaly)
+
+**Real-world scenario**: A brief sensor glitch, momentary hardware fault, or single-event upset.
+
+**Characteristics**:
+- **Duration**: Very short (3-5 timesteps)
+- **Onset**: Instantaneous
+- **Recovery**: Immediate
+- **Unique**: 2+ random features spike simultaneously
+
+**Affected Features**:
+
+| Feature | Effect | Selection |
+|---------|--------|-----------|
+| 2+ Random Features | Spike | Random selection from all 8 features |
+| Spike magnitude | +0.3 to +0.6 per feature | Same magnitude for all selected |
+
+> **Note**: Unlike other anomaly types where specific features are always affected, Point Spike randomly selects 2 or more features to spike. This makes it harder to detect using simple threshold methods on individual features.
+
+---
+
 ### Feature Impact Matrix
 
-| Feature | Spike | MemLeak | CPUSat | NetCong | Cascade | Contention |
-|---------|:-----:|:-------:|:------:|:-------:|:-------:|:----------:|
-| CPU | +++ | - | ++++ | - | ++ | ++ |
-| Memory | - | ++++ | - | - | - | ++ |
-| DiskIO | - | +++ | - | - | - | - |
-| Network | ++++ | - | - | ++++ | - | - |
-| ResponseTime | +++ | - | ++ | +++ | +++ | - |
-| ThreadCount | - | ++ | +++ | - | - | +++ |
-| ErrorRate | ++ | - | - | ++ | ++++ | - |
-| QueueLength | +++ | - | +++ | ++ | +++ | +++ |
+| Feature | Spike | MemLeak | CPUSat | NetCong | Cascade | Contention | PointSpike |
+|---------|:-----:|:-------:|:------:|:-------:|:-------:|:----------:|:----------:|
+| CPU | +++ | - | ++++ | - | ++ | ++ | ? |
+| Memory | - | ++++ | - | - | - | ++ | ? |
+| DiskIO | - | +++ | - | - | - | - | ? |
+| Network | ++++ | - | - | ++++ | - | - | ? |
+| ResponseTime | +++ | - | ++ | +++ | +++ | - | ? |
+| ThreadCount | - | ++ | +++ | - | - | +++ | ? |
+| ErrorRate | ++ | - | - | ++ | ++++ | - | ? |
+| QueueLength | +++ | - | +++ | ++ | +++ | +++ | ? |
 
-Legend: `-` = not affected, `+` = slight, `++` = moderate, `+++` = strong, `++++` = severe
+Legend: `-` = not affected, `+` = slight, `++` = moderate, `+++` = strong, `++++` = severe, `?` = random (2+ features)
 
 ---
 
@@ -317,6 +339,9 @@ ANOMALY_TYPE_CONFIGS = {
 
     # resource_contention: Medium with oscillation
     6: {'length_range': (35, 65), 'interval_mean': 4500},
+
+    # point_spike: Very short point anomaly (3-5 timesteps, 2+ random features)
+    7: {'length_range': (3, 5), 'interval_mean': 4000},
 }
 ```
 
