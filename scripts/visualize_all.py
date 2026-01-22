@@ -103,9 +103,21 @@ def main():
             if hasattr(config, key):
                 setattr(config, key, value)
 
-    # Get param keys (dynamically based on what's in the data)
-    param_keys = ['masking_ratio', 'masking_strategy', 'num_patches',
-                  'margin_type', 'force_mask_anomaly', 'patch_level_loss', 'patchify_mode']
+    # Get param keys dynamically from metadata or results
+    param_keys = None
+    if exp_data['metadata'] and 'param_grid' in exp_data['metadata']:
+        param_keys = list(exp_data['metadata']['param_grid'].keys())
+    elif exp_data['quick_results'] is not None:
+        # Fallback: extract from results DataFrame (exclude metric columns)
+        metric_cols = {'combination_id', 'roc_auc', 'f1_score', 'precision', 'recall',
+                       'disturbing_roc_auc', 'disturbing_f1', 'quick_roc_auc',
+                       'roc_auc_improvement', 'selection_criterion', 'stage2_rank'}
+        param_keys = [c for c in exp_data['quick_results'].columns if c not in metric_cols]
+
+    if not param_keys:
+        print("WARNING: Could not determine param_keys, using defaults")
+        param_keys = ['masking_ratio', 'masking_strategy', 'num_patches',
+                      'margin_type', 'force_mask_anomaly', 'patch_level_loss', 'patchify_mode']
 
     # 1. Data Visualizations
     if not args.skip_data:

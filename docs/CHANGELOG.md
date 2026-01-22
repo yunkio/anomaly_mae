@@ -1,5 +1,77 @@
 # Changelog
 
+## 2026-01-23 (Update 10): Dynamic Hyperparameter and Configuration Management
+
+### Changes
+
+#### 1. Dynamic param_keys in visualize_all.py
+
+**Modified Files**:
+- `scripts/visualize_all.py`
+
+**Before**: Hardcoded list of hyperparameter keys
+```python
+param_keys = ['masking_ratio', 'masking_strategy', 'num_patches', ...]
+```
+
+**After**: Dynamically extracted from experiment metadata or results
+```python
+if exp_data['metadata'] and 'param_grid' in exp_data['metadata']:
+    param_keys = list(exp_data['metadata']['param_grid'].keys())
+else:
+    # Fallback: extract from results DataFrame
+    param_keys = [c for c in columns if c not in metric_cols]
+```
+
+---
+
+#### 2. Dynamic Hyperparameter Lists in stage2_visualizer.py
+
+**Modified Files**:
+- `mae_anomaly/visualization/stage2_visualizer.py`
+
+**Changes**:
+- Added `METRIC_COLUMNS` class constant for known metric columns
+- Added `_get_hyperparam_columns()` helper method
+- `plot_all_hyperparameters()`: Now uses dynamic hyperparameter detection
+- `plot_hyperparameter_interactions()`: Dynamically generates interaction pairs
+- `plot_best_config_summary()`: Uses dynamic hyperparams with fallback descriptions
+
+---
+
+#### 3. Dynamic Categorical Parameters in experiment_visualizer.py
+
+**Modified Files**:
+- `mae_anomaly/visualization/experiment_visualizer.py`
+
+**Changes**:
+- Added `_get_categorical_params()` helper method
+- `plot_summary_dashboard()`: Uses dynamically detected categorical params
+- `generate_all()`: Uses dynamic categorical params for comparisons
+
+---
+
+#### 4. Robust get_anomaly_type_info in base.py
+
+**Modified Files**:
+- `mae_anomaly/visualization/base.py`
+
+**Changes**:
+- `get_anomaly_type_info()` now handles unknown anomaly types gracefully
+- Auto-generates descriptions for new anomaly types not in known_info dict
+- Always includes all types from `ANOMALY_TYPE_NAMES`
+
+---
+
+### Benefits
+
+1. **No manual updates needed**: Adding new hyperparameters to `DEFAULT_PARAM_GRID` automatically includes them in visualizations
+2. **No sync issues**: New anomaly types are automatically handled with auto-generated descriptions
+3. **Reduced maintenance**: Less hardcoded values = fewer places to update when configuration changes
+4. **Better error handling**: Fallback mechanisms prevent crashes from missing data
+
+---
+
 ## 2026-01-23 (Update 9): Visualization Module Modularization
 
 ### Changes

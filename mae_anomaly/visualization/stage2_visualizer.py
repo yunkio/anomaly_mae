@@ -22,6 +22,13 @@ import seaborn as sns
 class Stage2Visualizer:
     """Visualize Stage 2 (Full Training) results"""
 
+    # Known metric columns (not hyperparameters)
+    METRIC_COLUMNS = {
+        'combination_id', 'roc_auc', 'f1_score', 'precision', 'recall',
+        'disturbing_roc_auc', 'disturbing_f1', 'quick_roc_auc',
+        'roc_auc_improvement', 'selection_criterion', 'stage2_rank'
+    }
+
     def __init__(self, full_df: pd.DataFrame, quick_df: pd.DataFrame,
                  histories: Dict, output_dir: str):
         self.full_df = full_df
@@ -29,6 +36,10 @@ class Stage2Visualizer:
         self.histories = histories
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
+
+    def _get_hyperparam_columns(self) -> list:
+        """Dynamically get hyperparameter columns from DataFrame"""
+        return [c for c in self.full_df.columns if c not in self.METRIC_COLUMNS]
 
     def plot_quick_vs_full(self):
         """Compare quick search vs full training performance"""
@@ -376,11 +387,8 @@ class Stage2Visualizer:
 
     def plot_all_hyperparameters(self):
         """Generate separate visualization for each hyperparameter"""
-        # These are the typical hyperparameters in the grid search
-        hyperparams = [
-            'masking_ratio', 'masking_strategy', 'num_patches',
-            'margin_type', 'force_mask_anomaly', 'patch_level_loss', 'patchify_mode'
-        ]
+        # Dynamically get hyperparameters from DataFrame columns
+        hyperparams = self._get_hyperparam_columns()
 
         for param in hyperparams:
             if param in self.full_df.columns:
@@ -388,20 +396,28 @@ class Stage2Visualizer:
 
     def plot_hyperparameter_interactions(self):
         """Plot interactions between key hyperparameters"""
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        # Dynamically generate interaction pairs from available hyperparameters
+        hyperparams = self._get_hyperparam_columns()
 
-        # Key interactions to visualize
-        interactions = [
-            ('masking_ratio', 'num_patches'),
-            ('masking_strategy', 'patchify_mode'),
-            ('margin_type', 'patchify_mode'),
-            ('masking_ratio', 'masking_strategy'),
-            ('num_patches', 'patchify_mode'),
-            ('patchify_mode', 'patch_level_loss')
-        ]
+        # Generate pairs (up to 6 pairs for 2x3 grid)
+        from itertools import combinations
+        all_pairs = list(combinations(hyperparams, 2))
+        interactions = all_pairs[:6]  # Take first 6 pairs
+
+        # Adjust grid size based on number of interactions
+        n_interactions = len(interactions)
+        n_cols = min(3, n_interactions)
+        n_rows = (n_interactions + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 6 * n_rows))
+        if n_interactions == 1:
+            axes = np.array([[axes]])
+        elif n_rows == 1:
+            axes = axes.reshape(1, -1)
+        elif n_cols == 1:
+            axes = axes.reshape(-1, 1)
 
         for idx, (param1, param2) in enumerate(interactions):
-            ax = axes[idx // 3, idx % 3]
+            ax = axes[idx // n_cols, idx % n_cols]
 
             if param1 not in self.full_df.columns or param2 not in self.full_df.columns:
                 ax.text(0.5, 0.5, f'{param1} or {param2} not found',
@@ -434,17 +450,28 @@ class Stage2Visualizer:
         fig, ax = plt.subplots(figsize=(14, 10))
         ax.axis('off')
 
-        # Hyperparameters to display
-        hyperparams = [
-            ('masking_ratio', 'Masking Ratio', 'Ratio of patches to mask'),
-            ('masking_strategy', 'Masking Strategy', 'patch or feature_wise'),
-            ('num_patches', 'Num Patches', 'Number of patches'),
-            ('margin_type', 'Margin Type', 'Loss calculation method'),
-            ('force_mask_anomaly', 'Force Mask Anomaly', 'Force masking anomaly regions'),
-            ('patch_level_loss', 'Patch Level Loss', 'Compute loss per patch'),
-            ('patchify_mode', 'Patchify Mode', 'CNN/Linear patch embedding'),
-            ('mask_last_n', 'Mask Last N', 'Mask last N timesteps'),
-        ]
+        # Hyperparameter descriptions (fallback for unknown params)
+        hyperparam_info = {
+            'masking_ratio': ('Masking Ratio', 'Ratio of patches to mask'),
+            'masking_strategy': ('Masking Strategy', 'patch or feature_wise'),
+            'num_patches': ('Num Patches', 'Number of patches'),
+            'margin_type': ('Margin Type', 'Loss calculation method'),
+            'force_mask_anomaly': ('Force Mask Anomaly', 'Force masking anomaly regions'),
+            'patch_level_loss': ('Patch Level Loss', 'Compute loss per patch'),
+            'patchify_mode': ('Patchify Mode', 'CNN/Linear patch embedding'),
+            'mask_last_n': ('Mask Last N', 'Mask last N timesteps'),
+        }
+
+        # Dynamically get hyperparameters from DataFrame
+        hyperparams = []
+        for param in self._get_hyperparam_columns():
+            if param in hyperparam_info:
+                name, desc = hyperparam_info[param]
+            else:
+                # Auto-generate name and description for unknown params
+                name = param.replace('_', ' ').title()
+                desc = 'Hyperparameter'
+            hyperparams.append((param, name, desc))
 
         # Build summary text
         summary_lines = [

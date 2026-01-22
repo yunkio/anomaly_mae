@@ -403,6 +403,9 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
 def get_anomaly_type_info() -> Dict:
     """Get information about each anomaly type for visualization
 
+    Dynamically includes all anomaly types from ANOMALY_TYPE_NAMES.
+    Known types have detailed info; unknown types get auto-generated info.
+
     Returns:
         Dict mapping anomaly type name to info dict with:
         - description: Human-readable description
@@ -410,7 +413,8 @@ def get_anomaly_type_info() -> Dict:
         - length_range: (min, max) duration
         - characteristics: Key characteristics for visualization
     """
-    info = {
+    # Known anomaly type info (for detailed descriptions)
+    known_info = {
         'spike': {
             'description': 'Traffic Spike / DDoS Attack',
             'affected_features': ['CPU', 'Network', 'ResponseTime'],
@@ -448,9 +452,21 @@ def get_anomaly_type_info() -> Dict:
         },
     }
 
-    # Add length_range from ANOMALY_TYPE_CONFIGS
+    # Build info dict for all anomaly types in ANOMALY_TYPE_NAMES
+    info = {}
     for i, name in enumerate(ANOMALY_TYPE_NAMES[1:], start=1):  # Skip 'normal'
-        if name in info and i in ANOMALY_TYPE_CONFIGS:
+        if name in known_info:
+            info[name] = known_info[name].copy()
+        else:
+            # Auto-generate info for unknown anomaly types
+            info[name] = {
+                'description': name.replace('_', ' ').title(),
+                'affected_features': ['Multiple features'],
+                'characteristics': 'Anomaly pattern',
+            }
+
+        # Add length_range from ANOMALY_TYPE_CONFIGS if available
+        if i in ANOMALY_TYPE_CONFIGS:
             info[name]['length_range'] = ANOMALY_TYPE_CONFIGS[i]['length_range']
 
     return info

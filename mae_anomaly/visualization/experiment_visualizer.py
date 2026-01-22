@@ -29,6 +29,17 @@ class ExperimentVisualizer:
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
 
+    def _get_categorical_params(self) -> List[str]:
+        """Dynamically detect categorical parameters from param_keys"""
+        cat_params = []
+        for param in self.param_keys:
+            if param in self.results_df.columns:
+                # Check if column is object/string type or has few unique values
+                dtype = self.results_df[param].dtype
+                if dtype == 'object' or dtype == 'bool' or self.results_df[param].nunique() <= 5:
+                    cat_params.append(param)
+        return cat_params
+
     def plot_heatmaps(self, metric: str = 'roc_auc'):
         """Generate heatmaps for parameter pairs"""
         numeric_params = [p for p in self.param_keys if self.results_df[p].dtype in ['float64', 'int64']]
@@ -362,8 +373,8 @@ class ExperimentVisualizer:
             ax.set_title(f'{param}', fontweight='bold')
             ax.set_ylabel('ROC-AUC')
 
-        # 7-9. Categorical params (dynamic - only plot if present)
-        cat_params = ['patchify_mode', 'margin_type', 'force_mask_anomaly']
+        # 7-9. Categorical params (dynamically detected)
+        cat_params = self._get_categorical_params()[:3]  # Take first 3 for the grid
         cat_idx = 0
         for param in cat_params:
             if param in self.results_df.columns and cat_idx < 3:
@@ -394,9 +405,9 @@ class ExperimentVisualizer:
         self.plot_metric_distributions()
         self.plot_metric_correlations()
 
-        # Categorical comparisons (dynamic - based on what's in param_keys)
-        for param in ['patchify_mode', 'margin_type']:
-            if param in self.param_keys:
-                self.plot_categorical_comparison(param)
+        # Categorical comparisons (dynamically detected from param_keys)
+        cat_params = self._get_categorical_params()
+        for param in cat_params[:2]:  # Plot first 2 categorical params
+            self.plot_categorical_comparison(param)
 
         self.plot_summary_dashboard()
