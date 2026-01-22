@@ -860,7 +860,13 @@ Separation Analysis:
         print("  - pure_vs_disturbing_normal.png")
 
     def plot_discrepancy_trend(self):
-        """Plot discrepancy trends across time steps"""
+        """Plot discrepancy trends across time steps
+
+        Note: Discrepancy is computed on ALL timesteps, but only the last mask_last_n
+        positions are masked during evaluation. At unmasked positions, teacher-student
+        discrepancy should be similar across sample types. The key difference appears
+        in the MASKED region (last patch).
+        """
         # Select representative samples
         pure_normal_mask = self.detailed_data['sample_types'] == 0
         disturbing_mask = self.detailed_data['sample_types'] == 1
@@ -868,61 +874,119 @@ Separation Analysis:
 
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-        # 1. Mean discrepancy trend by sample type
-        ax = axes[0, 0]
         seq_length = self.detailed_data['discrepancies'].shape[1]
+        mask_last_n = getattr(self.config, 'mask_last_n', 10)
         t = np.arange(seq_length)
 
-        pure_mean = self.detailed_data['discrepancies'][pure_normal_mask].mean(axis=0)
-        dist_mean = self.detailed_data['discrepancies'][disturbing_mask].mean(axis=0)
-        anom_mean = self.detailed_data['discrepancies'][anomaly_mask].mean(axis=0)
+        # Get data
+        pure_disc = self.detailed_data['discrepancies'][pure_normal_mask]
+        dist_disc = self.detailed_data['discrepancies'][disturbing_mask]
+        anom_disc = self.detailed_data['discrepancies'][anomaly_mask]
 
-        ax.plot(t, pure_mean, label='Pure Normal', color='#3498DB', lw=2)
-        ax.plot(t, dist_mean, label='Disturbing Normal', color='#F39C12', lw=2)
-        ax.plot(t, anom_mean, label='Anomaly', color='#E74C3C', lw=2)
+        # 1. Mean discrepancy with std bands - FOCUSED ON LAST PATCH
+        ax = axes[0, 0]
 
-        # Highlight last patch
-        mask_last_n = getattr(self.config, 'mask_last_n', 5)
-        ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.2, color='gray', label='Last Patch')
+        pure_mean = pure_disc.mean(axis=0)
+        dist_mean = dist_disc.mean(axis=0)
+        anom_mean = anom_disc.mean(axis=0)
+
+        pure_std = pure_disc.std(axis=0)
+        dist_std = dist_disc.std(axis=0)
+        anom_std = anom_disc.std(axis=0)
+
+        # Plot with std bands
+        ax.plot(t, pure_mean, label=f'Pure Normal (n={pure_normal_mask.sum()})', color='#3498DB', lw=2)
+        ax.fill_between(t, pure_mean - pure_std, pure_mean + pure_std, color='#3498DB', alpha=0.2)
+
+        ax.plot(t, dist_mean, label=f'Disturbing Normal (n={disturbing_mask.sum()})', color='#F39C12', lw=2)
+        ax.fill_between(t, dist_mean - dist_std, dist_mean + dist_std, color='#F39C12', alpha=0.2)
+
+        ax.plot(t, anom_mean, label=f'Anomaly (n={anomaly_mask.sum()})', color='#E74C3C', lw=2)
+        ax.fill_between(t, anom_mean - anom_std, anom_mean + anom_std, color='#E74C3C', alpha=0.2)
+
+        # Highlight masked region (last patch)
+        ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.3, color='yellow', label='Masked Region')
+
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Mean Discrepancy (±1 std)')
+        ax.set_title('Discrepancy Trend by Sample Type\n(Shaded: ±1 std)', fontweight='bold')
+        ax.legend(fontsize=8)
+
+        # 2. ZOOMED IN: Last Patch Region Only
+        ax = axes[0, 1]
+        t_last = np.arange(seq_length - mask_last_n, seq_length)
+
+        pure_last = pure_disc[:, -mask_last_n:]
+        dist_last = dist_disc[:, -mask_last_n:]
+        anom_last = anom_disc[:, -mask_last_n:]
+
+        ax.plot(t_last, pure_last.mean(axis=0), label='Pure Normal', color='#3498DB', lw=2, marker='o', ms=4)
+        ax.fill_between(t_last, pure_last.mean(axis=0) - pure_last.std(axis=0),
+                       pure_last.mean(axis=0) + pure_last.std(axis=0), color='#3498DB', alpha=0.2)
+
+        ax.plot(t_last, dist_last.mean(axis=0), label='Disturbing Normal', color='#F39C12', lw=2, marker='s', ms=4)
+        ax.fill_between(t_last, dist_last.mean(axis=0) - dist_last.std(axis=0),
+                       dist_last.mean(axis=0) + dist_last.std(axis=0), color='#F39C12', alpha=0.2)
+
+        ax.plot(t_last, anom_last.mean(axis=0), label='Anomaly', color='#E74C3C', lw=2, marker='^', ms=4)
+        ax.fill_between(t_last, anom_last.mean(axis=0) - anom_last.std(axis=0),
+                       anom_last.mean(axis=0) + anom_last.std(axis=0), color='#E74C3C', alpha=0.2)
 
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Mean Discrepancy')
-        ax.set_title('Discrepancy Trend by Sample Type', fontweight='bold')
+        ax.set_title(f'ZOOMED: Last {mask_last_n} Steps (Masked Region)\nThis is where differences matter!', fontweight='bold')
         ax.legend()
 
-        # 2. Discrepancy heatmap for anomaly samples
-        ax = axes[0, 1]
-        anomaly_disc = self.detailed_data['discrepancies'][anomaly_mask][:50]  # First 50
-        sns.heatmap(anomaly_disc, ax=ax, cmap='Reds', cbar_kws={'label': 'Discrepancy'})
-        ax.axvline(x=seq_length - mask_last_n, color='white', linestyle='--', lw=2)
-        ax.set_xlabel('Time Step')
-        ax.set_ylabel('Sample Index')
-        ax.set_title('Anomaly Samples - Discrepancy Heatmap', fontweight='bold')
-
-        # 3. Discrepancy heatmap for normal samples
+        # 3. Discrepancy heatmap comparison (side by side: normal vs anomaly)
         ax = axes[1, 0]
-        normal_disc = self.detailed_data['discrepancies'][pure_normal_mask][:50]  # First 50
-        sns.heatmap(normal_disc, ax=ax, cmap='Reds', cbar_kws={'label': 'Discrepancy'})
+
+        # Take 25 samples each for comparison
+        n_samples = min(25, pure_normal_mask.sum(), anomaly_mask.sum())
+        combined = np.vstack([pure_disc[:n_samples], anom_disc[:n_samples]])
+        combined_labels = ['Normal'] * n_samples + ['Anomaly'] * n_samples
+
+        sns.heatmap(combined, ax=ax, cmap='Reds', cbar_kws={'label': 'Discrepancy'})
         ax.axvline(x=seq_length - mask_last_n, color='white', linestyle='--', lw=2)
+        ax.axhline(y=n_samples, color='white', linestyle='-', lw=3)
+        ax.text(seq_length - mask_last_n - 5, n_samples/2, 'Normal', ha='right', va='center', fontsize=10, color='white', fontweight='bold')
+        ax.text(seq_length - mask_last_n - 5, n_samples + n_samples/2, 'Anomaly', ha='right', va='center', fontsize=10, color='white', fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Sample Index')
-        ax.set_title('Pure Normal Samples - Discrepancy Heatmap', fontweight='bold')
+        ax.set_title('Discrepancy Heatmap: Normal vs Anomaly', fontweight='bold')
 
-        # 4. Last patch discrepancy distribution
+        # 4. Last patch discrepancy distribution (bar chart for clarity)
         ax = axes[1, 1]
-        last_patch_pure = self.detailed_data['discrepancies'][pure_normal_mask, -mask_last_n:].mean(axis=1)
-        last_patch_dist = self.detailed_data['discrepancies'][disturbing_mask, -mask_last_n:].mean(axis=1)
-        last_patch_anom = self.detailed_data['discrepancies'][anomaly_mask, -mask_last_n:].mean(axis=1)
+        last_patch_pure = pure_disc[:, -mask_last_n:].mean(axis=1)
+        last_patch_dist = dist_disc[:, -mask_last_n:].mean(axis=1)
+        last_patch_anom = anom_disc[:, -mask_last_n:].mean(axis=1)
 
-        ax.hist(last_patch_pure, bins=30, alpha=0.6, label='Pure Normal', color='#3498DB', density=True)
-        ax.hist(last_patch_dist, bins=30, alpha=0.6, label='Disturbing Normal', color='#F39C12', density=True)
-        ax.hist(last_patch_anom, bins=30, alpha=0.6, label='Anomaly', color='#E74C3C', density=True)
-        ax.set_xlabel('Mean Discrepancy (Last Patch)')
-        ax.set_ylabel('Density')
-        ax.set_title('Last Patch Discrepancy Distribution', fontweight='bold')
-        ax.legend()
+        # Box plot for better comparison
+        data_to_plot = [last_patch_pure, last_patch_dist, last_patch_anom]
+        labels = ['Pure Normal', 'Disturbing Normal', 'Anomaly']
+        colors = ['#3498DB', '#F39C12', '#E74C3C']
 
-        plt.suptitle('Discrepancy Trend Analysis', fontsize=14, fontweight='bold', y=1.02)
+        bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True)
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.6)
+
+        # Add mean markers
+        means = [d.mean() for d in data_to_plot]
+        ax.scatter([1, 2, 3], means, color='black', marker='D', s=50, zorder=5, label='Mean')
+
+        ax.set_ylabel('Mean Discrepancy (Last Patch)')
+        ax.set_title('Last Patch Discrepancy Distribution\n(Masked Region Only)', fontweight='bold')
+
+        # Add statistics text
+        stats_text = f"Mean ± Std:\n"
+        stats_text += f"Pure Normal: {means[0]:.4f} ± {last_patch_pure.std():.4f}\n"
+        stats_text += f"Disturbing: {means[1]:.4f} ± {last_patch_dist.std():.4f}\n"
+        stats_text += f"Anomaly: {means[2]:.4f} ± {last_patch_anom.std():.4f}"
+        ax.text(0.98, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
+               verticalalignment='top', horizontalalignment='right',
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        plt.suptitle('Discrepancy Trend Analysis (Teacher-Student Difference)', fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'discrepancy_trend.png'), dpi=150, bbox_inches='tight')
         plt.close()

@@ -25,7 +25,8 @@ class Stage2Visualizer:
     # Known metric columns (not hyperparameters)
     METRIC_COLUMNS = {
         'combination_id', 'roc_auc', 'f1_score', 'precision', 'recall',
-        'disturbing_roc_auc', 'disturbing_f1', 'quick_roc_auc',
+        'disturbing_roc_auc', 'disturbing_f1', 'disturbing_precision', 'disturbing_recall',
+        'quick_roc_auc', 'quick_f1', 'quick_disturbing_roc_auc',
         'roc_auc_improvement', 'selection_criterion', 'stage2_rank'
     }
 

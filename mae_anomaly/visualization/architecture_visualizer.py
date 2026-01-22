@@ -112,51 +112,85 @@ class ArchitectureVisualizer:
         print("  - model_pipeline.png")
 
     def plot_patchify_modes(self):
-        """Visualize different patchify modes"""
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        """Visualize different patchify modes as conceptual flow diagrams
 
-        # Sample data
-        np.random.seed(42)
-        seq_length = 100
-        t = np.arange(seq_length)
-        signal = np.sin(t * 0.1) + 0.5 * np.sin(t * 0.3) + 0.1 * np.random.randn(seq_length)
+        Shows the processing pipeline difference between:
+        1. CNN-First: Full sequence → CNN → Patchify → Embed (cross-patch leakage possible)
+        2. Patch-CNN: Sequence → Patchify → CNN per patch → Embed (isolated patches)
+        3. Linear: Sequence → Patchify → Linear embed (original MAE style)
+        """
+        fig, axes = plt.subplots(3, 1, figsize=(16, 12))
 
-        num_patches = 10
-        patch_size = seq_length // num_patches
-
-        titles = ['CNN-First Mode', 'Patch-CNN Mode', 'Linear Mode']
-        descriptions = [
-            'CNN on full sequence\n(potential information leakage)',
-            'Patchify first, then CNN per patch\n(no cross-patch leakage)',
-            'Patchify then linear embedding\n(original MAE style)'
+        modes = [
+            {
+                'name': 'cnn_first',
+                'title': '1. CNN-First Mode',
+                'flow': ['Input\nSequence\n(T, F)', 'CNN\n(full seq)', 'Patchify', 'Linear\nProjection', 'Patch\nEmbeddings'],
+                'colors': ['#3498DB', '#E74C3C', '#F39C12', '#9B59B6', '#27AE60'],
+                'issue': '⚠️ CNN receptive field spans across patch boundaries\n→ Information leakage between patches',
+                'issue_color': '#E74C3C',
+            },
+            {
+                'name': 'patch_cnn',
+                'title': '2. Patch-CNN Mode (Recommended)',
+                'flow': ['Input\nSequence\n(T, F)', 'Patchify', 'CNN\n(per patch)', 'Linear\nProjection', 'Patch\nEmbeddings'],
+                'colors': ['#3498DB', '#F39C12', '#27AE60', '#9B59B6', '#27AE60'],
+                'issue': '✓ CNN operates within each patch independently\n→ No cross-patch information leakage',
+                'issue_color': '#27AE60',
+            },
+            {
+                'name': 'linear',
+                'title': '3. Linear Mode (Original MAE)',
+                'flow': ['Input\nSequence\n(T, F)', 'Patchify', 'Linear\nProjection', '', 'Patch\nEmbeddings'],
+                'colors': ['#3498DB', '#F39C12', '#9B59B6', '#FFFFFF', '#27AE60'],
+                'issue': '✓ Simple linear projection of patches\n→ No feature extraction, fastest',
+                'issue_color': '#3498DB',
+            },
         ]
-        colors = ['#4682B4', '#CD5C5C', '#228B22']
 
-        for idx, (ax, title, desc, color) in enumerate(zip(axes, titles, descriptions, colors)):
-            ax.plot(t, signal, 'b-', alpha=0.5, lw=1)
+        for idx, (ax, mode) in enumerate(zip(axes, modes)):
+            ax.set_xlim(0, 16)
+            ax.set_ylim(0, 4)
+            ax.axis('off')
 
-            # Draw patches
-            for p in range(num_patches):
-                start = p * patch_size
-                end = (p + 1) * patch_size
-                ax.axvspan(start, end, alpha=0.2 if p % 2 == 0 else 0.1, color=color)
-                ax.axvline(x=start, color='gray', linestyle='--', alpha=0.5)
+            # Draw title
+            ax.text(8, 3.7, mode['title'], ha='center', va='center', fontsize=14, fontweight='bold')
 
-            ax.set_title(f'{title}\n{desc}', fontsize=11, fontweight='bold')
-            ax.set_xlabel('Time Step')
-            ax.set_ylabel('Value')
+            # Draw boxes and arrows
+            box_positions = [1, 4, 7, 10, 13]
+            for i, (pos, text, color) in enumerate(zip(box_positions, mode['flow'], mode['colors'])):
+                if text == '':
+                    continue  # Skip empty boxes
 
-            # Add processing indicator
-            if idx == 0:
-                ax.annotate('', xy=(80, 1.5), xytext=(20, 1.5),
-                           arrowprops=dict(arrowstyle='<->', color='red', lw=2))
-                ax.text(50, 1.7, 'CNN sees all', ha='center', fontsize=9, color='red')
-            elif idx == 1:
-                ax.annotate('', xy=(patch_size-1, 1.5), xytext=(0, 1.5),
-                           arrowprops=dict(arrowstyle='<->', color='green', lw=2))
-                ax.text(patch_size/2, 1.7, 'CNN per patch', ha='center', fontsize=9, color='green')
+                # Draw box
+                rect = mpatches.FancyBboxPatch((pos - 0.8, 1.2), 1.6, 1.4,
+                                               boxstyle="round,pad=0.05",
+                                               facecolor=color, edgecolor='black',
+                                               linewidth=2, alpha=0.8)
+                ax.add_patch(rect)
 
-        plt.suptitle('Patchify Mode Comparison', fontsize=14, fontweight='bold', y=1.02)
+                # Text color (white for dark backgrounds)
+                text_color = 'white' if color in ['#3498DB', '#E74C3C', '#27AE60', '#9B59B6'] else 'black'
+                ax.text(pos, 1.9, text, ha='center', va='center', fontsize=10,
+                       fontweight='bold', color=text_color)
+
+                # Draw arrow to next box
+                if i < len(box_positions) - 1 and mode['flow'][i + 1] != '':
+                    ax.annotate('', xy=(box_positions[i + 1] - 0.9, 1.9),
+                               xytext=(pos + 0.9, 1.9),
+                               arrowprops=dict(arrowstyle='->', color='black', lw=2))
+
+            # Draw issue/benefit box
+            rect = mpatches.FancyBboxPatch((3, 0.1), 10, 0.8,
+                                           boxstyle="round,pad=0.02",
+                                           facecolor=mode['issue_color'], edgecolor='black',
+                                           linewidth=1, alpha=0.2)
+            ax.add_patch(rect)
+            ax.text(8, 0.5, mode['issue'], ha='center', va='center', fontsize=10,
+                   color=mode['issue_color'], fontweight='bold')
+
+        plt.suptitle('Patchify Mode Comparison: Processing Pipeline',
+                    fontsize=16, fontweight='bold', y=0.98)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'patchify_modes.png'), dpi=150, bbox_inches='tight')
         plt.close()

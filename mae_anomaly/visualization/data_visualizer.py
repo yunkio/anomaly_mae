@@ -119,7 +119,7 @@ class DataVisualizer:
         # Create sample dataset using sliding window
         set_seed(42)
         generator = SlidingWindowTimeSeriesGenerator(
-            total_length=50000,  # Small dataset for visualization
+            total_length=100000,  # Larger dataset for better diversity
             num_features=self.config.num_features,  # Use config value (must be >= 2 for point_spike)
             interval_scale=1.5,
             seed=42
@@ -137,22 +137,37 @@ class DataVisualizer:
             seed=42
         )
 
-        # Collect samples by type (with point labels for disturbing normal)
-        normal_samples = []
-        disturbing_samples = []  # (seq, point_labels)
-        anomaly_samples = []
+        # Collect ALL samples by type first
+        normal_samples_all = []
+        disturbing_samples_all = []  # (seq, point_labels)
+        anomaly_samples_all = []
 
         for i in range(len(dataset)):
             seq, label, point_labels, sample_type, _ = dataset[i]
             if sample_type == 0:  # pure normal
-                normal_samples.append(seq[:, 0].numpy())
+                normal_samples_all.append(seq[:, 0].numpy())
             elif sample_type == 1:  # disturbing normal
-                disturbing_samples.append((seq[:, 0].numpy(), point_labels.numpy()))
+                disturbing_samples_all.append((seq[:, 0].numpy(), point_labels.numpy()))
             else:  # anomaly
-                anomaly_samples.append(seq[:, 0].numpy())
+                anomaly_samples_all.append(seq[:, 0].numpy())
 
-            if len(normal_samples) >= 5 and len(disturbing_samples) >= 5 and len(anomaly_samples) >= 5:
-                break
+        # Shuffle and select diverse samples (avoid stride-10 overlap)
+        np.random.seed(42)
+
+        # Select samples with sufficient spacing to show diversity
+        def select_diverse(samples, n=5, min_spacing=10):
+            """Select n diverse samples with minimum spacing in the original order"""
+            if len(samples) <= n:
+                return samples
+            # Shuffle indices and pick
+            indices = np.random.permutation(len(samples))[:n * min_spacing:min_spacing]
+            if len(indices) < n:
+                indices = np.random.choice(len(samples), n, replace=False)
+            return [samples[i] for i in indices[:n]]
+
+        normal_samples = select_diverse(normal_samples_all)
+        disturbing_samples = select_diverse(disturbing_samples_all)
+        anomaly_samples = select_diverse(anomaly_samples_all)
 
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
         x = np.arange(self.config.seq_length)
@@ -240,25 +255,28 @@ class DataVisualizer:
         fig, axes = plt.subplots(2, 1, figsize=(14, 8))
         x = np.arange(self.config.seq_length)
 
-        # Normal sample features
-        ax = axes[0]
-        for f in range(min(5, self.config.num_features)):
-            ax.plot(x, normal_seq[:, f], alpha=0.8, label=f'Feature {f+1}')
-        ax.axvspan(x[-10], x[-1], alpha=0.2, color='yellow')
-        ax.set_title('Normal Sample - Multiple Features', fontsize=12, fontweight='bold')
-        ax.set_xlabel('Time Step')
-        ax.set_ylabel('Value')
-        ax.legend(loc='upper right')
+        # Get feature names dynamically
+        feature_names = FEATURE_NAMES[:self.config.num_features]
 
-        # Anomaly sample features
-        ax = axes[1]
-        for f in range(min(5, self.config.num_features)):
-            ax.plot(x, anomaly_seq[:, f], alpha=0.8, label=f'Feature {f+1}')
-        ax.axvspan(x[-10], x[-1], alpha=0.2, color='red')
-        ax.set_title('Anomaly Sample - Multiple Features', fontsize=12, fontweight='bold')
+        # Normal sample features - show ALL features
+        ax = axes[0]
+        for f in range(self.config.num_features):
+            ax.plot(x, normal_seq[:, f], alpha=0.8, label=feature_names[f])
+        ax.axvspan(x[-10], x[-1], alpha=0.2, color='yellow')
+        ax.set_title('Normal Sample - All Features', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Value')
-        ax.legend(loc='upper right')
+        ax.legend(loc='upper right', ncol=2, fontsize=8)
+
+        # Anomaly sample features - show ALL features
+        ax = axes[1]
+        for f in range(self.config.num_features):
+            ax.plot(x, anomaly_seq[:, f], alpha=0.8, label=feature_names[f])
+        ax.axvspan(x[-10], x[-1], alpha=0.2, color='red')
+        ax.set_title('Anomaly Sample - All Features', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Value')
+        ax.legend(loc='upper right', ncol=2, fontsize=8)
 
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'feature_examples.png'), dpi=150, bbox_inches='tight')
@@ -613,7 +631,7 @@ Random Seeds:
     def generate_all(self):
         """Generate all data visualizations"""
         print("\n  Generating Data Visualizations...")
-        self.plot_anomaly_types()
+        # Note: plot_anomaly_types() removed - redundant with plot_anomaly_generation_rules()
         self.plot_sample_types()
         self.plot_feature_examples()
         self.plot_dataset_statistics()
