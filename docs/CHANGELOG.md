@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-01-23 (Update 12.2): Complexity Visualization
+
+### Summary
+
+Added 3 new visualization functions to explain NormalDataComplexity features.
+
+### Changes
+
+**Modified Files**:
+- `mae_anomaly/visualization/data_visualizer.py`
+
+**New Visualizations**:
+1. `plot_normal_complexity_features()` - Shows each of 6 complexity features individually
+2. `plot_complexity_comparison()` - Simple vs Complex normal data side-by-side
+3. `plot_complexity_vs_anomaly()` - Why complexity features don't resemble anomalies
+
+**Output Files**:
+- `normal_complexity_features.png` - 6-panel feature explanation
+- `complexity_comparison.png` - Simple vs Complex comparison
+- `complexity_vs_anomaly.png` - Complexity vs Anomaly discrimination
+
+---
+
 ## 2026-01-23 (Update 12.1): Experiment Integration
 
 ### Summary
