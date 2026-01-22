@@ -968,7 +968,7 @@ def run_experiments(
     full_epochs: int = 2,
     full_train: int = 2000,
     full_test: int = 500,
-    quick_length: int = 66000,   # Reduced from 200000 (1/3)
+    quick_length: int = 100000,  # Quick search dataset
     full_length: int = 440000,   # Full search dataset
     two_stage: bool = True,
     use_complexity: bool = True,
@@ -1064,7 +1064,7 @@ if __name__ == "__main__":
     parser.add_argument('--full-epochs', type=int, default=2, help='Epochs for full search')
     parser.add_argument('--full-train', type=int, default=2000, help='Training samples for full search')
     parser.add_argument('--full-test', type=int, default=500, help='Test samples for full search')
-    parser.add_argument('--quick-length', type=int, default=66000, help='Time series length for quick search dataset')
+    parser.add_argument('--quick-length', type=int, default=100000, help='Time series length for quick search dataset')
     parser.add_argument('--full-length', type=int, default=440000, help='Time series length for full search dataset')
     parser.add_argument('--no-two-stage', action='store_true', help='Disable two-stage search')
     parser.add_argument('--no-complexity', action='store_true', help='Disable normal data complexity features')

@@ -955,17 +955,17 @@ class SlidingWindowDataset(Dataset):
             target_disturb = target_counts.get('disturbing_normal', len(disturb_indices))
             target_anomaly = target_counts.get('anomaly', len(anomaly_indices))
 
-            # Check if we have enough samples (warn only if very low: < 200)
+            # Check if we have enough samples (warn only if very low: < 300)
             if len(anomaly_indices) < target_anomaly:
-                if len(anomaly_indices) < 200:
+                if len(anomaly_indices) < 300:
                     print(f"Warning: Not enough anomaly samples ({len(anomaly_indices)} < {target_anomaly})")
                 target_anomaly = len(anomaly_indices)
             if len(disturb_indices) < target_disturb:
-                if len(disturb_indices) < 200:
+                if len(disturb_indices) < 300:
                     print(f"Warning: Not enough disturbing samples ({len(disturb_indices)} < {target_disturb})")
                 target_disturb = len(disturb_indices)
             if len(pure_indices) < target_pure:
-                if len(pure_indices) < 200:
+                if len(pure_indices) < 300:
                     print(f"Warning: Not enough pure normal samples ({len(pure_indices)} < {target_pure})")
                 target_pure = len(pure_indices)
 

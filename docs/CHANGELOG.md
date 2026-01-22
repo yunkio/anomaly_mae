@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-01-23 (Update 16): Quick Search Dataset Size Increase
+
+### Changes
+- `quick_length`: 66000 → 100000 (more data for quick search)
+- Warning threshold: 200 → 300 (suppress warnings when samples >= 300)
+
+### Files Modified
+- `scripts/run_experiments.py`
+- `mae_anomaly/dataset_sliding.py`
+
+---
+
 ## 2026-01-23 (Update 15): Reduce Periodicity in Complex Normal Data
 
 ### Summary
