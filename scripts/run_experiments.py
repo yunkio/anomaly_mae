@@ -13,6 +13,7 @@ sys.path.insert(0, '/home/ykio/notebooks/claude')
 
 import os
 import json
+import time
 import itertools
 from datetime import datetime
 from copy import deepcopy
@@ -29,11 +30,11 @@ warnings.filterwarnings('ignore')
 
 # Import from mae_anomaly package
 from mae_anomaly import (
-    Config, set_seed, MultivariateTimeSeriesDataset,
+    Config, set_seed,
+    SlidingWindowTimeSeriesGenerator, SlidingWindowDataset,
     SelfDistilledMAEMultivariate, SelfDistillationLoss,
-    Trainer, Evaluator
+    Trainer, Evaluator, SLIDING_ANOMALY_TYPE_NAMES
 )
-from mae_anomaly.dataset import ANOMALY_TYPE_NAMES
 
 
 # =============================================================================
@@ -45,10 +46,6 @@ DEFAULT_PARAM_GRID = {
     'masking_ratio': [0.4, 0.7],
     'masking_strategy': ['patch', 'feature_wise'],  # Masking strategy
     'num_patches': [10, 25, 50],
-
-    # Loss parameters
-    'margin': [0.25, 0.5, 1.0],
-    'lambda_disc': [0.3, 0.5, 0.7],
 
     # Discrepancy loss strategy
     'margin_type': ['hinge', 'softplus', 'dynamic'],
@@ -62,7 +59,8 @@ DEFAULT_PARAM_GRID = {
     # Patchify mode (CNN vs Linear embedding)
     'patchify_mode': ['cnn_first', 'patch_cnn', 'linear'],
 }
-# Total combinations: 2*2*3*3*3*3*2*2*3 = 3888
+# Note: margin=0.5, lambda_disc=0.5 are fixed (not in grid)
+# Total combinations: 2*2*3*3*2*2*3 = 432
 
 
 # =============================================================================
@@ -100,7 +98,50 @@ class ExperimentRunner:
         self.best_config = None
         self.best_metrics = None
 
+        # Generate sliding window dataset once (shared across all experiments)
+        self._generate_dataset()
+
         print(f"\nExperiment results will be saved to: {self.output_dir}")
+
+    def _generate_dataset(self, quick_length: int = 200000, full_length: int = None):
+        """Generate sliding window datasets for quick and full search
+
+        Args:
+            quick_length: Length of time series for quick search (default: 200,000)
+                         With train_ratio=0.3 -> ~6,000 train, ~14,000 test
+                         Test set sufficient for 1200:300:500 target composition
+            full_length: Length for full search (default: config.sliding_window_total_length)
+        """
+        config = self.base_config
+        full_length = full_length or config.sliding_window_total_length
+
+        # Store train_ratio settings for quick/full search
+        self.quick_train_ratio = 0.3  # 30% train, 70% test for quick search
+        self.full_train_ratio = 0.5   # 50% train, 50% test for full search
+
+        # Generate quick search time series (shorter for fast screening)
+        print("Generating quick search dataset...", flush=True)
+        quick_generator = SlidingWindowTimeSeriesGenerator(
+            total_length=quick_length,
+            num_features=config.num_features,
+            interval_scale=config.anomaly_interval_scale,
+            seed=config.random_seed
+        )
+        self.quick_signals, self.quick_point_labels, self.quick_anomaly_regions = quick_generator.generate()
+        print(f"  Quick: {len(self.quick_signals):,} timesteps, {len(self.quick_anomaly_regions)} anomaly regions", flush=True)
+        print(f"         train_ratio={self.quick_train_ratio} -> ~{int(quick_length/10*self.quick_train_ratio):,} train, ~{int(quick_length/10*(1-self.quick_train_ratio)):,} test", flush=True)
+
+        # Generate full search time series (longer for thorough training)
+        print("Generating full search dataset...", flush=True)
+        full_generator = SlidingWindowTimeSeriesGenerator(
+            total_length=full_length,
+            num_features=config.num_features,
+            interval_scale=config.anomaly_interval_scale,
+            seed=config.random_seed
+        )
+        self.signals, self.point_labels, self.anomaly_regions = full_generator.generate()
+        print(f"  Full: {len(self.signals):,} timesteps, {len(self.anomaly_regions)} anomaly regions", flush=True)
+        print(f"        train_ratio={self.full_train_ratio} -> ~{int(full_length/10*self.full_train_ratio):,} train, ~{int(full_length/10*(1-self.full_train_ratio)):,} test", flush=True)
 
     def generate_combinations(self) -> List[Dict]:
         """Generate all parameter combinations"""
@@ -112,6 +153,76 @@ class ExperimentRunner:
             combinations.append(dict(zip(keys, combo)))
 
         return combinations
+
+    def _estimate_stage2_count(self) -> int:
+        """Estimate the number of models for Stage 2 based on selection criteria"""
+        n_per_value = 5
+
+        # Phase 1: Count unique parameter values
+        phase1_max = 0
+        for key, values in self.param_grid.items():
+            phase1_max += len(values) * n_per_value
+
+        # Phase 2 & 3: Additional models (excluding duplicates)
+        phase2_max = 10  # overall_roc_auc
+        phase3_max = 5   # disturbing_roc_auc
+
+        # Estimate with ~50% overlap between phases
+        # Phase 1 typically has many overlaps within itself
+        estimated = int(phase1_max * 0.6) + phase2_max + phase3_max
+
+        return estimated
+
+    def _format_time(self, seconds: float) -> str:
+        """Format seconds into human-readable string"""
+        if seconds < 60:
+            return f"{seconds:.1f}초"
+        elif seconds < 3600:
+            mins = seconds / 60
+            return f"{mins:.1f}분"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            return f"{hours}시간 {mins}분"
+
+    def _print_time_estimate(
+        self,
+        first_model_time: float,
+        n_quick: int,
+        n_full_est: int,
+        quick_epochs: int,
+        full_epochs: int,
+        quick_length: int = 200000,
+        full_length: int = None
+    ):
+        """Print estimated time based on first model training time"""
+        full_length = full_length or self.base_config.sliding_window_total_length
+
+        # Calculate actual train samples
+        stride = self.base_config.sliding_window_stride
+        quick_train_samples = int(quick_length * self.quick_train_ratio / stride)
+        full_train_samples = int(full_length * self.full_train_ratio / stride)
+
+        # Calculate scaling factors
+        train_scale = full_train_samples / quick_train_samples
+        epoch_scale = full_epochs / quick_epochs
+
+        # Estimate times
+        quick_remaining = first_model_time * (n_quick - 1)  # First one already done
+        quick_total = first_model_time * n_quick
+
+        full_model_time = first_model_time * train_scale * epoch_scale
+        full_total = full_model_time * n_full_est
+
+        total = quick_total + full_total
+
+        # Print estimates
+        print(f"\n>>> Estimated Time (based on 1st model: {first_model_time:.1f}s) <<<")
+        print(f"  Quick Search: {self._format_time(quick_total)} ({n_quick} models × {first_model_time:.1f}s)")
+        print(f"  Full Search:  {self._format_time(full_total)} (~{n_full_est} models × {full_model_time:.1f}s)")
+        print(f"  Total:        {self._format_time(total)}")
+        print(f"  (Quick remaining: {self._format_time(quick_remaining)})")
+        print()
 
     def _create_config(self, params: Dict, quick: bool = False) -> Config:
         """Create config with given parameters"""
@@ -134,6 +245,10 @@ class ExperimentRunner:
             config.patch_size = int(config.seq_length // config.num_patches)
             config.mask_last_n = int(config.patch_size)
 
+        # Fix margin and lambda_disc (not in grid search)
+        config.margin = 0.5
+        config.lambda_disc = 0.5
+
         if quick:
             config.num_epochs = 15
             config.num_train_samples = 500
@@ -145,27 +260,60 @@ class ExperimentRunner:
         self,
         config: Config,
         experiment_id: int,
-        save_history: bool = False
+        save_history: bool = False,
+        use_quick_data: bool = False
     ) -> Dict:
-        """Run a single experiment"""
+        """Run a single experiment
+
+        Args:
+            config: Experiment configuration
+            experiment_id: Unique experiment ID
+            save_history: Whether to save training history
+            use_quick_data: If True, use shorter quick_signals; else use full signals
+        """
         set_seed(config.random_seed)
 
-        train_dataset = MultivariateTimeSeriesDataset(
-            num_samples=config.num_train_samples,
-            seq_length=config.seq_length,
-            num_features=config.num_features,
-            anomaly_ratio=config.train_anomaly_ratio,
+        # Select dataset and train_ratio based on quick/full mode
+        if use_quick_data:
+            signals = self.quick_signals
+            point_labels = self.quick_point_labels
+            anomaly_regions = self.quick_anomaly_regions
+            train_ratio = self.quick_train_ratio  # 0.3 for quick search
+        else:
+            signals = self.signals
+            point_labels = self.point_labels
+            anomaly_regions = self.anomaly_regions
+            train_ratio = self.full_train_ratio   # 0.5 for full search
+
+        # Create train dataset from selected time series
+        train_dataset = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=config.seq_length,
+            stride=config.sliding_window_stride,
             mask_last_n=config.mask_last_n,
+            split='train',
+            train_ratio=train_ratio,
             seed=config.random_seed
         )
 
-        test_dataset = MultivariateTimeSeriesDataset(
-            num_samples=config.num_test_samples,
-            seq_length=config.seq_length,
-            num_features=config.num_features,
-            anomaly_ratio=config.test_anomaly_ratio,
+        # Create test dataset with target counts
+        test_dataset = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=config.seq_length,
+            stride=config.sliding_window_stride,
             mask_last_n=config.mask_last_n,
-            seed=config.random_seed + 1
+            split='test',
+            train_ratio=train_ratio,
+            target_counts={
+                'pure_normal': config.test_target_pure_normal,
+                'disturbing_normal': config.test_target_disturbing_normal,
+                'anomaly': config.test_target_anomaly
+            },
+            seed=config.random_seed
         )
 
         train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
@@ -204,7 +352,6 @@ class ExperimentRunner:
         full_epochs: int = 100,
         full_train: int = 2000,
         full_test: int = 500,
-        top_k: int = 50,
         two_stage: bool = True
     ) -> pd.DataFrame:
         """
@@ -217,8 +364,7 @@ class ExperimentRunner:
             full_epochs: Epochs for full search
             full_train: Training samples for full search
             full_test: Test samples for full search
-            top_k: Number of top combinations for full search
-            two_stage: If True, run quick search first then full search on top-k
+            two_stage: If True, run quick search first then full search
         """
         combinations = self.generate_combinations()
         n_combinations = len(combinations)
@@ -229,6 +375,13 @@ class ExperimentRunner:
         print(f"Parameter grid: {self.param_grid}")
         print(f"Total combinations: {n_combinations}")
         print(f"Two-stage search: {two_stage}")
+
+        if two_stage:
+            # Estimate Stage 2 model count
+            estimated_stage2 = self._estimate_stage2_count()
+            print(f"\n>>> Expected Stage 2 models: ~{estimated_stage2} (after deduplication) <<<")
+        else:
+            estimated_stage2 = 0
 
         # Stage 1: Quick Search
         print("\n" + "-"*80)
@@ -241,10 +394,27 @@ class ExperimentRunner:
         self.base_config.num_test_samples = quick_test
 
         self.results = []
+        first_model_time = None
 
         for i, params in enumerate(tqdm(combinations, desc="Quick Search")):
+            # Measure first model time for estimation
+            if i == 0:
+                start_time = time.time()
+
             config = self._create_config(params, quick=True)
-            metrics = self._run_single_experiment(config, experiment_id=i)
+            metrics = self._run_single_experiment(config, experiment_id=i,
+                                                   use_quick_data=True)
+
+            # After first model, print time estimate
+            if i == 0:
+                first_model_time = time.time() - start_time
+                self._print_time_estimate(
+                    first_model_time=first_model_time,
+                    n_quick=n_combinations,
+                    n_full_est=estimated_stage2 if two_stage else 0,
+                    quick_epochs=quick_epochs,
+                    full_epochs=full_epochs
+                )
 
             result = {
                 'combination_id': i,
@@ -280,16 +450,17 @@ class ExperimentRunner:
         quick_df.to_csv(os.path.join(self.output_dir, 'quick_search_results.csv'), index=False)
 
         # Stage 2: Full Search (if two_stage)
-        if two_stage and top_k > 0:
+        if two_stage:
             print("\n" + "-"*80)
-            print(f"STAGE 2: Full Search (Diverse Selection of {top_k} combinations)")
+            print("STAGE 2: Full Search (Diverse Selection)")
             print(f"Epochs: {full_epochs}, Train: {full_train}, Test: {full_test}")
             print("-"*80)
 
             # Use diverse selection method
             print("\nSelecting diverse candidates for Stage 2:")
-            top_combinations = self._select_stage2_candidates(quick_df, total_k=top_k)
+            top_combinations = self._select_stage2_candidates(quick_df)
             actual_k = len(top_combinations)
+            print(f"\n>>> Stage 2 will train {actual_k} models (from {n_combinations} Stage 1 combinations) <<<")
             param_keys = list(self.param_grid.keys())
 
             self.full_results = []
@@ -303,7 +474,7 @@ class ExperimentRunner:
                 config.num_test_samples = full_test
 
                 metrics = self._run_single_experiment(config, experiment_id=int(data['combination_id']),
-                                                       save_history=True)
+                                                       save_history=True, use_quick_data=False)
 
                 # Enhanced result with all metrics (matching Stage 1 format)
                 result = {
@@ -354,6 +525,9 @@ class ExperimentRunner:
                 print(f"  #{i+1}: ROC-AUC={row['roc_auc']:.4f}, F1={row['f1_score']:.4f}, "
                       f"criterion={row['selection_criterion']}")
 
+            # Print per-parameter performance summary (including disturbing normal)
+            self._print_parameter_performance_summary(full_df)
+
             # Save full search results
             full_df.to_csv(os.path.join(self.output_dir, 'full_search_results.csv'), index=False)
 
@@ -366,32 +540,25 @@ class ExperimentRunner:
 
         return final_df
 
-    def _select_stage2_candidates(
-        self,
-        quick_df: pd.DataFrame,
-        total_k: int = 150
-    ) -> pd.DataFrame:
+    def _select_stage2_candidates(self, quick_df: pd.DataFrame) -> pd.DataFrame:
         """
         Select diverse candidates for Stage 2 training.
 
-        Selection is proportionally scaled based on total_k.
-        For total_k=150, base allocation is:
-        - 30 by overall ROC-AUC
-        - 20 by disturbing_roc_auc
-        - Others get ~10 each
+        Selection strategy:
+        1. First, select top 10 from each parameter value (ensures coverage)
+        2. Remove duplicates
+        3. Add top 30 by overall ROC-AUC (skip already selected)
+        4. Add top 20 by disturbing_roc_auc (skip already selected)
 
-        For smaller total_k, allocations are scaled down proportionally.
-        Returns unique candidates (no duplicates), capped at total_k.
+        Returns unique candidates with selection info.
         """
         selected_ids = set()
         selection_info = []
 
         def add_candidates(df_subset, criterion_name, max_count):
-            """Add candidates from subset, skip duplicates. Respects total_k limit."""
+            """Add candidates from subset, skip duplicates."""
             added = 0
             for _, row in df_subset.iterrows():
-                if len(selected_ids) >= total_k:
-                    break
                 cid = int(row['combination_id'])
                 if cid not in selected_ids:
                     selected_ids.add(cid)
@@ -405,61 +572,74 @@ class ExperimentRunner:
                         break
             return added
 
-        # Scale allocations based on total_k (base is 150)
-        scale = total_k / 150.0
+        n_per_value = 5  # Top 5 per parameter value
 
-        # 1. Top by overall ROC-AUC (scaled from 30)
+        # 1. Select top 5 from each parameter value
+        print("  [Phase 1] Selecting top 5 per parameter value:")
+
+        # force_mask_anomaly: True and False
+        if 'force_mask_anomaly' in quick_df.columns:
+            for val in [True, False]:
+                df_subset = quick_df[quick_df['force_mask_anomaly'] == val].sort_values('roc_auc', ascending=False)
+                added = add_candidates(df_subset, f'force_mask_anomaly={val}', n_per_value)
+                print(f"    force_mask_anomaly={val}: {added} models")
+
+        # patch_level_loss: True and False
+        if 'patch_level_loss' in quick_df.columns:
+            for val in [True, False]:
+                df_subset = quick_df[quick_df['patch_level_loss'] == val].sort_values('roc_auc', ascending=False)
+                added = add_candidates(df_subset, f'patch_level_loss={val}', n_per_value)
+                print(f"    patch_level_loss={val}: {added} models")
+
+        # margin_type: hinge, softplus, dynamic
+        if 'margin_type' in quick_df.columns:
+            for val in ['hinge', 'softplus', 'dynamic']:
+                df_subset = quick_df[quick_df['margin_type'] == val].sort_values('roc_auc', ascending=False)
+                added = add_candidates(df_subset, f'margin_type={val}', n_per_value)
+                print(f"    margin_type={val}: {added} models")
+
+        # patchify_mode: cnn_first, patch_cnn, linear
+        if 'patchify_mode' in quick_df.columns:
+            for val in ['cnn_first', 'patch_cnn', 'linear']:
+                df_subset = quick_df[quick_df['patchify_mode'] == val].sort_values('roc_auc', ascending=False)
+                added = add_candidates(df_subset, f'patchify_mode={val}', n_per_value)
+                print(f"    patchify_mode={val}: {added} models")
+
+        # masking_strategy: patch, feature_wise
+        if 'masking_strategy' in quick_df.columns:
+            for val in ['patch', 'feature_wise']:
+                df_subset = quick_df[quick_df['masking_strategy'] == val].sort_values('roc_auc', ascending=False)
+                added = add_candidates(df_subset, f'masking_strategy={val}', n_per_value)
+                print(f"    masking_strategy={val}: {added} models")
+
+        # masking_ratio
+        if 'masking_ratio' in quick_df.columns:
+            for val in quick_df['masking_ratio'].unique():
+                df_subset = quick_df[quick_df['masking_ratio'] == val].sort_values('roc_auc', ascending=False)
+                added = add_candidates(df_subset, f'masking_ratio={val}', n_per_value)
+                print(f"    masking_ratio={val}: {added} models")
+
+        # num_patches
+        if 'num_patches' in quick_df.columns:
+            for val in quick_df['num_patches'].unique():
+                df_subset = quick_df[quick_df['num_patches'] == val].sort_values('roc_auc', ascending=False)
+                added = add_candidates(df_subset, f'num_patches={val}', n_per_value)
+                print(f"    num_patches={val}: {added} models")
+
+        print(f"  After Phase 1: {len(selected_ids)} unique models")
+
+        # 2. Add top 10 by overall ROC-AUC (excluding already selected)
+        print("  [Phase 2] Adding top by overall ROC-AUC (excluding Phase 1):")
         df_by_roc = quick_df.sort_values('roc_auc', ascending=False)
-        n_roc = max(1, int(30 * scale))
-        added = add_candidates(df_by_roc, 'overall_roc_auc', n_roc)
-        print(f"  Added {added} models by overall ROC-AUC")
+        added = add_candidates(df_by_roc, 'overall_roc_auc', 10)
+        print(f"    Added {added} new models by overall ROC-AUC")
 
-        if len(selected_ids) >= total_k:
-            pass  # Skip remaining criteria
-        else:
-            # 2. Top by disturbing_roc_auc (scaled from 20)
-            if 'disturbing_roc_auc' in quick_df.columns:
-                df_by_disturbing = quick_df.sort_values('disturbing_roc_auc', ascending=False)
-                n_disturb = max(1, int(20 * scale))
-                added = add_candidates(df_by_disturbing, 'disturbing_roc_auc', n_disturb)
-                print(f"  Added {added} models by disturbing ROC-AUC")
-
-        # Scale for category-specific selections (base is 10 each)
-        n_category = max(1, int(10 * scale))
-
-        if len(selected_ids) < total_k and 'force_mask_anomaly' in quick_df.columns:
-            df_force = quick_df[quick_df['force_mask_anomaly'] == True].sort_values('roc_auc', ascending=False)
-            added = add_candidates(df_force, 'force_mask_anomaly=True', n_category)
-            print(f"  Added {added} models with force_mask_anomaly=True")
-
-        if len(selected_ids) < total_k and 'patch_level_loss' in quick_df.columns:
-            df_patch = quick_df[quick_df['patch_level_loss'] == True].sort_values('roc_auc', ascending=False)
-            added = add_candidates(df_patch, 'patch_level_loss=True', n_category)
-            print(f"  Added {added} models with patch_level_loss=True")
-
-        if len(selected_ids) < total_k and 'margin_type' in quick_df.columns:
-            for mt in ['dynamic', 'softplus', 'hinge']:
-                if len(selected_ids) >= total_k:
-                    break
-                df_mt = quick_df[quick_df['margin_type'] == mt].sort_values('roc_auc', ascending=False)
-                added = add_candidates(df_mt, f'margin_type={mt}', n_category)
-                print(f"  Added {added} models with margin_type={mt}")
-
-        if len(selected_ids) < total_k and 'patchify_mode' in quick_df.columns:
-            for pm in ['cnn_first', 'patch_cnn', 'linear']:
-                if len(selected_ids) >= total_k:
-                    break
-                df_pm = quick_df[quick_df['patchify_mode'] == pm].sort_values('roc_auc', ascending=False)
-                added = add_candidates(df_pm, f'patchify_mode={pm}', n_category)
-                print(f"  Added {added} models with patchify_mode={pm}")
-
-        if len(selected_ids) < total_k and 'masking_strategy' in quick_df.columns:
-            for ms in ['patch', 'feature_wise']:
-                if len(selected_ids) >= total_k:
-                    break
-                df_ms = quick_df[quick_df['masking_strategy'] == ms].sort_values('roc_auc', ascending=False)
-                added = add_candidates(df_ms, f'masking_strategy={ms}', n_category)
-                print(f"  Added {added} models with masking_strategy={ms}")
+        # 3. Add top 5 by disturbing_roc_auc (excluding already selected)
+        print("  [Phase 3] Adding top by disturbing ROC-AUC (excluding Phase 1, 2):")
+        if 'disturbing_roc_auc' in quick_df.columns:
+            df_by_disturbing = quick_df.sort_values('disturbing_roc_auc', ascending=False)
+            added = add_candidates(df_by_disturbing, 'disturbing_roc_auc', 5)
+            print(f"    Added {added} new models by disturbing ROC-AUC")
 
         # Create the selection dataframe
         selection_df = pd.DataFrame(selection_info)
@@ -472,6 +652,60 @@ class ExperimentRunner:
         print(f"\n  Total unique models selected: {len(selected_df)}")
 
         return selected_df
+
+    def _print_parameter_performance_summary(self, full_df: pd.DataFrame):
+        """Print per-parameter performance summary including disturbing normal metrics."""
+        print("\n" + "="*80)
+        print(" " * 15 + "PARAMETER PERFORMANCE SUMMARY")
+        print("="*80)
+
+        # Parameters to analyze
+        params_to_analyze = [
+            ('force_mask_anomaly', [True, False]),
+            ('patch_level_loss', [True, False]),
+            ('margin_type', ['hinge', 'softplus', 'dynamic']),
+            ('patchify_mode', ['cnn_first', 'patch_cnn', 'linear']),
+            ('masking_strategy', ['patch', 'feature_wise']),
+        ]
+
+        # Add masking_ratio and num_patches if present
+        if 'masking_ratio' in full_df.columns:
+            params_to_analyze.append(('masking_ratio', sorted(full_df['masking_ratio'].unique())))
+        if 'num_patches' in full_df.columns:
+            params_to_analyze.append(('num_patches', sorted(full_df['num_patches'].unique())))
+
+        for param_name, values in params_to_analyze:
+            if param_name not in full_df.columns:
+                continue
+
+            print(f"\n--- {param_name} ---")
+            print(f"{'Value':<20} {'Count':>6} {'ROC-AUC':>10} {'F1':>10} {'Dist.ROC':>10} {'Dist.F1':>10}")
+            print("-" * 70)
+
+            for val in values:
+                subset = full_df[full_df[param_name] == val]
+                if len(subset) == 0:
+                    continue
+
+                count = len(subset)
+                mean_roc = subset['roc_auc'].mean()
+                mean_f1 = subset['f1_score'].mean()
+
+                # Disturbing normal metrics
+                if 'disturbing_roc_auc' in subset.columns and subset['disturbing_roc_auc'].notna().any():
+                    mean_dist_roc = subset['disturbing_roc_auc'].mean()
+                    mean_dist_f1 = subset['disturbing_f1'].mean() if 'disturbing_f1' in subset.columns else float('nan')
+                else:
+                    mean_dist_roc = float('nan')
+                    mean_dist_f1 = float('nan')
+
+                val_str = str(val)[:20]
+                dist_roc_str = f"{mean_dist_roc:.4f}" if not np.isnan(mean_dist_roc) else "N/A"
+                dist_f1_str = f"{mean_dist_f1:.4f}" if not np.isnan(mean_dist_f1) else "N/A"
+
+                print(f"{val_str:<20} {count:>6} {mean_roc:>10.4f} {mean_f1:>10.4f} {dist_roc_str:>10} {dist_f1_str:>10}")
+
+        print("\n" + "="*80)
 
     def _save_all_results(self):
         """Save all experiment results"""
@@ -542,14 +776,22 @@ class ExperimentRunner:
 
         print("\nGenerating detailed results for best model...")
 
-        # Create test dataset with same parameters used for final evaluation
-        test_dataset = MultivariateTimeSeriesDataset(
-            num_samples=self.best_config.num_test_samples,
-            seq_length=self.best_config.seq_length,
-            num_features=self.best_config.num_features,
-            anomaly_ratio=self.best_config.test_anomaly_ratio,
+        # Create test dataset with same parameters used for final evaluation (full search)
+        test_dataset = SlidingWindowDataset(
+            signals=self.signals,
+            point_labels=self.point_labels,
+            anomaly_regions=self.anomaly_regions,
+            window_size=self.best_config.seq_length,
+            stride=self.best_config.sliding_window_stride,
             mask_last_n=self.best_config.mask_last_n,
-            seed=self.best_config.random_seed + 1
+            split='test',
+            train_ratio=self.full_train_ratio,  # Use full search train_ratio
+            target_counts={
+                'pure_normal': self.best_config.test_target_pure_normal,
+                'disturbing_normal': self.best_config.test_target_disturbing_normal,
+                'anomaly': self.best_config.test_target_anomaly
+            },
+            seed=self.best_config.random_seed
         )
         test_loader = DataLoader(test_dataset, batch_size=self.best_config.batch_size, shuffle=False)
 
@@ -567,7 +809,7 @@ class ExperimentRunner:
             'label': detailed_losses['labels'],
             'sample_type': detailed_losses['sample_types'],
             'anomaly_type': detailed_losses['anomaly_types'],
-            'anomaly_type_name': [ANOMALY_TYPE_NAMES[int(at)] for at in detailed_losses['anomaly_types']]
+            'anomaly_type_name': [SLIDING_ANOMALY_TYPE_NAMES[int(at)] for at in detailed_losses['anomaly_types']]
         })
         detailed_df.to_csv(os.path.join(self.output_dir, 'best_model_detailed.csv'), index=False)
 
@@ -605,13 +847,12 @@ class ExperimentRunner:
 
 def run_experiments(
     param_grid: Dict[str, List] = None,
-    quick_epochs: int = 15,
+    quick_epochs: int = 1,
     quick_train: int = 1000,
     quick_test: int = 400,
-    full_epochs: int = 100,
+    full_epochs: int = 2,
     full_train: int = 2000,
     full_test: int = 500,
-    top_k: int = 50,
     two_stage: bool = True,
     output_dir: str = 'results/experiments'
 ) -> Tuple[pd.DataFrame, str]:
@@ -629,7 +870,6 @@ def run_experiments(
         full_epochs: Epochs for full search
         full_train: Training samples for full search
         full_test: Test samples for full search
-        top_k: Number of top combinations for full search
         two_stage: If True, run quick then full search
         output_dir: Directory to save results
 
@@ -654,7 +894,6 @@ def run_experiments(
         full_epochs=full_epochs,
         full_train=full_train,
         full_test=full_test,
-        top_k=top_k,
         two_stage=two_stage
     )
 
@@ -695,13 +934,12 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description='Run Self-Distilled MAE experiments')
-    parser.add_argument('--quick-epochs', type=int, default=15, help='Epochs for quick search')
+    parser.add_argument('--quick-epochs', type=int, default=1, help='Epochs for quick search')
     parser.add_argument('--quick-train', type=int, default=1000, help='Training samples for quick search')
     parser.add_argument('--quick-test', type=int, default=400, help='Test samples for quick search')
-    parser.add_argument('--full-epochs', type=int, default=100, help='Epochs for full search')
+    parser.add_argument('--full-epochs', type=int, default=2, help='Epochs for full search')
     parser.add_argument('--full-train', type=int, default=2000, help='Training samples for full search')
     parser.add_argument('--full-test', type=int, default=500, help='Test samples for full search')
-    parser.add_argument('--top-k', type=int, default=130, help='Number of top combinations for full search')
     parser.add_argument('--no-two-stage', action='store_true', help='Disable two-stage search')
     parser.add_argument('--output-dir', type=str, default='results/experiments', help='Output directory')
     args = parser.parse_args()
@@ -713,7 +951,6 @@ if __name__ == "__main__":
         full_epochs=args.full_epochs,
         full_train=args.full_train,
         full_test=args.full_test,
-        top_k=args.top_k,
         two_stage=not args.no_two_stage,
         output_dir=args.output_dir
     )

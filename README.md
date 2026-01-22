@@ -13,7 +13,8 @@ Self-Distilled Masked Autoencoder (MAE) 구현으로, 다변량 시계열 데이
 ├── mae_anomaly/              # 메인 패키지
 │   ├── __init__.py
 │   ├── config.py             # 설정 클래스
-│   ├── dataset.py            # 데이터셋 구현
+│   ├── dataset_sliding.py    # 슬라이딩 윈도우 데이터셋 (메인)
+│   ├── dataset.py            # 레거시 데이터셋 (deprecated)
 │   ├── model.py              # MAE 모델 아키텍처
 │   ├── loss.py               # Self-distillation loss
 │   ├── trainer.py            # 학습 로직
@@ -30,7 +31,8 @@ Self-Distilled Masked Autoencoder (MAE) 구현으로, 다변량 시계열 데이
 │   ├── ARCHITECTURE.md       # 모델 아키텍처 문서
 │   ├── ABLATION_STUDIES.md   # Ablation study 설명
 │   ├── CHANGELOG.md          # 변경 이력
-│   └── VISUALIZATIONS.md     # 시각화 가이드
+│   ├── VISUALIZATIONS.md     # 시각화 가이드
+│   └── DATASET.md            # 데이터셋 문서
 │
 └── results/                  # 실험 결과
     └── experiments/          # 실험별 결과 저장
@@ -61,18 +63,36 @@ pip install -e .
 ### 기본 사용법
 
 ```python
-from mae_anomaly import Config, MultivariateTimeSeriesDataset, SelfDistilledMAEMultivariate
+from mae_anomaly import (
+    Config, set_seed,
+    SlidingWindowTimeSeriesGenerator, SlidingWindowDataset,
+    SelfDistilledMAEMultivariate
+)
 
 # 설정 생성
+set_seed(42)
 config = Config()
 config.patchify_mode = 'linear'  # 'linear', 'cnn_first', 'patch_cnn'
 
-# 데이터셋 생성
-dataset = MultivariateTimeSeriesDataset(
-    num_samples=1000,
-    seq_length=100,
-    num_features=5,
-    anomaly_ratio=0.1
+# 데이터셋 생성 (슬라이딩 윈도우 기반)
+generator = SlidingWindowTimeSeriesGenerator(
+    total_length=100000,
+    num_features=config.num_features,
+    interval_scale=config.anomaly_interval_scale,
+    seed=config.random_seed
+)
+signals, point_labels, anomaly_regions = generator.generate()
+
+dataset = SlidingWindowDataset(
+    signals=signals,
+    point_labels=point_labels,
+    anomaly_regions=anomaly_regions,
+    window_size=config.seq_length,
+    stride=config.sliding_window_stride,
+    mask_last_n=10,
+    split='train',
+    train_ratio=0.5,
+    seed=config.random_seed
 )
 
 # 모델 생성
@@ -89,6 +109,12 @@ python scripts/run_experiments.py
 python scripts/visualize_all.py --experiment-dir results/experiments/YYYYMMDD_HHMMSS
 ```
 
+**실험 기본 설정**:
+| Stage | 시계열 길이 | train_ratio | Train 샘플 | Test 샘플 | Epochs | 모델 수 |
+|-------|------------|-------------|-----------|----------|--------|--------|
+| Stage 1 (Quick) | 200,000 | 0.3 | ~6,000 | 2,000 | 1 | 432 |
+| Stage 2 (Full) | 440,000 | 0.5 | ~22,000 | 2,000 | 2 | ~50-70 |
+
 ## 설정
 
 `Config` 클래스의 주요 파라미터:
@@ -96,9 +122,9 @@ python scripts/visualize_all.py --experiment-dir results/experiments/YYYYMMDD_HH
 ```python
 # 데이터 파라미터
 seq_length: int = 100           # 시퀀스 길이
-num_features: int = 5           # Feature 수
-num_train_samples: int = 10000  # 학습 샘플 수
-num_test_samples: int = 2500    # 테스트 샘플 수
+num_features: int = 8           # Feature 수 (8개 서버 메트릭)
+sliding_window_total_length: int = 440000  # 전체 시계열 길이
+sliding_window_stride: int = 10  # 윈도우 stride
 
 # 모델 파라미터
 d_model: int = 64               # 모델 차원
@@ -158,6 +184,7 @@ results/experiments/YYYYMMDD_HHMMSS/
 - [ABLATION_STUDIES.md](docs/ABLATION_STUDIES.md) - Ablation study 설명
 - [CHANGELOG.md](docs/CHANGELOG.md) - 변경 이력
 - [VISUALIZATIONS.md](docs/VISUALIZATIONS.md) - 시각화 가이드
+- [DATASET.md](docs/DATASET.md) - 슬라이딩 윈도우 데이터셋 문서
 
 ## 요구사항
 
@@ -174,4 +201,4 @@ MIT License
 
 ---
 
-**마지막 업데이트**: 2026-01-22
+**마지막 업데이트**: 2026-01-23

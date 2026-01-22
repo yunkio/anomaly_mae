@@ -1,6 +1,6 @@
 # Model Architecture Documentation
 
-**Last Updated**: 2026-01-22
+**Last Updated**: 2026-01-23
 **Model**: 1D-CNN + Transformer Self-Distilled MAE
 
 ---
@@ -19,9 +19,9 @@ The model uses a hybrid 1D-CNN + Transformer architecture for multivariate time 
 
 **Structure**:
 ```
-Input: (batch, num_features=5, seq_length=100)
+Input: (batch, num_features=8, seq_length=100)
 ↓
-Conv1d(5 → 32, kernel=3, padding=1) + BatchNorm + ReLU
+Conv1d(8 → 32, kernel=3, padding=1) + BatchNorm + ReLU
 ↓
 Conv1d(32 → 64, kernel=3, padding=1) + BatchNorm + ReLU
 ↓
@@ -46,11 +46,11 @@ The model supports 3 different patchify modes, controlled by `config.patchify_mo
 **Default MAE-style approach**: Patchify first, then linear projection
 
 ```
-Input: (batch, 100, 5)
+Input: (batch, 100, 8)
 ↓
-Patchify: (batch, 25, 4*5=20)
+Patchify: (batch, 25, 4*8=32)
 ↓
-Linear(20 → 64)
+Linear(32 → 64)
 ↓
 Patches: (batch, 25, 64)
 ```
@@ -67,9 +67,9 @@ Patches: (batch, 25, 64)
 **CNN on full sequence, then patchify**
 
 ```
-Input: (batch, 5, 100)  # Transposed for Conv1d
+Input: (batch, 8, 100)  # Transposed for Conv1d
 ↓
-Conv1d(5 → 32, kernel=3, padding=1) + BatchNorm + ReLU
+Conv1d(8 → 32, kernel=3, padding=1) + BatchNorm + ReLU
 Conv1d(32 → 64, kernel=3, padding=1) + BatchNorm + ReLU
 ↓
 CNN features: (batch, 64, 100)
@@ -93,11 +93,11 @@ Patches: (batch, 25, 64)
 **Patchify first, then CNN per patch (no cross-patch leakage)**
 
 ```
-Input: (batch, 100, 5)
+Input: (batch, 100, 8)
 ↓
-Patchify: (batch, 25, 4, 5) → (batch*25, 5, 4)
+Patchify: (batch, 25, 4, 8) → (batch*25, 8, 4)
 ↓
-Conv1d(5 → 32, kernel=3, padding=1) + BatchNorm + ReLU
+Conv1d(8 → 32, kernel=3, padding=1) + BatchNorm + ReLU
 Conv1d(32 → 64, kernel=3, padding=1) + BatchNorm + ReLU
 ↓
 (batch*25, 64, 4)
@@ -217,9 +217,9 @@ PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 ```
 Decoder output: (batch, 25, 64)
 ↓
-Linear(64 → 20) per patch (patch_size * num_features = 4 * 5)
+Linear(64 → 32) per patch (patch_size * num_features = 4 * 8)
 ↓
-Unpatchify: (batch, 100, 5)
+Unpatchify: (batch, 100, 8)
 ```
 
 **Details**:
@@ -234,10 +234,10 @@ The pipeline varies based on `patchify_mode`:
 
 ### Linear Mode (default)
 ```
-Input: (batch, 100, 5)
+Input: (batch, 100, 8)
     ↓
 [Patchify]
-    ↓ (batch, 25, 20)
+    ↓ (batch, 25, 32)
 [Linear Embedding]
     ↓ (batch, 25, 64)
 [Random Patch Masking (40%)]
@@ -253,7 +253,7 @@ Input: (batch, 100, 5)
 [Unpatchify]                [Unpatchify]
     ↓                           ↓
 Teacher Output              Student Output
-(batch, 100, 5)            (batch, 100, 5)
+(batch, 100, 8)            (batch, 100, 8)
     ↓                           ↓
         [Discrepancy Computation]
                  ↓
@@ -262,7 +262,7 @@ Teacher Output              Student Output
 
 ### CNN First Mode
 ```
-Input: (batch, 100, 5)
+Input: (batch, 100, 8)
     ↓
 [1D-CNN Layers (full sequence)]
     ↓ (batch, 64, 100)
@@ -275,10 +275,10 @@ Input: (batch, 100, 5)
 
 ### Patch CNN Mode
 ```
-Input: (batch, 100, 5)
+Input: (batch, 100, 8)
     ↓
 [Patchify]
-    ↓ (batch, 25, 4, 5)
+    ↓ (batch, 25, 4, 8)
 [1D-CNN per patch (independent)]
     ↓ (batch, 25, 64)
 [Random Patch Masking → Encoder → Decoders → Output]
@@ -451,17 +451,18 @@ anomaly_score = MSE(student_out - original)
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | seq_length | 100 | Input sequence length |
-| num_features | 5 | Multivariate features |
+| num_features | 8 | Multivariate features (server metrics) |
 | d_model | 64 | Model dimension |
 | num_patches | 25 | Number of patches |
 | patch_size | 4 | Time steps per patch |
 | patchify_mode | linear | Patchify mode (linear/cnn_first/patch_cnn) |
+| masking_strategy | patch | Masking strategy (patch/feature_wise) |
 | masking_ratio | 0.4 | Training masking ratio |
 | num_encoder_layers | 3 | Encoder layers |
 | num_teacher_decoder_layers | 4 | Teacher decoder layers |
 | num_student_decoder_layers | 1 | Student decoder layers |
-| margin | 0.5 | Discrepancy margin |
-| lambda_disc | 0.5 | Discrepancy loss weight |
+| margin | 0.5 | Discrepancy margin (fixed) |
+| lambda_disc | 0.5 | Discrepancy loss weight (fixed) |
 | margin_type | hinge | Margin loss type |
 | patch_level_loss | True | Loss computation level |
 

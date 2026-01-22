@@ -1,6 +1,6 @@
 # Ablation Studies Documentation
 
-**Last Updated**: 2026-01-22
+**Last Updated**: 2026-01-23
 **Status**: ✅ Verified and Logically Correct
 
 ---
@@ -21,11 +21,11 @@ This document describes the ablation studies used to validate the Self-Distilled
   - Student Decoder: 1 layer
 
 **Pipeline**:
-1. Input (batch, 100, 5) → 1D-CNN → (batch, 64, 100)
+1. Input (batch, 100, 8) → 1D-CNN → (batch, 64, 100)
 2. CNN features → Patch embedding → (batch, 25, 64)
 3. Patches + Positional encoding → Transformer encoder
 4. Latent → Teacher/Student decoders → Output projection
-5. Reconstruction (batch, 100, 5)
+5. Reconstruction (batch, 100, 8)
 
 ---
 
@@ -88,22 +88,7 @@ Test the optimal amount of masking during training.
 
 ---
 
-### 4. Margin Experiments
-
-**Configuration**:
-Different margin values tested with baseline configuration:
-- margin = 0.25
-- margin = 0.5 (default)
-- margin = 1.0
-
-**Purpose**:
-Test the impact of margin value on discrepancy learning.
-- Lower margin: Teacher-student gap can be smaller
-- Higher margin: Forces larger separation on anomalies
-
----
-
-### 5. Margin Type Experiments
+### 4. Margin Type Experiments
 
 **Configuration**:
 Three different margin loss types:
@@ -116,37 +101,7 @@ Test which margin formulation works best for self-distillation.
 
 ---
 
-### 6. Lambda_disc Experiments
-
-**Configuration**:
-Different discrepancy loss weights tested with baseline configuration:
-- λ_disc = 0.3
-- λ_disc = 0.5 (default)
-- λ_disc = 0.7
-
-**Training**:
-- All use full baseline configuration (teacher + student + discrepancy loss)
-- Same architecture and hyperparameters
-- Only difference: weight of discrepancy loss in total loss
-
-**Loss Function**:
-```python
-total_loss = reconstruction_loss + λ_disc * discrepancy_loss
-```
-
-**Purpose**:
-Test the optimal balance between reconstruction and discrepancy objectives.
-- **Low λ_disc**: Prioritizes reconstruction accuracy
-- **High λ_disc**: Prioritizes teacher-student separation on anomalies
-
-**Hypothesis**:
-- Too low λ_disc: Student learns to mimic teacher too well, reducing discrepancy signal
-- Too high λ_disc: May compromise reconstruction quality
-- Optimal λ_disc: Balances reconstruction and anomaly sensitivity
-
----
-
-### 7. Force Mask Anomaly Experiments
+### 5. Force Mask Anomaly Experiments
 
 **Configuration**:
 - `force_mask_anomaly=False` (default)
@@ -159,7 +114,7 @@ Test whether forcing anomaly patches to be masked during training improves detec
 
 ---
 
-### 8. Patch-Level vs Window-Level Loss
+### 6. Patch-Level vs Window-Level Loss
 
 **Configuration**:
 - `patch_level_loss=True` (default): Compute discrepancy per patch
@@ -170,7 +125,7 @@ Test whether fine-grained (patch-level) or coarse (window-level) discrepancy los
 
 ---
 
-### 9. Patchify Mode Experiments
+### 7. Patchify Mode Experiments
 
 **Configuration**:
 Three different patchify modes tested:
@@ -276,24 +231,24 @@ All ablations are tested via grid search in `scripts/run_experiments.py`:
 
 ```python
 # Parameter grid for ablation experiments
+# Note: margin=0.5, lambda_disc=0.5 are fixed (not in grid)
 DEFAULT_PARAM_GRID = {
     'masking_ratio': [0.4, 0.7],
     'masking_strategy': ['patch', 'feature_wise'],
     'num_patches': [10, 25, 50],
-    'margin': [0.25, 0.5, 1.0],
-    'lambda_disc': [0.3, 0.5, 0.7],
     'margin_type': ['hinge', 'softplus', 'dynamic'],
     'force_mask_anomaly': [False, True],
     'patch_level_loss': [True, False],
     'patchify_mode': ['cnn_first', 'patch_cnn', 'linear'],
 }
+# Total combinations: 2*2*3*3*2*2*3 = 432 (note: actual count is 288 due to grid structure)
 
 # Two-stage grid search
 runner = ExperimentRunner(param_grid=DEFAULT_PARAM_GRID)
 results = runner.run_grid_search(
-    quick_epochs=15,      # Stage 1: quick screening
-    full_epochs=100,      # Stage 2: full training on top-k
-    top_k=150             # Number of candidates for Stage 2
+    quick_epochs=1,       # Stage 1: quick screening
+    full_epochs=3,        # Stage 2: full training
+    two_stage=True
 )
 ```
 
@@ -312,13 +267,17 @@ error = recon_error + self.config.lambda_disc * discrepancy
 
 The experiment runner uses a two-stage grid search approach:
 
-**Stage 1: Quick Screening** (15 epochs default)
-- All parameter combinations evaluated quickly
-- Top candidates selected for full training
+**Stage 1: Quick Screening** (1 epoch default)
+- All 432 parameter combinations evaluated quickly
+- Candidates selected for full training based on diverse criteria
 
-**Stage 2: Full Training** (50 epochs)
-- Top candidates from Stage 1
-- Full training with early stopping
+**Stage 2: Full Training** (2 epochs default)
+- ~50-70 diverse candidates from Stage 1 (after deduplication)
+- Full training with all components
+
+**Fixed Parameters** (not in grid search):
+- `margin = 0.5`
+- `lambda_disc = 0.5`
 
 **Default Parameter Grid**:
 ```python
@@ -326,15 +285,40 @@ DEFAULT_PARAM_GRID = {
     'masking_ratio': [0.4, 0.7],
     'masking_strategy': ['patch', 'feature_wise'],
     'num_patches': [10, 25, 50],
-    'margin': [0.25, 0.5, 1.0],
-    'lambda_disc': [0.3, 0.5, 0.7],
     'margin_type': ['hinge', 'softplus', 'dynamic'],
     'force_mask_anomaly': [False, True],
     'patch_level_loss': [True, False],
     'patchify_mode': ['cnn_first', 'patch_cnn', 'linear'],
 }
-# Total combinations: 2*2*3*3*3*3*2*2*3 = 3888
+# Total combinations: 2*2*3*3*2*2*3 = 432 (note: actual count is 288 due to grid structure)
 ```
+
+---
+
+## Stage 2 Selection Criteria
+
+Stage 2 uses a 3-phase diverse selection strategy:
+
+**Phase 1: Per-Parameter Coverage (5 models per value)**
+- `force_mask_anomaly`: True (5) + False (5)
+- `patch_level_loss`: True (5) + False (5)
+- `margin_type`: hinge (5) + softplus (5) + dynamic (5)
+- `patchify_mode`: cnn_first (5) + patch_cnn (5) + linear (5)
+- `masking_strategy`: patch (5) + feature_wise (5)
+- `masking_ratio`: each value (5)
+- `num_patches`: each value (5)
+
+**Phase 2: Overall Performance (Phase 1 제외)**
+- Top 10 by overall ROC-AUC (Phase 1에서 선택되지 않은 모델만)
+
+**Phase 3: Disturbing Normal Performance (Phase 1, 2 제외)**
+- Top 5 by disturbing_roc_auc (Phase 1, 2에서 선택되지 않은 모델만)
+
+각 Phase에서 이미 선택된 모델은 다음 Phase에서 제외됩니다.
+
+**Stage 2 Output**:
+- Per-parameter performance summary with disturbing normal metrics
+- Detailed comparison across all parameter values
 
 ---
 

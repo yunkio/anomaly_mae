@@ -11,9 +11,48 @@ from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
 from mae_anomaly import (
-    Config, set_seed, MultivariateTimeSeriesDataset,
+    Config, set_seed,
+    SlidingWindowTimeSeriesGenerator, SlidingWindowDataset,
     SelfDistilledMAEMultivariate, Trainer, Evaluator
 )
+
+
+def create_datasets(config, total_length=100000):
+    """Helper function to create sliding window datasets"""
+    generator = SlidingWindowTimeSeriesGenerator(
+        total_length=total_length,
+        num_features=config.num_features,
+        interval_scale=config.anomaly_interval_scale,
+        seed=config.random_seed
+    )
+    signals, point_labels, anomaly_regions = generator.generate()
+
+    train_dataset = SlidingWindowDataset(
+        signals=signals,
+        point_labels=point_labels,
+        anomaly_regions=anomaly_regions,
+        window_size=config.seq_length,
+        stride=config.sliding_window_stride,
+        mask_last_n=10,
+        split='train',
+        train_ratio=0.5,
+        seed=config.random_seed
+    )
+
+    test_dataset = SlidingWindowDataset(
+        signals=signals,
+        point_labels=point_labels,
+        anomaly_regions=anomaly_regions,
+        window_size=config.seq_length,
+        stride=config.sliding_window_stride,
+        mask_last_n=10,
+        split='test',
+        train_ratio=0.5,
+        target_counts={'pure_normal': 120, 'disturbing_normal': 30, 'anomaly': 50},
+        seed=config.random_seed
+    )
+
+    return train_dataset, test_dataset, signals, point_labels, anomaly_regions
 
 
 # ============================================================================
@@ -32,21 +71,10 @@ def example_1_basic_usage():
     config.num_epochs = 10  # Quick demo
 
     # Create datasets
-    train_dataset = MultivariateTimeSeriesDataset(
-        num_samples=500,
-        seq_length=config.seq_length,
-        num_features=config.num_features,
-        anomaly_ratio=0.05,
-        seed=42
-    )
+    train_dataset, test_dataset, _, _, _ = create_datasets(config, total_length=100000)
 
-    test_dataset = MultivariateTimeSeriesDataset(
-        num_samples=200,
-        seq_length=config.seq_length,
-        num_features=config.num_features,
-        anomaly_ratio=0.25,
-        seed=43
-    )
+    print(f"Train dataset: {len(train_dataset)} samples")
+    print(f"Test dataset: {len(test_dataset)} samples")
 
     # Create dataloaders
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
@@ -97,12 +125,7 @@ def example_2_custom_config():
     print(f"  Patchify mode: {config.patchify_mode}")
 
     # Quick training
-    train_dataset = MultivariateTimeSeriesDataset(
-        200, config.seq_length, config.num_features, 0.05, 42
-    )
-    test_dataset = MultivariateTimeSeriesDataset(
-        100, config.seq_length, config.num_features, 0.25, 43
-    )
+    train_dataset, test_dataset, _, _, _ = create_datasets(config, total_length=50000)
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
@@ -128,12 +151,7 @@ def example_3_compare_patchify_modes():
     config = Config()
     config.num_epochs = 5
 
-    train_dataset = MultivariateTimeSeriesDataset(
-        300, config.seq_length, config.num_features, 0.05, 42
-    )
-    test_dataset = MultivariateTimeSeriesDataset(
-        100, config.seq_length, config.num_features, 0.25, 43
-    )
+    train_dataset, test_dataset, _, _, _ = create_datasets(config, total_length=80000)
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
@@ -177,11 +195,10 @@ def example_4_single_sample_inference():
     config = Config()
 
     # Create a trained model (using small dataset for demo)
-    train_dataset = MultivariateTimeSeriesDataset(
-        200, config.seq_length, config.num_features, 0.05, 42
-    )
+    train_dataset, test_dataset, _, _, _ = create_datasets(config, total_length=50000)
+
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    test_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     model = SelfDistilledMAEMultivariate(config)
     config.num_epochs = 5
@@ -192,7 +209,7 @@ def example_4_single_sample_inference():
     model.eval()
     with torch.no_grad():
         # Get a sample
-        sample_sequence, sample_label = train_dataset[0]
+        sample_sequence, sample_label, _, _, _ = train_dataset[0]
         sample_sequence = sample_sequence.unsqueeze(0).to(config.device)
 
         # Create mask for last patch
@@ -226,11 +243,10 @@ def example_5_save_load_model():
     config.num_epochs = 5
 
     # Train model
-    train_dataset = MultivariateTimeSeriesDataset(
-        200, config.seq_length, config.num_features, 0.05, 42
-    )
+    train_dataset, test_dataset, _, _, _ = create_datasets(config, total_length=50000)
+
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    test_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     model = SelfDistilledMAEMultivariate(config)
     trainer = Trainer(model, config, train_loader, test_loader)
@@ -254,11 +270,6 @@ def example_5_save_load_model():
     print(f"Model loaded from {save_path}")
 
     # Verify loaded model works
-    test_dataset = MultivariateTimeSeriesDataset(
-        50, config.seq_length, config.num_features, 0.25, 43
-    )
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-
     evaluator = Evaluator(new_model, loaded_config, test_loader)
     metrics = evaluator.evaluate()
 
@@ -281,12 +292,7 @@ def example_6_visualize_detection():
     config.num_epochs = 10
 
     # Train model
-    train_dataset = MultivariateTimeSeriesDataset(
-        500, config.seq_length, config.num_features, 0.05, 42
-    )
-    test_dataset = MultivariateTimeSeriesDataset(
-        100, config.seq_length, config.num_features, 0.30, 43
-    )
+    train_dataset, test_dataset, _, _, _ = create_datasets(config, total_length=100000)
 
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
@@ -308,7 +314,7 @@ def example_6_visualize_detection():
 
     for idx, (sample_idx, title) in enumerate([(normal_idx, 'Normal'), (anomaly_idx, 'Anomaly')]):
         # Get sample
-        sample, label = test_dataset[sample_idx]
+        sample, label, _, _, _ = test_dataset[sample_idx]
         sample = sample.unsqueeze(0).to(config.device)
 
         # Create mask for last patch

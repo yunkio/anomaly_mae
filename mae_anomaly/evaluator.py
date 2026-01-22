@@ -11,7 +11,7 @@ from sklearn.metrics import (
     roc_auc_score, roc_curve
 )
 
-from .dataset import ANOMALY_TYPE_NAMES
+from .dataset_sliding import ANOMALY_TYPE_NAMES
 
 
 class Evaluator:
@@ -241,18 +241,21 @@ class Evaluator:
 
         # Disturbing normal performance
         # sample_type: 0=pure_normal, 1=disturbing_normal, 2=anomaly
+        # IMPORTANT: Use the GLOBAL threshold (from entire dataset), not a separate threshold
         disturbing_mask = (sample_types == 0) | (sample_types == 1)
         if disturbing_mask.sum() > 0:
             disturbing_scores = scores[disturbing_mask]
             disturbing_labels = sample_types[disturbing_mask]
 
             if len(np.unique(disturbing_labels)) > 1:
+                # ROC-AUC is threshold-free, so compute it normally
                 disturbing_roc_auc = roc_auc_score(disturbing_labels, disturbing_scores)
-                d_fpr, d_tpr, d_thresholds = roc_curve(disturbing_labels, disturbing_scores)
-                d_optimal_idx = np.argmax(d_tpr - d_fpr)
-                d_threshold = d_thresholds[d_optimal_idx]
 
-                d_predictions = (disturbing_scores > d_threshold).astype(int)
+                # Use GLOBAL threshold (from entire dataset) for predictions
+                # This ensures fair comparison - we evaluate how well the model
+                # distinguishes disturbing normal from pure normal using the same
+                # threshold that was chosen for overall anomaly detection
+                d_predictions = (disturbing_scores > threshold).astype(int)
                 disturbing_precision = precision_score(disturbing_labels, d_predictions, zero_division=0)
                 disturbing_recall = recall_score(disturbing_labels, d_predictions, zero_division=0)
                 disturbing_f1 = f1_score(disturbing_labels, d_predictions, zero_division=0)

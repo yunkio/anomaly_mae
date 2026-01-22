@@ -1,6 +1,6 @@
 # Visualization Documentation
 
-**Last Updated**: 2026-01-22
+**Last Updated**: 2026-01-23
 **Status**: Complete
 
 ---
@@ -9,11 +9,11 @@
 
 This project generates comprehensive visualizations through a unified script (`visualize_all.py`). Visualizations are organized into five main categories:
 
-1. **Data Visualizations** - Dataset characteristics and anomaly types
+1. **Data Visualizations** - Dataset characteristics, anomaly generation rules, feature correlations
 2. **Architecture Visualizations** - Model pipeline, patchify modes, self-distillation concept
 3. **Stage 1 Visualizations** - Quick search (hyperparameter screening) results
-4. **Stage 2 Visualizations** - Full training results on selected candidates
-5. **Best Model Visualizations** - Detailed analysis of the best performing model
+4. **Stage 2 Visualizations** - Full training results with per-hyperparameter analysis
+5. **Best Model Visualizations** - Detailed analysis including pure/disturbing normal comparison
 
 ---
 
@@ -28,7 +28,7 @@ Runs experiments and saves results. **Does NOT generate visualizations.**
 python scripts/run_experiments.py
 
 # Custom parameters
-python scripts/run_experiments.py --quick-epochs 10 --full-epochs 50 --top-k 100
+python scripts/run_experiments.py --quick-epochs 10 --full-epochs 50
 
 # Output
 results/experiments/YYYYMMDD_HHMMSS/
@@ -59,9 +59,26 @@ results/experiments/YYYYMMDD_HHMMSS/visualization/
 ├── data/           # DataVisualizer outputs
 ├── architecture/   # ArchitectureVisualizer outputs
 ├── stage1/         # Stage 1 results visualization
-├── stage2/         # Stage 2 results visualization
+├── stage2/         # Stage 2 results visualization (incl. per-hyperparameter)
 └── best_model/     # Best model analysis
 ```
+
+---
+
+## Experiment Settings Consistency
+
+Visualizations use the **same evaluation method** as `run_experiments.py`:
+
+| Setting | Stage 1 | Stage 2 | Visualization |
+|---------|---------|---------|---------------|
+| Time Series Length | 200,000 | 440,000 | N/A |
+| Train Ratio | 0.3 | 0.5 | N/A |
+| Train Samples | ~6,000 | ~22,000 | N/A |
+| Test Samples | 2,000 | 2,000 | 2,000 |
+| Test Target | 1200:300:500 | 1200:300:500 | 1200:300:500 |
+| Epochs | 1 | 2 | N/A (uses saved model) |
+| Masking | Last `mask_last_n` | Last `mask_last_n` | Last `mask_last_n` |
+| Error Metric | MSE | MSE | MSE |
 
 ---
 
@@ -69,7 +86,7 @@ results/experiments/YYYYMMDD_HHMMSS/visualization/
 
 ### 1. Data Visualizations (`data/`)
 
-Understanding the dataset and anomaly types.
+Understanding the dataset, anomaly types, and experiment settings.
 
 | File | Description |
 |------|-------------|
@@ -77,6 +94,9 @@ Understanding the dataset and anomaly types.
 | `sample_types.png` | Comparison of pure normal, disturbing normal, and anomaly samples |
 | `feature_examples.png` | Multivariate feature visualization for normal and anomaly samples |
 | `dataset_statistics.png` | Label and sample type distributions |
+| `anomaly_generation_rules.png` | **NEW**: Detailed rules for each anomaly type (spike, memory_leak, noise, drift, network_congestion, disturbing) |
+| `feature_correlations.png` | **NEW**: Feature correlation matrix and generation rules explanation |
+| `experiment_settings.png` | **NEW**: Experiment settings summary (Stage 1/2 epochs, data counts, seeds) |
 
 ### 2. Architecture Visualizations (`architecture/`)
 
@@ -109,7 +129,7 @@ Quick search results analysis (hyperparameter screening).
 
 ### 4. Stage 2 Visualizations (`stage2/`)
 
-Full training results on selected diverse candidates.
+Full training results on selected diverse candidates, **with per-hyperparameter analysis**.
 
 | File | Description |
 |------|-------------|
@@ -117,10 +137,19 @@ Full training results on selected diverse candidates.
 | `stage2_selection_criterion.png` | Analysis of performance by selection criterion |
 | `learning_curves.png` | Training loss curves for top experiments |
 | `stage2_summary_dashboard.png` | Comprehensive Stage 2 summary dashboard |
+| `hyperparam_masking_ratio.png` | masking_ratio impact on Stage 2 ROC-AUC |
+| `hyperparam_masking_strategy.png` | masking_strategy impact on Stage 2 ROC-AUC |
+| `hyperparam_num_patches.png` | num_patches impact on Stage 2 ROC-AUC |
+| `hyperparam_margin_type.png` | margin_type impact on Stage 2 ROC-AUC |
+| `hyperparam_force_mask_anomaly.png` | force_mask_anomaly impact on Stage 2 ROC-AUC |
+| `hyperparam_patch_level_loss.png` | patch_level_loss impact on Stage 2 ROC-AUC |
+| `hyperparam_patchify_mode.png` | patchify_mode impact on Stage 2 ROC-AUC |
+| `hyperparameter_interactions.png` | **NEW**: Heatmaps showing hyperparameter interactions |
+| `best_config_summary.png` | **NEW**: Best model configuration summary with Korean descriptions |
 
 ### 5. Best Model Visualizations (`best_model/`)
 
-Detailed analysis of the single best performing model.
+Detailed analysis of the single best performing model, including qualitative case studies.
 
 | File | Description |
 |------|-------------|
@@ -132,6 +161,32 @@ Detailed analysis of the single best performing model.
 | `best_model_reconstruction.png` | Original vs Teacher vs Student reconstruction |
 | `best_model_detection_examples.png` | TP, TN, FP, FN example time series |
 | `best_model_summary.png` | Summary statistics and configuration |
+| `pure_vs_disturbing_normal.png` | Detailed comparison of pure normal vs disturbing normal |
+| `discrepancy_trend.png` | Discrepancy trend analysis across time steps |
+| `hypothesis_verification.png` | **NEW**: Verification of hypotheses about disturbing normal performance |
+| `case_study_gallery.png` | Representative TP/TN/FP/FN case studies with detailed analysis |
+| `anomaly_type_case_studies.png` | **NEW**: Per-anomaly-type case studies (TP vs FN) |
+| `feature_contribution_analysis.png` | **NEW**: Which features contribute most to detection |
+| `hardest_samples.png` | **NEW**: Analysis of hardest-to-detect samples |
+| `loss_by_anomaly_type.png` | Loss distributions by anomaly type |
+| `performance_by_anomaly_type.png` | Detection rate and mean score by anomaly type |
+| `loss_scatter_by_anomaly_type.png` | Recon vs discrepancy scatter colored by anomaly type |
+| `sample_type_analysis.png` | Sample type (pure/disturbing/anomaly) analysis |
+
+### 6. Training Progress Visualizations (`training_progress/`)
+
+Visualizations showing how the model learns over training epochs (requires `--retrain` flag).
+
+| File | Description |
+|------|-------------|
+| `score_evolution.png` | Score distribution changes at checkpoint epochs |
+| `sample_trajectories.png` | Individual sample score trajectories over training |
+| `metrics_evolution.png` | ROC-AUC, F1, Precision, Recall over epochs |
+| `late_bloomer_analysis.png` | **UPDATED**: Samples that changed classification (per-epoch thresholds) |
+| `late_bloomer_case_studies.png` | **NEW**: Detailed case studies of late bloomer samples |
+| `anomaly_type_learning.png` | Detection rate by anomaly type over epochs |
+| `reconstruction_evolution.png` | **UPDATED**: Teacher & Student reconstruction + discrepancy evolution |
+| `decision_boundary_evolution.png` | Threshold and score separation over epochs |
 
 ---
 
@@ -147,6 +202,9 @@ data_vis.plot_anomaly_types()
 data_vis.plot_sample_types()
 data_vis.plot_feature_examples()
 data_vis.plot_dataset_statistics()
+data_vis.plot_anomaly_generation_rules()  # NEW
+data_vis.plot_feature_correlations()       # NEW
+data_vis.plot_experiment_settings()        # NEW
 data_vis.generate_all()  # Generate all
 ```
 
@@ -172,7 +230,7 @@ from scripts.visualize_all import ExperimentVisualizer
 import pandas as pd
 
 results_df = pd.read_csv('results/experiments/20260122/quick_search_results.csv')
-param_keys = ['masking_ratio', 'num_patches', 'margin', 'lambda_disc',
+param_keys = ['masking_ratio', 'masking_strategy', 'num_patches',
               'margin_type', 'force_mask_anomaly', 'patch_level_loss', 'patchify_mode']
 
 stage1_vis = ExperimentVisualizer(results_df, param_keys, output_dir='output/stage1')
@@ -204,6 +262,9 @@ stage2_vis.plot_quick_vs_full()
 stage2_vis.plot_selection_criterion_analysis()
 stage2_vis.plot_learning_curves(top_k=10)
 stage2_vis.plot_summary_dashboard()
+stage2_vis.plot_all_hyperparameters()          # NEW: Per-hyperparameter analysis
+stage2_vis.plot_hyperparameter_interactions()  # NEW: Interaction heatmaps
+stage2_vis.plot_best_config_summary()          # NEW: Best config summary
 stage2_vis.generate_all()  # Generate all
 ```
 
@@ -223,29 +284,68 @@ best_vis.plot_teacher_student_comparison()
 best_vis.plot_reconstruction_examples(num_examples=3)
 best_vis.plot_detection_examples()
 best_vis.plot_summary_statistics()
+best_vis.plot_pure_vs_disturbing_normal()
+best_vis.plot_discrepancy_trend()
+best_vis.plot_hypothesis_verification()   # NEW: Hypothesis verification
+# Qualitative case studies
+best_vis.plot_case_study_gallery()           # NEW: TP/TN/FP/FN gallery
+best_vis.plot_anomaly_type_case_studies()    # NEW: Per-anomaly-type
+best_vis.plot_feature_contribution_analysis() # NEW: Feature importance
+best_vis.plot_hardest_samples()              # NEW: Hardest samples
 best_vis.generate_all()  # Generate all
+```
+
+### TrainingProgressVisualizer
+
+```python
+from scripts.visualize_all import TrainingProgressVisualizer
+import json
+
+with open('results/experiments/20260122/best_config.json') as f:
+    best_config = json.load(f)
+
+progress_vis = TrainingProgressVisualizer(best_config, output_dir='output/training_progress')
+progress_vis.generate_all()  # Re-trains model and generates all plots
+
+# Individual plots (after retrain_with_checkpoints())
+progress_vis.plot_score_evolution()
+progress_vis.plot_sample_trajectories()
+progress_vis.plot_metrics_evolution()
+progress_vis.plot_late_bloomer_analysis()      # UPDATED: Per-epoch thresholds
+progress_vis.plot_late_bloomer_case_studies()  # NEW: Detailed case studies
+progress_vis.plot_anomaly_type_learning()
+progress_vis.plot_reconstruction_evolution()   # UPDATED: Includes student & discrepancy
+progress_vis.plot_decision_boundary_evolution()
 ```
 
 ---
 
 ## Stage 2 Selection Criteria
 
-Stage 2 selects 150 diverse candidates for full training:
+Stage 2 selects ~50-70 diverse candidates for full training using a 3-phase approach:
+
+**Phase 1**: Per-parameter top 5 (ensures coverage of all parameter values)
+**Phase 2**: Top 10 by overall ROC-AUC (excluding Phase 1 selections)
+**Phase 3**: Top 5 by disturbing ROC-AUC (excluding Phase 1, 2 selections)
 
 | Criterion | Count | Description |
 |-----------|-------|-------------|
-| overall_roc_auc | 30 | Top by overall ROC-AUC |
-| disturbing_roc_auc | 20 | Top by disturbing normal ROC-AUC |
-| force_mask_anomaly=True | 10 | Best with forced anomaly masking |
-| patch_level_loss=True | 10 | Best with patch-level loss |
-| margin_type=dynamic | 10 | Best with dynamic margin |
-| margin_type=softplus | 10 | Best with softplus margin |
-| margin_type=hinge | 10 | Best with hinge margin |
-| patchify_mode=cnn_first | 10 | Best with CNN-first patchify |
-| patchify_mode=patch_cnn | 10 | Best with patch-CNN patchify |
-| patchify_mode=linear | 10 | Best with linear patchify (MAE style) |
-| masking_strategy=patch | 10 | Best with patch masking strategy |
-| masking_strategy=feature_wise | 10 | Best with feature-wise masking strategy |
+| overall_roc_auc | 10 | Top by overall ROC-AUC (Phase 1 제외) |
+| disturbing_roc_auc | 5 | Top by disturbing normal ROC-AUC (Phase 1, 2 제외) |
+| force_mask_anomaly=True | 5 | Best with forced anomaly masking |
+| force_mask_anomaly=False | 5 | Best without forced anomaly masking |
+| patch_level_loss=True | 5 | Best with patch-level loss |
+| patch_level_loss=False | 5 | Best without patch-level loss |
+| margin_type=dynamic | 5 | Best with dynamic margin |
+| margin_type=softplus | 5 | Best with softplus margin |
+| margin_type=hinge | 5 | Best with hinge margin |
+| patchify_mode=cnn_first | 5 | Best with CNN-first patchify |
+| patchify_mode=patch_cnn | 5 | Best with patch-CNN patchify |
+| patchify_mode=linear | 5 | Best with linear patchify (MAE style) |
+| masking_strategy=patch | 5 | Best with patch masking strategy |
+| masking_strategy=feature_wise | 5 | Best with feature-wise masking strategy |
+| masking_ratio (각 값) | 5 | Best for each masking ratio value |
+| num_patches (각 값) | 5 | Best for each num_patches value |
 
 ---
 
@@ -259,8 +359,6 @@ Stage 2 selects 150 diverse candidates for full training:
 | masking_ratio | Masking ratio (0.4, 0.7) |
 | masking_strategy | Masking strategy (patch, feature_wise) |
 | num_patches | Number of patches (10, 25, 50) |
-| margin | Margin value (0.25, 0.5, 1.0) |
-| lambda_disc | Discrepancy loss weight (0.3, 0.5, 0.7) |
 | margin_type | Margin type (hinge, softplus, dynamic) |
 | force_mask_anomaly | Whether to force mask anomaly patches (True/False) |
 | patch_level_loss | Whether to use patch-level loss (True/False) |
@@ -271,6 +369,8 @@ Stage 2 selects 150 diverse candidates for full training:
 | recall | Recall |
 | disturbing_roc_auc | ROC-AUC on disturbing normal samples |
 | disturbing_f1 | F1 on disturbing normal samples |
+
+**Note**: `margin` and `lambda_disc` are fixed at 0.5 and not included in hyperparameter search.
 
 ### full_search_results.csv (Stage 2)
 
@@ -293,6 +393,7 @@ Consistent colors across all visualizations:
 | Element | Color |
 |---------|-------|
 | Normal samples | Blue (#3498DB) |
+| Disturbing normal | Orange (#F39C12) |
 | Anomaly samples | Red (#E74C3C) |
 | Teacher model | Green |
 | Student model | Red/Orange |

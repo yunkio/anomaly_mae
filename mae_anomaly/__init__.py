@@ -5,7 +5,13 @@ Self-Distilled Masked Autoencoder for Time Series Anomaly Detection
 """
 
 from .config import Config, set_seed
-from .dataset import MultivariateTimeSeriesDataset, ANOMALY_TYPE_NAMES, ANOMALY_TYPES
+from .dataset_sliding import (
+    SlidingWindowTimeSeriesGenerator,
+    SlidingWindowDataset,
+    FEATURE_NAMES,
+    ANOMALY_TYPE_NAMES as SLIDING_ANOMALY_TYPE_NAMES,
+    ANOMALY_TYPE_NAMES,
+)
 from .model import PositionalEncoding, SelfDistilledMAEMultivariate
 from .loss import SelfDistillationLoss
 from .trainer import Trainer
@@ -15,10 +21,12 @@ __all__ = [
     # Config
     'Config',
     'set_seed',
-    # Data
-    'MultivariateTimeSeriesDataset',
+    # Data (sliding window dataset)
+    'SlidingWindowTimeSeriesGenerator',
+    'SlidingWindowDataset',
+    'FEATURE_NAMES',
     'ANOMALY_TYPE_NAMES',
-    'ANOMALY_TYPES',
+    'SLIDING_ANOMALY_TYPE_NAMES',  # Alias for backwards compatibility
     # Model
     'PositionalEncoding',
     'SelfDistilledMAEMultivariate',

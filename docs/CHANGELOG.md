@@ -1,5 +1,433 @@
 # Changelog
 
+## 2026-01-23 (Update 6): Reduce Full Search Epochs
+
+### Changes
+
+- Changed `full_epochs` default from **3 to 2** for faster experimentation
+- Updated files:
+  - [scripts/run_experiments.py](../scripts/run_experiments.py): Function parameter and argparse default
+  - [README.md](../README.md): Experiment settings table
+  - [docs/ABLATION_STUDIES.md](ABLATION_STUDIES.md): Stage 2 description
+  - [docs/VISUALIZATIONS.md](VISUALIZATIONS.md): Settings table
+
+---
+
+## 2026-01-23 (Update 5): Threshold Fix and Hypothesis Verification
+
+### Changes
+
+#### 1. Disturbing Normal Evaluation Fix
+
+**Modified Files**:
+- [mae_anomaly/evaluator.py](../mae_anomaly/evaluator.py)
+
+**Problem**:
+- Disturbing normal evaluation was using a **separate threshold** calculated only from pure_normal and disturbing_normal samples
+- This was incorrect - should use the **global threshold** from the entire dataset
+
+**Fix**:
+- Now uses the global optimal threshold (calculated from all samples) for disturbing normal evaluation
+- ROC-AUC is threshold-free, so no change needed there
+- Precision/Recall/F1 now use the same threshold as overall evaluation
+
+**Before** (incorrect):
+```python
+d_fpr, d_tpr, d_thresholds = roc_curve(disturbing_labels, disturbing_scores)
+d_optimal_idx = np.argmax(d_tpr - d_fpr)
+d_threshold = d_thresholds[d_optimal_idx]  # Separate threshold!
+d_predictions = (disturbing_scores > d_threshold).astype(int)
+```
+
+**After** (correct):
+```python
+# Use GLOBAL threshold (from entire dataset)
+d_predictions = (disturbing_scores > threshold).astype(int)
+```
+
+---
+
+#### 2. Hypothesis Verification Visualization
+
+**Modified Files**:
+- [scripts/visualize_all.py](../scripts/visualize_all.py)
+- [docs/VISUALIZATIONS.md](../docs/VISUALIZATIONS.md)
+
+**New Visualization**: `hypothesis_verification.png`
+
+Verifies 4 hypotheses about why disturbing normal might outperform pure normal:
+
+1. **H1: Anomaly Hint** - Does anomaly in window increase score?
+   - Scatter plot of anomaly ratio vs total score
+
+2. **H2: Transition Effect** - Does recent anomaly affect last patch?
+   - Scatter plot of distance from anomaly to last patch vs score
+
+3. **H3: Variance Analysis** - Does pure normal have higher variance?
+   - Violin plot comparing score distributions
+
+4. **H4: Classification Rates** - How do FP/TP rates compare with global threshold?
+   - Bar chart of classification rates
+
+---
+
+#### 3. Quick Search Epoch Reduction
+
+**Modified Files**:
+- [scripts/run_experiments.py](../scripts/run_experiments.py)
+- [README.md](../README.md)
+- [docs/ABLATION_STUDIES.md](../docs/ABLATION_STUDIES.md)
+- [docs/VISUALIZATIONS.md](../docs/VISUALIZATIONS.md)
+
+**Changes**:
+- Stage 1 (Quick Search) epochs: 2 → **1**
+
+**Rationale**:
+- Single epoch sufficient for quick screening of 432 combinations
+- Significantly reduces experiment time while maintaining ranking quality
+
+**Updated Settings**:
+| Stage | Epochs |
+|-------|--------|
+| Stage 1 (Quick) | 1 |
+| Stage 2 (Full) | 3 |
+
+---
+
+## 2026-01-23 (Update 4): Estimated Time Display
+
+### Changes
+
+#### Time Estimation Feature
+
+**Modified Files**:
+- [scripts/run_experiments.py](../scripts/run_experiments.py)
+
+**Changes**:
+- Added time estimation based on first model training time
+- Displays estimated time for Quick Search, Full Search, and Total
+- Considers dataset size, epochs, and model count differences
+
+**Output Format**:
+```
+>>> Estimated Time (based on 1st model: X.Xs) <<<
+  Quick Search: XX분 (432 models × X.Xs)
+  Full Search:  XX분 (~60 models × X.Xs)
+  Total:        XX분
+  (Quick remaining: XX분)
+```
+
+**Calculation**:
+- Quick Search: `first_model_time × n_models`
+- Full Search: `first_model_time × (full_train/quick_train) × (full_epochs/quick_epochs) × n_stage2_models`
+  - `full_train/quick_train = 22,000/6,000 ≈ 3.67`
+  - `full_epochs/quick_epochs = 3/2 = 1.5`
+
+---
+
+## 2026-01-23 (Update 3): Stage 2 Selection Reduction and Epoch Fine-tuning
+
+### Changes
+
+#### 1. Quick Search Epoch Reduction
+
+**Changes**:
+- Stage 1 epochs: 5 → **3**
+
+**Rationale**:
+- Further speed up quick search screening
+- 3 epochs sufficient to identify promising configurations
+
+---
+
+#### 2. Stage 2 Selection Criteria Reduction
+
+**Modified Files**:
+- [scripts/run_experiments.py](../scripts/run_experiments.py)
+
+**Changes**:
+- Per-parameter top models: 10 → **5**
+- Overall ROC-AUC top models: 30 → **10**
+- Disturbing ROC-AUC top models: 20 → **5**
+- Expected Stage 2 models: ~150 → **~50-70** (after deduplication)
+
+**Rationale**:
+- Faster full training while maintaining diverse coverage
+- Still covers all parameter values with representative models
+
+---
+
+#### 3. Stage 2 Model Count Display
+
+**Changes**:
+- Added print statement showing Stage 2 model count during experiment execution
+- Format: `>>> Stage 2 will train {N} models (from {M} Stage 1 combinations) <<<`
+
+---
+
+## 2026-01-23 (Update 2): Two-Stage Dataset and Epoch Configuration
+
+### Changes
+
+#### 1. Separate Datasets for Quick/Full Search
+
+**Modified Files**:
+- [scripts/run_experiments.py](../scripts/run_experiments.py)
+
+**Changes**:
+- Stage 1 (Quick Search): 200,000 timesteps, train_ratio=0.3 → ~6,000 train, ~14,000 test
+- Stage 2 (Full Search): 2,200,000 timesteps, train_ratio=0.5 → ~110,000 train, ~110,000 test
+- Test set always uses target_counts 1200:300:500 (total 2,000)
+
+**Rationale**:
+- Quick search needs fast iteration (small train set)
+- Test set composition should be consistent across stages for fair comparison
+
+---
+
+#### 2. Epoch Count Reduction
+
+**Changes**:
+- Stage 1 epochs: 15 → **5**
+- Stage 2 epochs: 100 → **30**
+
+**Rationale**:
+- Faster experimentation while maintaining reasonable training quality
+- Quick search only needs to identify promising configurations
+
+---
+
+## 2026-01-23: Dataset Migration and Hyperparameter Grid Cleanup
+
+### Major Changes
+
+#### 1. Dataset Migration to SlidingWindowDataset
+
+**Modified Files**:
+- [mae_anomaly/dataset.py](../mae_anomaly/dataset.py) → Deprecated
+- [mae_anomaly/dataset_sliding.py](../mae_anomaly/dataset_sliding.py) → Primary dataset
+- [scripts/run_experiments.py](../scripts/run_experiments.py)
+- [scripts/visualize_all.py](../scripts/visualize_all.py)
+
+**Changes**:
+- Replaced `MultivariateTimeSeriesDataset` with `SlidingWindowTimeSeriesGenerator` and `SlidingWindowDataset`
+- New dataset features:
+  - Continuous sliding window extraction from long time series
+  - 8 correlated server metrics (CPU, Memory, DiskIO, Network, ResponseTime, ThreadCount, ErrorRate, QueueLength)
+  - 6 realistic anomaly types: spike, memory_leak, cpu_saturation, network_congestion, cascading_failure, resource_contention
+  - Three sample types: pure_normal, disturbing_normal, anomaly
+  - Train/test split by time (no data leakage)
+
+---
+
+#### 2. Fixed Hyperparameters (margin, lambda_disc)
+
+**Modified Files**:
+- [scripts/run_experiments.py](../scripts/run_experiments.py)
+- [scripts/visualize_all.py](../scripts/visualize_all.py)
+- [mae_anomaly/config.py](../mae_anomaly/config.py)
+
+**Changes**:
+- `margin` and `lambda_disc` are now fixed at 0.5 (not in hyperparameter grid)
+- Reduced hyperparameter search space from 2592 to 288 combinations
+- Grid now includes: `masking_ratio`, `masking_strategy`, `num_patches`, `margin_type`, `force_mask_anomaly`, `patch_level_loss`, `patchify_mode`
+
+**Rationale**:
+- Preliminary experiments showed margin=0.5 and lambda_disc=0.5 perform well across configurations
+- Reducing search space allows more thorough exploration of other hyperparameters
+
+---
+
+#### 3. Stage 2 Selection Criteria Update
+
+**Modified Files**:
+- [scripts/run_experiments.py](../scripts/run_experiments.py)
+
+**Changes**:
+- New selection criteria for Stage 2 (150 diverse candidates):
+  - Per-parameter top 10 (e.g., best for each masking_ratio value)
+  - Overall top 30 by ROC-AUC
+  - Top 20 by disturbing normal ROC-AUC
+- Added `masking_strategy` to selection criteria
+
+---
+
+#### 4. num_features Updated (5 → 8)
+
+**Modified Files**:
+- [mae_anomaly/config.py](../mae_anomaly/config.py)
+- [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)
+- [docs/DATASET.md](../docs/DATASET.md)
+
+**Changes**:
+- Default `num_features` changed from 5 to 8
+- All documentation diagrams updated to reflect (batch, 100, 8) dimensions
+
+---
+
+#### 5. Visualization Bug Fixes
+
+**Modified Files**:
+- [scripts/visualize_all.py](../scripts/visualize_all.py)
+
+**Fixes**:
+- Updated `param_keys` to remove `margin` and `lambda_disc`
+- Added `ANOMALY_TYPE_NAMES` import for visualization
+- Fixed `plot_loss_by_anomaly_type` subplot grid (2x3 → dynamic for 7 anomaly types)
+- Updated multiple places where margin/lambda_disc were referenced
+
+---
+
+### Documentation Updates
+
+- [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md): Updated num_features (5→8), all dimension examples
+- [docs/VISUALIZATIONS.md](../docs/VISUALIZATIONS.md): Updated param_keys, CSV columns, removed margin/lambda_disc
+- [docs/DATASET.md](../docs/DATASET.md): Complete documentation for SlidingWindowDataset
+- [docs/CHANGELOG.md](../docs/CHANGELOG.md): This entry
+
+---
+
+## 2026-01-22 (Update 3): Qualitative Case Studies and Late Bloomer Fix
+
+### Major Changes
+
+#### 1. Late Bloomer Algorithm Fix
+
+**Modified Files**:
+- [scripts/visualize_all.py](../scripts/visualize_all.py)
+
+**Issue Found**:
+- Late bloomer analysis used final epoch's threshold for all epochs
+- At epoch 0, the model hasn't learned, so all scores are similar
+- Using the final threshold at epoch 0 produces incorrect predictions
+
+**Fixes**:
+- Implemented per-epoch optimal threshold calculation
+- Late bloomers now correctly identified as samples that changed from incorrect to correct classification
+- Added two categories:
+  - **Late Bloomer Anomalies (FN→TP)**: Missed at start, detected at end
+  - **Late Bloomer Normals (FP→TN)**: False alarm at start, correct at end
+
+---
+
+#### 2. Reconstruction Evolution Enhancement
+
+**Modified Files**:
+- [scripts/visualize_all.py](../scripts/visualize_all.py)
+
+**Changes**:
+- Added Student reconstruction alongside Teacher (was Teacher-only)
+- Added discrepancy visualization (|Teacher - Student|)
+- Shows both reconstruction and discrepancy evolution over epochs
+- Key insight: Discrepancy should increase in masked anomaly regions as training progresses
+
+---
+
+#### 3. Qualitative Case Study Visualizations
+
+**New Files** (in `best_model/`):
+- `case_study_gallery.png`: Representative TP/TN/FP/FN examples with detailed analysis
+- `anomaly_type_case_studies.png`: Per-anomaly-type TP vs FN comparison
+- `feature_contribution_analysis.png`: Which features drive anomaly detection
+- `hardest_samples.png`: Analysis of hardest-to-detect samples (lowest margin FN/FP)
+
+**New Files** (in `training_progress/`):
+- `late_bloomer_case_studies.png`: Detailed time series evolution for late bloomers
+
+**New Methods**:
+- `BestModelVisualizer.plot_case_study_gallery()`: Median examples for each outcome
+- `BestModelVisualizer.plot_anomaly_type_case_studies()`: Per-type TP/FN comparison
+- `BestModelVisualizer.plot_feature_contribution_analysis()`: Feature importance ranking
+- `BestModelVisualizer.plot_hardest_samples()`: Hardest FN and FP analysis
+- `TrainingProgressVisualizer.plot_late_bloomer_case_studies()`: Detailed late bloomer evolution
+
+---
+
+### Documentation Updates
+
+- [docs/VISUALIZATIONS.md](../docs/VISUALIZATIONS.md): Added new visualizations and updated descriptions
+- [docs/CHANGELOG.md](../docs/CHANGELOG.md): This changelog entry
+
+---
+
+## 2026-01-22 (Update 2): Visualization Enhancements and Consistency Fixes
+
+### Major Changes
+
+#### 1. Visualization Data Consistency Fix
+
+**Modified Files**:
+- [scripts/visualize_all.py](../scripts/visualize_all.py)
+
+**Issue Found**:
+- `visualize_all.py` used different evaluation settings than `run_experiments.py`:
+  - `anomaly_ratio=0.3` instead of `config.test_anomaly_ratio=0.25`
+  - Random masking instead of fixed last-patch masking
+  - MAE (absolute error) instead of MSE (squared error)
+
+**Fixes**:
+- Changed `anomaly_ratio` to use `config.test_anomaly_ratio` (0.25)
+- Changed `collect_predictions()` and `collect_detailed_data()` to use same evaluation as `evaluator.py`:
+  - Fixed mask: `mask[:, -config.mask_last_n:] = 0`
+  - Forward with `masking_ratio=0.0` and explicit mask
+  - MSE computation: `((output - input) ** 2).mean(dim=2)`
+
+---
+
+#### 2. New Data Visualizations
+
+**New Files**:
+- `data/anomaly_generation_rules.png`: Detailed rules for each anomaly type
+- `data/feature_correlations.png`: Feature correlation matrix and generation rules
+- `data/experiment_settings.png`: Experiment settings summary (Stage 1/2)
+
+**Changes**:
+- Added `plot_anomaly_generation_rules()`: Shows how each anomaly type is generated
+- Added `plot_feature_correlations()`: Shows inter-feature correlations
+- Added `plot_experiment_settings()`: Summarizes experiment settings for reproducibility
+
+---
+
+#### 3. Stage 2 Per-Hyperparameter Visualizations
+
+**New Files** (in `stage2/`):
+- `hyperparam_masking_ratio.png`
+- `hyperparam_num_patches.png`
+- `hyperparam_margin.png`
+- `hyperparam_lambda_disc.png`
+- `hyperparam_margin_type.png`
+- `hyperparam_force_mask_anomaly.png`
+- `hyperparam_patch_level_loss.png`
+- `hyperparam_patchify_mode.png`
+- `hyperparameter_interactions.png`
+- `best_config_summary.png`
+
+**Changes**:
+- Added `plot_hyperparameter_impact()`: Per-hyperparameter detailed analysis
+- Added `plot_all_hyperparameters()`: Generate all per-hyperparameter plots
+- Added `plot_hyperparameter_interactions()`: Interaction heatmaps
+- Added `plot_best_config_summary()`: Best config with Korean descriptions
+
+---
+
+#### 4. Best Model Analysis Improvements
+
+**New Files**:
+- `best_model/pure_vs_disturbing_normal.png`: Pure Normal vs Disturbing Normal comparison
+- `best_model/discrepancy_trend.png`: Discrepancy trend analysis across time steps
+
+**Changes**:
+- Added `plot_pure_vs_disturbing_normal()`: Detailed comparison of sample types
+- Added `plot_discrepancy_trend()`: Time-step level discrepancy analysis
+
+---
+
+### Documentation Updates
+
+- [docs/VISUALIZATIONS.md](../docs/VISUALIZATIONS.md): Complete rewrite with all new visualizations
+
+---
+
 ## 2026-01-22: Project Cleanup and Patchify Mode
 
 ### Major Changes

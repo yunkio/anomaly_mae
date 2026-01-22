@@ -46,8 +46,11 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 
-from mae_anomaly import Config, MultivariateTimeSeriesDataset, SelfDistilledMAEMultivariate, set_seed
-from mae_anomaly.dataset import ANOMALY_TYPE_NAMES
+from mae_anomaly import (
+    Config, SelfDistilledMAEMultivariate, set_seed,
+    SlidingWindowTimeSeriesGenerator, SlidingWindowDataset,
+    SLIDING_ANOMALY_TYPE_NAMES, ANOMALY_TYPE_NAMES
+)
 
 
 # =============================================================================
@@ -141,8 +144,11 @@ def load_experiment_data(experiment_dir: str) -> Dict:
     return data
 
 
-def load_best_model(model_path: str, num_test: int = 500) -> Tuple:
-    """Load saved best model and create test dataloader"""
+def load_best_model(model_path: str, num_test: int = 2000) -> Tuple:
+    """Load saved best model and create test dataloader
+
+    Uses SlidingWindowDataset for consistency with run_experiments.py
+    """
     print(f"Loading model from: {model_path}")
 
     checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
@@ -166,22 +172,47 @@ def load_best_model(model_path: str, num_test: int = 500) -> Tuple:
           f"margin_type={getattr(config, 'margin_type', 'hinge')}")
     print(f"  Metrics: ROC-AUC={metrics.get('roc_auc', 0):.4f}, F1={metrics.get('f1_score', 0):.4f}")
 
-    # Create test dataset
+    # Generate sliding window dataset
     set_seed(config.random_seed)
-    test_dataset = MultivariateTimeSeriesDataset(
-        num_samples=num_test,
-        seq_length=config.seq_length,
+    generator = SlidingWindowTimeSeriesGenerator(
+        total_length=config.sliding_window_total_length,
         num_features=config.num_features,
-        anomaly_ratio=0.3,
-        seed=43
+        interval_scale=config.anomaly_interval_scale,
+        seed=config.random_seed
+    )
+    signals, point_labels, anomaly_regions = generator.generate()
+
+    # Create test dataset
+    test_dataset = SlidingWindowDataset(
+        signals=signals,
+        point_labels=point_labels,
+        anomaly_regions=anomaly_regions,
+        window_size=config.seq_length,
+        stride=config.sliding_window_stride,
+        mask_last_n=config.mask_last_n,
+        split='test',
+        train_ratio=0.5,
+        target_counts={
+            'pure_normal': config.test_target_pure_normal,
+            'disturbing_normal': config.test_target_disturbing_normal,
+            'anomaly': config.test_target_anomaly
+        },
+        seed=config.random_seed
     )
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
+
+    print(f"  Test dataset: {len(test_dataset)} samples")
 
     return model, config, test_loader, metrics
 
 
 def collect_predictions(model, dataloader, config) -> Dict:
-    """Collect model predictions and scores"""
+    """Collect model predictions and scores
+
+    Uses the same evaluation method as evaluator.py:
+    - Mask only last mask_last_n positions (not random masking)
+    - Use MSE (squared error) for consistency with training
+    """
     model.eval()
     device = config.device
 
@@ -195,18 +226,23 @@ def collect_predictions(model, dataloader, config) -> Dict:
         for batch in tqdm(dataloader, desc="Collecting predictions"):
             sequences, last_patch_labels, point_labels, sample_types, _ = batch
             sequences = sequences.to(device)
+            batch_size, seq_length, num_features = sequences.shape
 
-            teacher_output, student_output, mask = model(sequences)
+            # Create mask for last n positions (same as evaluator.py)
+            mask = torch.ones(batch_size, seq_length, device=device)
+            mask[:, -config.mask_last_n:] = 0
 
-            # Compute errors
-            mask_inverse = 1 - mask
-            teacher_error = torch.abs(teacher_output - sequences).mean(dim=-1)
-            student_error = torch.abs(student_output - sequences).mean(dim=-1)
-            discrepancy = torch.abs(teacher_error - student_error)
+            # Forward pass with fixed mask (masking_ratio=0.0 means use provided mask)
+            teacher_output, student_output, _ = model(sequences, masking_ratio=0.0, mask=mask)
 
-            # Masked region scores
-            recon = (teacher_error * mask_inverse).sum(dim=1) / (mask_inverse.sum(dim=1) + 1e-8)
-            disc = (discrepancy * mask_inverse).sum(dim=1) / (mask_inverse.sum(dim=1) + 1e-8)
+            # Compute errors using MSE (same as evaluator.py)
+            recon_error = ((teacher_output - sequences) ** 2).mean(dim=2)
+            discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)
+
+            # Compute scores on masked positions only
+            masked_positions = (mask == 0)
+            recon = (recon_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
+            disc = (discrepancy * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
             scores = recon + config.lambda_disc * disc
 
             all_scores.append(scores.cpu().numpy())
@@ -225,7 +261,12 @@ def collect_predictions(model, dataloader, config) -> Dict:
 
 
 def collect_detailed_data(model, dataloader, config) -> Dict:
-    """Collect detailed data for analysis"""
+    """Collect detailed data for analysis
+
+    Uses the same evaluation method as evaluator.py:
+    - Mask only last mask_last_n positions (not random masking)
+    - Use MSE (squared error) for consistency with training
+    """
     model.eval()
     device = config.device
 
@@ -244,12 +285,19 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
         for batch in tqdm(dataloader, desc="Collecting detailed data"):
             sequences, last_patch_labels, point_labels, sample_types, _ = batch
             sequences = sequences.to(device)
+            batch_size, seq_length, num_features = sequences.shape
 
-            teacher_output, student_output, mask = model(sequences)
+            # Create mask for last n positions (same as evaluator.py)
+            mask = torch.ones(batch_size, seq_length, device=device)
+            mask[:, -config.mask_last_n:] = 0
 
-            teacher_error = torch.abs(teacher_output - sequences).mean(dim=-1)
-            student_error = torch.abs(student_output - sequences).mean(dim=-1)
-            discrepancy = torch.abs(teacher_error - student_error)
+            # Forward pass with fixed mask
+            teacher_output, student_output, _ = model(sequences, masking_ratio=0.0, mask=mask)
+
+            # Compute errors using MSE (same as evaluator.py)
+            teacher_error = ((teacher_output - sequences) ** 2).mean(dim=-1)
+            student_error = ((student_output - sequences) ** 2).mean(dim=-1)
+            discrepancy = ((teacher_output - student_output) ** 2).mean(dim=-1)
 
             all_teacher_errors.append(teacher_error.cpu().numpy())
             all_student_errors.append(student_error.cpu().numpy())
@@ -370,27 +418,38 @@ class DataVisualizer:
 
     def plot_sample_types(self):
         """Visualize different sample types (normal, disturbing normal, anomaly)"""
-        # Create sample dataset
+        # Create sample dataset using sliding window
         set_seed(42)
-        dataset = MultivariateTimeSeriesDataset(
-            num_samples=200,
-            seq_length=self.config.seq_length,
+        generator = SlidingWindowTimeSeriesGenerator(
+            total_length=50000,  # Small dataset for visualization
             num_features=1,
-            anomaly_ratio=0.3,
+            interval_scale=1.5,
+            seed=42
+        )
+        signals, point_labels, anomaly_regions = generator.generate()
+        dataset = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=self.config.seq_length,
+            stride=10,
+            mask_last_n=10,
+            split='test',
+            train_ratio=0.5,
             seed=42
         )
 
-        # Collect samples by type
+        # Collect samples by type (with point labels for disturbing normal)
         normal_samples = []
-        disturbing_samples = []
+        disturbing_samples = []  # (seq, point_labels)
         anomaly_samples = []
 
         for i in range(len(dataset)):
-            seq, label, _, sample_type, _ = dataset[i]
+            seq, label, point_labels, sample_type, _ = dataset[i]
             if sample_type == 0:  # pure normal
                 normal_samples.append(seq[:, 0].numpy())
             elif sample_type == 1:  # disturbing normal
-                disturbing_samples.append(seq[:, 0].numpy())
+                disturbing_samples.append((seq[:, 0].numpy(), point_labels.numpy()))
             else:  # anomaly
                 anomaly_samples.append(seq[:, 0].numpy())
 
@@ -410,11 +469,20 @@ class DataVisualizer:
         ax.axvspan(x[-10], x[-1], alpha=0.2, color='yellow', label='Last Patch')
         ax.legend(fontsize=8)
 
-        # Disturbing normal samples
+        # Disturbing normal samples - show anomaly regions
         ax = axes[1]
-        for i, seq in enumerate(disturbing_samples[:5]):
-            ax.plot(x, seq, alpha=0.7, label=f'Sample {i+1}')
-        ax.set_title('Disturbing Normal Samples\n(Anomaly pattern, but last patch normal)',
+        for i, (seq, point_labels) in enumerate(disturbing_samples[:5]):
+            line, = ax.plot(x, seq, alpha=0.7, label=f'Sample {i+1}')
+            # Find and highlight anomaly regions in this sample
+            anomaly_mask = point_labels > 0
+            if anomaly_mask.any():
+                # Find contiguous anomaly regions
+                diff = np.diff(np.concatenate([[0], anomaly_mask.astype(int), [0]]))
+                starts = np.where(diff == 1)[0]
+                ends = np.where(diff == -1)[0]
+                for start, end in zip(starts, ends):
+                    ax.axvspan(start, end - 1, alpha=0.15, color=line.get_color())
+        ax.set_title('Disturbing Normal Samples\n(Anomaly in window, but last patch normal)',
                      fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Value')
@@ -440,11 +508,22 @@ class DataVisualizer:
     def plot_feature_examples(self):
         """Visualize multivariate feature examples"""
         set_seed(42)
-        dataset = MultivariateTimeSeriesDataset(
-            num_samples=10,
-            seq_length=self.config.seq_length,
+        generator = SlidingWindowTimeSeriesGenerator(
+            total_length=50000,
             num_features=self.config.num_features,
-            anomaly_ratio=0.3,
+            interval_scale=1.5,
+            seed=42
+        )
+        signals, point_labels, anomaly_regions = generator.generate()
+        dataset = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=self.config.seq_length,
+            stride=10,
+            mask_last_n=10,
+            split='test',
+            train_ratio=0.5,
             seed=42
         )
 
@@ -491,11 +570,23 @@ class DataVisualizer:
     def plot_dataset_statistics(self):
         """Visualize dataset statistics"""
         set_seed(42)
-        dataset = MultivariateTimeSeriesDataset(
-            num_samples=1000,
-            seq_length=self.config.seq_length,
+        generator = SlidingWindowTimeSeriesGenerator(
+            total_length=200000,  # Larger for better statistics
             num_features=self.config.num_features,
-            anomaly_ratio=0.3,
+            interval_scale=1.5,
+            seed=42
+        )
+        signals, point_labels, anomaly_regions = generator.generate()
+        dataset = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=self.config.seq_length,
+            stride=10,
+            mask_last_n=10,
+            split='test',
+            train_ratio=0.5,
+            target_counts={'pure_normal': 600, 'disturbing_normal': 150, 'anomaly': 250},
             seed=42
         )
 
@@ -546,6 +637,262 @@ class DataVisualizer:
         plt.close()
         print("  - dataset_statistics.png")
 
+    def plot_anomaly_generation_rules(self):
+        """Visualize the rules for generating each anomaly type"""
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        np.random.seed(42)
+
+        seq_length = self.config.seq_length
+        t = np.arange(seq_length)
+        mask_last_n = getattr(self.config, 'mask_last_n', 5)
+
+        # Base normal signal
+        base_signal = 0.5 + 0.3 * np.sin(t * 0.1) + 0.05 * np.random.randn(seq_length)
+
+        anomaly_info = [
+            ('Spike (DDoS Attack)', 'spike',
+             'CPU + Network + ResponseTime spike\nWidth: 3-10 timesteps\nIntensity: +0.3~0.5',
+             lambda s: self._add_spike(s.copy(), seq_length, mask_last_n)),
+            ('Memory Leak', 'memory_leak',
+             'Memory gradual increase\nDisk I/O increases (swapping)\nContinues to end',
+             lambda s: self._add_memory_leak(s.copy(), seq_length)),
+            ('Noise Burst', 'noise',
+             'All features: random noise\nNoise std: 0.2\nLength: 20-40 timesteps',
+             lambda s: self._add_noise(s.copy(), seq_length, mask_last_n)),
+            ('Drift', 'drift',
+             'CPU + ResponseTime gradual increase\nLinear drift: +0.2~0.4\nLength: 30-50 timesteps',
+             lambda s: self._add_drift(s.copy(), seq_length, mask_last_n)),
+            ('Network Congestion', 'network_congestion',
+             'Network + ResponseTime spike\nPersists to end\nIntensity: +0.3~0.5',
+             lambda s: self._add_network_congestion(s.copy(), seq_length)),
+            ('Disturbing Normal', 'disturbing',
+             'Anomaly OUTSIDE last patch\nLast patch remains normal\nTests model robustness',
+             lambda s: self._add_disturbing(s.copy(), seq_length, mask_last_n))
+        ]
+
+        for idx, (title, atype, description, func) in enumerate(anomaly_info):
+            ax = axes[idx // 3, idx % 3]
+
+            # Generate anomaly signal and get anomaly region
+            signal, anomaly_start, anomaly_end = func(base_signal.copy())
+
+            # Plot
+            ax.plot(t, base_signal, 'b-', alpha=0.3, lw=1, label='Original')
+            ax.plot(t, signal, 'r-', lw=2, label='With Anomaly')
+
+            # Highlight last patch
+            ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.2, color='yellow',
+                      label=f'Last Patch (n={mask_last_n})')
+
+            # Highlight anomaly region
+            if anomaly_start is not None:
+                ax.axvspan(anomaly_start, anomaly_end, alpha=0.3, color='red', label='Anomaly Region')
+
+            ax.set_title(title, fontsize=12, fontweight='bold')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Value')
+            ax.legend(fontsize=8, loc='upper left')
+
+            # Add description box
+            ax.text(0.98, 0.02, description, transform=ax.transAxes, fontsize=8,
+                   verticalalignment='bottom', horizontalalignment='right',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        plt.suptitle('Anomaly Generation Rules\n(All anomalies must overlap with last patch except Disturbing Normal)',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'anomaly_generation_rules.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - anomaly_generation_rules.png")
+
+    def _add_spike(self, signal, seq_length, mask_last_n):
+        """Add spike anomaly"""
+        spike_width = 7
+        spike_pos = seq_length - mask_last_n - spike_width // 2
+        signal[spike_pos:spike_pos + spike_width] += 0.4
+        return signal, spike_pos, spike_pos + spike_width
+
+    def _add_memory_leak(self, signal, seq_length):
+        """Add memory leak anomaly"""
+        start_pos = seq_length // 3
+        leak = np.linspace(0, 0.4, seq_length - start_pos)
+        signal[start_pos:] += leak
+        return signal, start_pos, seq_length
+
+    def _add_noise(self, signal, seq_length, mask_last_n):
+        """Add noise anomaly"""
+        noise_length = 25
+        noise_start = max(0, seq_length - mask_last_n - noise_length // 2)
+        actual_end = min(noise_start + noise_length, seq_length)
+        actual_length = actual_end - noise_start
+        signal[noise_start:actual_end] += np.random.normal(0, 0.2, actual_length)
+        return signal, noise_start, actual_end
+
+    def _add_drift(self, signal, seq_length, mask_last_n):
+        """Add drift anomaly"""
+        drift_length = 40
+        drift_start = max(0, seq_length - mask_last_n - drift_length // 2)
+        actual_end = min(drift_start + drift_length, seq_length)
+        actual_length = actual_end - drift_start
+        drift = np.linspace(0, 0.3, actual_length)
+        signal[drift_start:actual_end] += drift
+        return signal, drift_start, actual_end
+
+    def _add_network_congestion(self, signal, seq_length):
+        """Add network congestion anomaly"""
+        change_point = seq_length // 2
+        signal[change_point:] += 0.35
+        return signal, change_point, seq_length
+
+    def _add_disturbing(self, signal, seq_length, mask_last_n):
+        """Add disturbing normal (anomaly outside last patch)"""
+        spike_width = 7
+        spike_pos = seq_length // 3
+        signal[spike_pos:spike_pos + spike_width] += 0.4
+        return signal, spike_pos, spike_pos + spike_width
+
+    def plot_feature_correlations(self):
+        """Visualize correlations between features"""
+        set_seed(42)
+        generator = SlidingWindowTimeSeriesGenerator(
+            total_length=100000,
+            num_features=self.config.num_features,
+            interval_scale=1.5,
+            seed=42
+        )
+        signals, point_labels, anomaly_regions = generator.generate()
+        dataset = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=self.config.seq_length,
+            stride=10,
+            mask_last_n=10,
+            split='test',
+            train_ratio=0.5,
+            seed=42
+        )
+
+        # Collect all data
+        all_data = []
+        for i in range(len(dataset)):
+            seq, _, _, _, _ = dataset[i]
+            all_data.append(seq.numpy())
+        all_data = np.array(all_data)  # (N, T, F)
+
+        # Flatten to (N*T, F) for correlation
+        flat_data = all_data.reshape(-1, self.config.num_features)
+
+        feature_names = ['CPU', 'Memory', 'DiskIO', 'Network', 'ResponseTime'][:self.config.num_features]
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+        # 1. Correlation matrix
+        ax = axes[0]
+        corr_matrix = np.corrcoef(flat_data.T)
+        sns.heatmap(corr_matrix, annot=True, fmt='.3f', cmap='RdYlBu_r', ax=ax,
+                   xticklabels=feature_names, yticklabels=feature_names,
+                   vmin=-1, vmax=1, center=0)
+        ax.set_title('Feature Correlation Matrix', fontsize=12, fontweight='bold')
+
+        # 2. Pairwise scatter (CPU vs Memory)
+        ax = axes[1]
+        sample_idx = np.random.choice(len(flat_data), min(5000, len(flat_data)), replace=False)
+        ax.scatter(flat_data[sample_idx, 0], flat_data[sample_idx, 1], alpha=0.3, s=5)
+        ax.set_xlabel('CPU')
+        ax.set_ylabel('Memory')
+        ax.set_title(f'CPU vs Memory (corr={corr_matrix[0, 1]:.3f})', fontsize=12, fontweight='bold')
+
+        # 3. Feature description
+        ax = axes[2]
+        ax.axis('off')
+
+        desc_text = """
+Feature Generation Rules (Server Monitoring Simulation)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CPU (Feature 0):
+  • Base pattern: sinusoidal + noise
+  • Formula: base + amp * sin(freq * t) + noise(0, 0.05)
+
+Memory (Feature 1):
+  • Correlated with CPU (slower variation)
+  • Formula: base + 0.3 * CPU + 0.2 * sin(0.5 * freq * t) + noise
+
+DiskIO (Feature 2):
+  • Correlated with Memory (spiky, Poisson spikes)
+  • Formula: base + 0.2 * Memory + poisson_spikes + noise
+
+Network (Feature 3):
+  • Bursty traffic pattern
+  • Formula: amp * |sin(freq * t)| + noise
+
+ResponseTime (Feature 4):
+  • Correlated with CPU and Network
+  • Formula: base + 0.3 * CPU + 0.2 * Network + noise
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        """
+        ax.text(0.05, 0.95, desc_text, transform=ax.transAxes, fontsize=10,
+               verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+
+        plt.suptitle('Feature Correlations and Generation Rules', fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'feature_correlations.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - feature_correlations.png")
+
+    def plot_experiment_settings(self):
+        """Visualize experiment settings for reproducibility"""
+        fig, ax = plt.subplots(figsize=(12, 10))
+        ax.axis('off')
+
+        settings_text = f"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                         EXPERIMENT SETTINGS                                   ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  Data Configuration                                                           ║
+║    • Sequence Length: {self.config.seq_length:<10}                                            ║
+║    • Number of Features: {self.config.num_features:<7}                                            ║
+║    • Train Anomaly Ratio: {self.config.train_anomaly_ratio:<6}                                          ║
+║    • Test Anomaly Ratio: {self.config.test_anomaly_ratio:<7}                                          ║
+║    • Disturbing Ratio: 0.2 (20% of normal samples)                            ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  Stage 1 (Quick Search)                                                       ║
+║    • Epochs: 15                                                               ║
+║    • Train Samples: 1000                                                      ║
+║    • Test Samples: 400                                                        ║
+║    • Purpose: Rapid hyperparameter screening                                  ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  Stage 2 (Full Training)                                                      ║
+║    • Epochs: 100                                                              ║
+║    • Train Samples: 2000                                                      ║
+║    • Test Samples: 500                                                        ║
+║    • Top-k from Stage 1: 150                                                  ║
+║    • Purpose: Full training of promising configurations                       ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  Random Seeds                                                                 ║
+║    • Train Dataset: seed=42                                                   ║
+║    • Test Dataset: seed=43                                                    ║
+║    • Ensures identical data across all experiments                            ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  Model Configuration                                                          ║
+║    • Batch Size: {self.config.batch_size:<11}                                             ║
+║    • Learning Rate: {self.config.learning_rate:<8}                                             ║
+║    • Model Dimension (d_model): {self.config.d_model:<5}                                        ║
+║    • Encoder Layers: {self.config.num_encoder_layers:<7}                                             ║
+║    • Attention Heads (nhead): {self.config.nhead:<6}                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+        """
+
+        ax.text(0.05, 0.95, settings_text, transform=ax.transAxes, fontsize=10,
+               verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightcyan', alpha=0.5))
+
+        plt.savefig(os.path.join(self.output_dir, 'experiment_settings.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - experiment_settings.png")
+
     def generate_all(self):
         """Generate all data visualizations"""
         print("\n  Generating Data Visualizations...")
@@ -553,6 +900,9 @@ class DataVisualizer:
         self.plot_sample_types()
         self.plot_feature_examples()
         self.plot_dataset_statistics()
+        self.plot_anomaly_generation_rules()
+        self.plot_feature_correlations()
+        self.plot_experiment_settings()
 
 
 # =============================================================================
@@ -1595,6 +1945,219 @@ class Stage2Visualizer:
         plt.close()
         print("  - stage2_summary_dashboard.png")
 
+    def plot_hyperparameter_impact(self, param: str, metric: str = 'roc_auc'):
+        """Plot detailed impact of a single hyperparameter on Stage 2 results
+
+        Args:
+            param: Hyperparameter name
+            metric: Metric to analyze
+        """
+        if param not in self.full_df.columns:
+            print(f"  ! Skipping {param} impact (column not found)")
+            return
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+
+        groups = self.full_df.groupby(param)
+
+        # 1. Box plot of final ROC-AUC
+        ax = axes[0, 0]
+        group_data = {str(k): v[metric].values for k, v in groups}
+        bp = ax.boxplot(group_data.values(), labels=group_data.keys(), patch_artist=True)
+        colors = plt.cm.Set2(np.linspace(0, 1, len(group_data)))
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+        ax.set_xlabel(param)
+        ax.set_ylabel(metric)
+        ax.set_title(f'{param} vs {metric.upper()} (Full Training)', fontweight='bold')
+        ax.tick_params(axis='x', rotation=45)
+
+        # 2. Mean + Std comparison
+        ax = axes[0, 1]
+        means = groups[metric].mean()
+        stds = groups[metric].std()
+        x = np.arange(len(means))
+        bars = ax.bar(x, means, yerr=stds, capsize=5, color=colors, alpha=0.8, edgecolor='black')
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(k) for k in means.index], rotation=45, ha='right')
+        ax.set_xlabel(param)
+        ax.set_ylabel(f'Mean {metric}')
+        ax.set_title(f'{param} Mean ± Std', fontweight='bold')
+
+        # Add value labels
+        for bar, mean, std in zip(bars, means, stds):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 0.005,
+                   f'{mean:.4f}', ha='center', va='bottom', fontsize=8)
+
+        # 3. Improvement analysis (Quick -> Full)
+        ax = axes[1, 0]
+        improvements = self.full_df.groupby(param).apply(
+            lambda x: (x['roc_auc'] - x['quick_roc_auc']).mean()
+        )
+        colors_imp = ['#27AE60' if imp > 0 else '#E74C3C' for imp in improvements]
+        bars = ax.bar(range(len(improvements)), improvements, color=colors_imp, alpha=0.8, edgecolor='black')
+        ax.set_xticks(range(len(improvements)))
+        ax.set_xticklabels([str(k) for k in improvements.index], rotation=45, ha='right')
+        ax.axhline(y=0, color='black', linestyle='-', lw=1)
+        ax.set_xlabel(param)
+        ax.set_ylabel('Mean Improvement')
+        ax.set_title(f'{param} Mean Improvement (Quick → Full)', fontweight='bold')
+
+        for bar, imp in zip(bars, improvements):
+            y_pos = bar.get_height() + 0.002 if imp >= 0 else bar.get_height() - 0.01
+            ax.text(bar.get_x() + bar.get_width()/2, y_pos,
+                   f'{imp:+.4f}', ha='center', va='bottom' if imp >= 0 else 'top', fontsize=8)
+
+        # 4. Statistics table
+        ax = axes[1, 1]
+        ax.axis('off')
+
+        table_data = []
+        for param_val in means.index:
+            param_data = self.full_df[self.full_df[param] == param_val]
+            table_data.append([
+                str(param_val),
+                f"{param_data[metric].mean():.4f}",
+                f"{param_data[metric].std():.4f}",
+                f"{param_data[metric].max():.4f}",
+                f"{param_data[metric].min():.4f}",
+                f"{len(param_data)}"
+            ])
+
+        table = ax.table(
+            cellText=table_data,
+            colLabels=[param, 'Mean', 'Std', 'Max', 'Min', 'Count'],
+            loc='center',
+            cellLoc='center'
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1.2, 1.8)
+        ax.set_title(f'{param} Statistics', fontweight='bold', y=0.95)
+
+        plt.suptitle(f'Hyperparameter Impact: {param}', fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+
+        # Save to hyperparameter-specific file
+        plt.savefig(os.path.join(self.output_dir, f'hyperparam_{param}.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  - hyperparam_{param}.png")
+
+    def plot_all_hyperparameters(self):
+        """Generate separate visualization for each hyperparameter"""
+        # margin and lambda_disc are fixed, not in grid search
+        hyperparams = [
+            'masking_ratio', 'masking_strategy', 'num_patches',
+            'margin_type', 'force_mask_anomaly', 'patch_level_loss', 'patchify_mode'
+        ]
+
+        for param in hyperparams:
+            if param in self.full_df.columns:
+                self.plot_hyperparameter_impact(param)
+
+    def plot_hyperparameter_interactions(self):
+        """Plot interactions between key hyperparameters"""
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+        # Key interactions to visualize (margin and lambda_disc are fixed)
+        interactions = [
+            ('masking_ratio', 'num_patches'),
+            ('masking_strategy', 'patchify_mode'),
+            ('margin_type', 'patchify_mode'),
+            ('masking_ratio', 'masking_strategy'),
+            ('num_patches', 'patchify_mode'),
+            ('patchify_mode', 'patch_level_loss')
+        ]
+
+        for idx, (param1, param2) in enumerate(interactions):
+            ax = axes[idx // 3, idx % 3]
+
+            if param1 not in self.full_df.columns or param2 not in self.full_df.columns:
+                ax.text(0.5, 0.5, f'{param1} or {param2} not found',
+                       ha='center', va='center', transform=ax.transAxes)
+                ax.set_title(f'{param1} × {param2}', fontweight='bold')
+                continue
+
+            # Create pivot table
+            try:
+                pivot = self.full_df.pivot_table(
+                    values='roc_auc', index=param1, columns=param2, aggfunc='mean'
+                )
+                sns.heatmap(pivot, annot=True, fmt='.3f', cmap='RdYlGn', ax=ax, cbar_kws={'label': 'ROC-AUC'})
+                ax.set_title(f'{param1} × {param2}', fontweight='bold')
+            except Exception as e:
+                ax.text(0.5, 0.5, f'Cannot create heatmap:\n{str(e)[:30]}',
+                       ha='center', va='center', transform=ax.transAxes)
+                ax.set_title(f'{param1} × {param2}', fontweight='bold')
+
+        plt.suptitle('Hyperparameter Interactions (Stage 2 ROC-AUC)', fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'hyperparameter_interactions.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - hyperparameter_interactions.png")
+
+    def plot_best_config_summary(self):
+        """Visualize the best configuration details"""
+        best_row = self.full_df.loc[self.full_df['roc_auc'].idxmax()]
+
+        fig, ax = plt.subplots(figsize=(14, 10))
+        ax.axis('off')
+
+        # margin=0.5, lambda_disc=0.5 are fixed
+        hyperparams = [
+            ('masking_ratio', '마스킹 비율', '마스킹할 패치의 비율'),
+            ('masking_strategy', '마스킹 전략', 'patch 또는 feature_wise'),
+            ('num_patches', '패치 수', '시퀀스를 나눌 패치 개수'),
+            ('margin_type', '마진 타입', 'Loss 계산 방식'),
+            ('force_mask_anomaly', '이상 강제 마스킹', '이상 영역 마스킹 여부'),
+            ('patch_level_loss', '패치 레벨 Loss', '패치 단위 Loss 계산'),
+            ('patchify_mode', '패치화 모드', 'CNN/Linear 패치 임베딩'),
+            ('mask_last_n', '마지막 N 마스킹', '마지막 N 타임스텝 마스킹'),
+        ]
+
+        # Build summary text
+        summary_lines = [
+            "╔══════════════════════════════════════════════════════════════════════════════╗",
+            "║                        BEST MODEL CONFIGURATION                              ║",
+            "╠══════════════════════════════════════════════════════════════════════════════╣",
+        ]
+
+        for param, name, desc in hyperparams:
+            if param in best_row.index:
+                value = best_row[param]
+                if isinstance(value, float):
+                    value_str = f"{value:.4f}" if value < 1 else f"{value:.2f}"
+                else:
+                    value_str = str(value)
+                line = f"║  {name:<20} = {value_str:<12} ({desc})"
+                summary_lines.append(f"{line:<78}║")
+
+        summary_lines.append("╠══════════════════════════════════════════════════════════════════════════════╣")
+        summary_lines.append("║                           PERFORMANCE METRICS                                ║")
+        summary_lines.append("╠══════════════════════════════════════════════════════════════════════════════╣")
+
+        metrics = ['roc_auc', 'f1_score', 'precision', 'recall', 'quick_roc_auc', 'roc_auc_improvement']
+        metric_names = ['ROC-AUC', 'F1-Score', 'Precision', 'Recall', 'Quick ROC-AUC', 'Improvement']
+
+        for metric, name in zip(metrics, metric_names):
+            if metric in best_row.index:
+                value = best_row[metric]
+                if pd.notna(value):
+                    line = f"║  {name:<20} = {value:.4f}"
+                    summary_lines.append(f"{line:<78}║")
+
+        summary_lines.append("╚══════════════════════════════════════════════════════════════════════════════╝")
+
+        summary_text = "\n".join(summary_lines)
+
+        ax.text(0.05, 0.95, summary_text, transform=ax.transAxes, fontsize=10,
+               verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.3))
+
+        plt.savefig(os.path.join(self.output_dir, 'best_config_summary.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - best_config_summary.png")
+
     def generate_all(self):
         """Generate all Stage 2 visualizations"""
         print("\n  Generating Stage 2 Visualizations...")
@@ -1602,6 +2165,9 @@ class Stage2Visualizer:
         self.plot_selection_criterion_analysis()
         self.plot_learning_curves()
         self.plot_summary_dashboard()
+        self.plot_all_hyperparameters()
+        self.plot_hyperparameter_interactions()
+        self.plot_best_config_summary()
 
 
 # =============================================================================
@@ -1892,7 +2458,7 @@ class BestModelVisualizer:
         print("  - best_model_reconstruction.png")
 
     def plot_detection_examples(self):
-        """Show TP, TN, FP, FN examples"""
+        """Show TP, TN, FP, FN examples with anomaly region and masked region highlighted"""
         fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
         optimal_idx = np.argmax(tpr - fpr)
         threshold = thresholds[optimal_idx]
@@ -1924,6 +2490,11 @@ class BestModelVisualizer:
 
                 # Highlight anomaly regions first (so they appear behind the line)
                 self._highlight_anomaly_regions(ax, point_labels, color='red', alpha=0.3, label='Anomaly Region')
+
+                # Highlight masked region (last patch)
+                mask_start = len(original) - self.config.mask_last_n
+                ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow', label='Masked Region')
+
                 ax.plot(x, original, color=color, lw=2, label='Signal')
                 ax.set_title(f'{title}\nScore: {self.pred_data["scores"][idx]:.4f}, '
                            f'Threshold: {threshold:.4f}', fontweight='bold')
@@ -1934,7 +2505,8 @@ class BestModelVisualizer:
                 ax.text(0.5, 0.5, f'No {title} examples', ha='center', va='center', transform=ax.transAxes)
                 ax.set_title(title, fontweight='bold')
 
-        plt.suptitle('Detection Examples', fontsize=14, fontweight='bold', y=1.02)
+        plt.suptitle('Detection Examples\n(Red=Anomaly Region, Yellow=Masked Region)',
+                    fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'best_model_detection_examples.png'), dpi=150, bbox_inches='tight')
         plt.close()
@@ -2019,20 +2591,26 @@ class BestModelVisualizer:
         # Get unique anomaly types present in data
         anomaly_types_present = detailed_csv['anomaly_type_name'].unique()
 
-        # Setup colors
+        # Setup colors (7 anomaly types including normal)
         colors = {
             'normal': '#3498DB',
             'spike': '#E74C3C',
             'memory_leak': '#F39C12',
-            'noise': '#9B59B6',
-            'drift': '#1ABC9C',
-            'network_congestion': '#E67E22'
+            'cpu_saturation': '#9B59B6',
+            'network_congestion': '#E67E22',
+            'cascading_failure': '#1ABC9C',
+            'resource_contention': '#16A085'
         }
 
-        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        n_types = len(ANOMALY_TYPE_NAMES)
+        n_cols = 4
+        n_rows = (n_types + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4 * n_rows))
         axes = axes.flatten()
 
         for idx, atype in enumerate(ANOMALY_TYPE_NAMES):
+            if idx >= len(axes):
+                break
             ax = axes[idx]
             type_data = detailed_csv[detailed_csv['anomaly_type_name'] == atype]
 
@@ -2065,6 +2643,10 @@ class BestModelVisualizer:
             ax.text(0.95, 0.95, f'R: {recon_mean:.4f}\nD: {disc_mean:.4f}',
                    transform=ax.transAxes, ha='right', va='top', fontsize=9,
                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # Hide empty subplots
+        for idx in range(len(ANOMALY_TYPE_NAMES), len(axes)):
+            axes[idx].axis('off')
 
         plt.suptitle('Loss Distribution by Anomaly Type', fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
@@ -2304,6 +2886,934 @@ class BestModelVisualizer:
         plt.close()
         print("  - sample_type_analysis.png")
 
+    def plot_pure_vs_disturbing_normal(self):
+        """Compare pure normal vs disturbing normal in detail"""
+        pure_normal_mask = self.detailed_data['sample_types'] == 0
+        disturbing_mask = self.detailed_data['sample_types'] == 1
+        anomaly_mask = self.detailed_data['sample_types'] == 2
+
+        mask_inverse = 1 - self.detailed_data['masks']
+
+        # Compute scores for each sample type
+        def compute_scores(mask):
+            teacher_err = (self.detailed_data['teacher_errors'][mask] * mask_inverse[mask]).sum(axis=1) / (mask_inverse[mask].sum(axis=1) + 1e-8)
+            student_err = (self.detailed_data['student_errors'][mask] * mask_inverse[mask]).sum(axis=1) / (mask_inverse[mask].sum(axis=1) + 1e-8)
+            disc = (self.detailed_data['discrepancies'][mask] * mask_inverse[mask]).sum(axis=1) / (mask_inverse[mask].sum(axis=1) + 1e-8)
+            total = teacher_err + self.config.lambda_disc * disc
+            return teacher_err, student_err, disc, total
+
+        pure_teacher, pure_student, pure_disc, pure_total = compute_scores(pure_normal_mask)
+        dist_teacher, dist_student, dist_disc, dist_total = compute_scores(disturbing_mask)
+        anom_teacher, anom_student, anom_disc, anom_total = compute_scores(anomaly_mask)
+
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+        # 1. Total score distribution
+        ax = axes[0, 0]
+        ax.hist(pure_total, bins=30, alpha=0.6, label=f'Pure Normal (n={pure_normal_mask.sum()})', color='#3498DB', density=True)
+        ax.hist(dist_total, bins=30, alpha=0.6, label=f'Disturbing Normal (n={disturbing_mask.sum()})', color='#F39C12', density=True)
+        ax.hist(anom_total, bins=30, alpha=0.6, label=f'Anomaly (n={anomaly_mask.sum()})', color='#E74C3C', density=True)
+        ax.set_xlabel('Total Score (Recon + λ·Disc)')
+        ax.set_ylabel('Density')
+        ax.set_title('Score Distribution by Sample Type', fontweight='bold')
+        ax.legend()
+
+        # 2. Box plot comparison
+        ax = axes[0, 1]
+        box_data = [pure_total, dist_total, anom_total]
+        labels = ['Pure\nNormal', 'Disturbing\nNormal', 'Anomaly']
+        bp = ax.boxplot(box_data, labels=labels, patch_artist=True)
+        colors = ['#3498DB', '#F39C12', '#E74C3C']
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        ax.set_ylabel('Total Score')
+        ax.set_title('Score Box Plot', fontweight='bold')
+
+        # 3. Discrepancy comparison (key metric)
+        ax = axes[0, 2]
+        ax.hist(pure_disc, bins=30, alpha=0.6, label='Pure Normal', color='#3498DB', density=True)
+        ax.hist(dist_disc, bins=30, alpha=0.6, label='Disturbing Normal', color='#F39C12', density=True)
+        ax.hist(anom_disc, bins=30, alpha=0.6, label='Anomaly', color='#E74C3C', density=True)
+        ax.set_xlabel('Discrepancy (Teacher-Student)')
+        ax.set_ylabel('Density')
+        ax.set_title('Discrepancy Distribution', fontweight='bold')
+        ax.legend()
+
+        # 4. Teacher vs Student scatter
+        ax = axes[1, 0]
+        ax.scatter(pure_teacher, pure_student, alpha=0.5, label='Pure Normal', color='#3498DB', s=20)
+        ax.scatter(dist_teacher, dist_student, alpha=0.5, label='Disturbing Normal', color='#F39C12', s=20)
+        ax.scatter(anom_teacher, anom_student, alpha=0.5, label='Anomaly', color='#E74C3C', s=20)
+        max_val = max(np.max([pure_teacher.max(), dist_teacher.max(), anom_teacher.max()]),
+                      np.max([pure_student.max(), dist_student.max(), anom_student.max()]))
+        ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.5, label='y=x')
+        ax.set_xlabel('Teacher Error')
+        ax.set_ylabel('Student Error')
+        ax.set_title('Teacher vs Student Error', fontweight='bold')
+        ax.legend()
+
+        # 5. Mean comparison bar chart
+        ax = axes[1, 1]
+        x = np.arange(3)
+        width = 0.25
+
+        means_teacher = [pure_teacher.mean(), dist_teacher.mean(), anom_teacher.mean()]
+        means_student = [pure_student.mean(), dist_student.mean(), anom_student.mean()]
+        means_disc = [pure_disc.mean(), dist_disc.mean(), anom_disc.mean()]
+
+        bars1 = ax.bar(x - width, means_teacher, width, label='Teacher Error', color='#27AE60')
+        bars2 = ax.bar(x, means_student, width, label='Student Error', color='#9B59B6')
+        bars3 = ax.bar(x + width, means_disc, width, label='Discrepancy', color='#E74C3C')
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(['Pure\nNormal', 'Disturbing\nNormal', 'Anomaly'])
+        ax.set_ylabel('Mean Value')
+        ax.set_title('Mean Error Components', fontweight='bold')
+        ax.legend()
+
+        # 6. Statistics summary
+        ax = axes[1, 2]
+        ax.axis('off')
+
+        stats_text = f"""
+Pure Normal vs Disturbing Normal Analysis
+═══════════════════════════════════════════════════════
+
+Sample Counts:
+  • Pure Normal:      {pure_normal_mask.sum():>6}
+  • Disturbing Normal:{disturbing_mask.sum():>6}
+  • Anomaly:          {anomaly_mask.sum():>6}
+
+Mean Total Score:
+  • Pure Normal:      {pure_total.mean():.6f}
+  • Disturbing Normal:{dist_total.mean():.6f}
+  • Anomaly:          {anom_total.mean():.6f}
+
+Mean Discrepancy (Key Metric):
+  • Pure Normal:      {pure_disc.mean():.6f}
+  • Disturbing Normal:{dist_disc.mean():.6f}
+  • Anomaly:          {anom_disc.mean():.6f}
+
+Separation Analysis:
+  • Anom/Pure ratio:  {anom_total.mean() / (pure_total.mean() + 1e-8):.2f}x
+  • Anom/Dist ratio:  {anom_total.mean() / (dist_total.mean() + 1e-8):.2f}x
+  • Dist/Pure ratio:  {dist_total.mean() / (pure_total.mean() + 1e-8):.2f}x
+        """
+
+        ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
+               verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+
+        plt.suptitle('Pure Normal vs Disturbing Normal Comparison\n'
+                    '(Disturbing Normal = anomaly exists but NOT in last patch)',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'pure_vs_disturbing_normal.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - pure_vs_disturbing_normal.png")
+
+    def plot_discrepancy_trend(self):
+        """Plot discrepancy trends across time steps"""
+        # Select representative samples
+        pure_normal_mask = self.detailed_data['sample_types'] == 0
+        disturbing_mask = self.detailed_data['sample_types'] == 1
+        anomaly_mask = self.detailed_data['sample_types'] == 2
+
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+
+        # 1. Mean discrepancy trend by sample type
+        ax = axes[0, 0]
+        seq_length = self.detailed_data['discrepancies'].shape[1]
+        t = np.arange(seq_length)
+
+        pure_mean = self.detailed_data['discrepancies'][pure_normal_mask].mean(axis=0)
+        dist_mean = self.detailed_data['discrepancies'][disturbing_mask].mean(axis=0)
+        anom_mean = self.detailed_data['discrepancies'][anomaly_mask].mean(axis=0)
+
+        ax.plot(t, pure_mean, label='Pure Normal', color='#3498DB', lw=2)
+        ax.plot(t, dist_mean, label='Disturbing Normal', color='#F39C12', lw=2)
+        ax.plot(t, anom_mean, label='Anomaly', color='#E74C3C', lw=2)
+
+        # Highlight last patch
+        mask_last_n = getattr(self.config, 'mask_last_n', 5)
+        ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.2, color='gray', label='Last Patch')
+
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Mean Discrepancy')
+        ax.set_title('Discrepancy Trend by Sample Type', fontweight='bold')
+        ax.legend()
+
+        # 2. Discrepancy heatmap for anomaly samples
+        ax = axes[0, 1]
+        anomaly_disc = self.detailed_data['discrepancies'][anomaly_mask][:50]  # First 50
+        sns.heatmap(anomaly_disc, ax=ax, cmap='Reds', cbar_kws={'label': 'Discrepancy'})
+        ax.axvline(x=seq_length - mask_last_n, color='white', linestyle='--', lw=2)
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Sample Index')
+        ax.set_title('Anomaly Samples - Discrepancy Heatmap', fontweight='bold')
+
+        # 3. Discrepancy heatmap for normal samples
+        ax = axes[1, 0]
+        normal_disc = self.detailed_data['discrepancies'][pure_normal_mask][:50]  # First 50
+        sns.heatmap(normal_disc, ax=ax, cmap='Reds', cbar_kws={'label': 'Discrepancy'})
+        ax.axvline(x=seq_length - mask_last_n, color='white', linestyle='--', lw=2)
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Sample Index')
+        ax.set_title('Pure Normal Samples - Discrepancy Heatmap', fontweight='bold')
+
+        # 4. Last patch discrepancy distribution
+        ax = axes[1, 1]
+        last_patch_pure = self.detailed_data['discrepancies'][pure_normal_mask, -mask_last_n:].mean(axis=1)
+        last_patch_dist = self.detailed_data['discrepancies'][disturbing_mask, -mask_last_n:].mean(axis=1)
+        last_patch_anom = self.detailed_data['discrepancies'][anomaly_mask, -mask_last_n:].mean(axis=1)
+
+        ax.hist(last_patch_pure, bins=30, alpha=0.6, label='Pure Normal', color='#3498DB', density=True)
+        ax.hist(last_patch_dist, bins=30, alpha=0.6, label='Disturbing Normal', color='#F39C12', density=True)
+        ax.hist(last_patch_anom, bins=30, alpha=0.6, label='Anomaly', color='#E74C3C', density=True)
+        ax.set_xlabel('Mean Discrepancy (Last Patch)')
+        ax.set_ylabel('Density')
+        ax.set_title('Last Patch Discrepancy Distribution', fontweight='bold')
+        ax.legend()
+
+        plt.suptitle('Discrepancy Trend Analysis', fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'discrepancy_trend.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - discrepancy_trend.png")
+
+    def plot_hypothesis_verification(self):
+        """Verify hypotheses about why disturbing normal might outperform pure normal.
+
+        4 Hypotheses to verify:
+        1. Anomaly pattern in window provides "hint" (increases discrepancy)
+        2. Anomaly → Normal transition is unstable
+        3. Pure normal has high variance leading to False Positives
+        4. Data distribution issue (most training data is pure_normal)
+        """
+        pure_normal_mask = self.detailed_data['sample_types'] == 0
+        disturbing_mask = self.detailed_data['sample_types'] == 1
+        anomaly_mask = self.detailed_data['sample_types'] == 2
+
+        mask_inverse = 1 - self.detailed_data['masks']
+        seq_length = self.detailed_data['discrepancies'].shape[1]
+        mask_last_n = getattr(self.config, 'mask_last_n', 10)
+
+        # Compute scores for each sample
+        def compute_sample_scores(sample_mask):
+            teacher_err = (self.detailed_data['teacher_errors'][sample_mask] * mask_inverse[sample_mask]).sum(axis=1) / (mask_inverse[sample_mask].sum(axis=1) + 1e-8)
+            disc = (self.detailed_data['discrepancies'][sample_mask] * mask_inverse[sample_mask]).sum(axis=1) / (mask_inverse[sample_mask].sum(axis=1) + 1e-8)
+            total = teacher_err + self.config.lambda_disc * disc
+            return teacher_err, disc, total
+
+        pure_recon, pure_disc, pure_total = compute_sample_scores(pure_normal_mask)
+        dist_recon, dist_disc, dist_total = compute_sample_scores(disturbing_mask)
+        anom_recon, anom_disc, anom_total = compute_sample_scores(anomaly_mask)
+
+        # Get global threshold from all data
+        threshold = self._get_optimal_threshold()
+
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+        # 1. Hypothesis 1: Anomaly ratio vs Score (for disturbing normal)
+        ax = axes[0, 0]
+        # For disturbing normal samples, compute anomaly ratio in window (excluding last patch)
+        dist_point_labels = self.detailed_data['point_labels'][disturbing_mask]
+        dist_anomaly_ratio = (dist_point_labels[:, :-mask_last_n] > 0).mean(axis=1)
+
+        scatter = ax.scatter(dist_anomaly_ratio, dist_total, alpha=0.5, c=dist_disc,
+                            cmap='RdYlGn_r', s=20)
+        plt.colorbar(scatter, ax=ax, label='Discrepancy')
+        ax.axhline(y=threshold, color='red', linestyle='--', lw=2, label=f'Threshold={threshold:.4f}')
+        ax.set_xlabel('Anomaly Ratio in Window (excluding last patch)')
+        ax.set_ylabel('Total Score')
+        ax.set_title('H1: Does anomaly in window increase score?\n(Disturbing Normal samples)', fontweight='bold')
+        ax.legend()
+
+        # Add correlation coefficient
+        corr = np.corrcoef(dist_anomaly_ratio, dist_total)[0, 1]
+        ax.text(0.05, 0.95, f'Correlation: {corr:.3f}', transform=ax.transAxes,
+               fontsize=10, verticalalignment='top',
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # 2. Hypothesis 2: Distance from anomaly end to last patch
+        ax = axes[0, 1]
+        # For disturbing normal, find the distance from last anomaly point to last patch start
+        dist_distances = []
+        for i, pl in enumerate(dist_point_labels):
+            anomaly_positions = np.where(pl > 0)[0]
+            if len(anomaly_positions) > 0:
+                last_anomaly_pos = anomaly_positions[-1]
+                distance = (seq_length - mask_last_n) - last_anomaly_pos
+                dist_distances.append(max(0, distance))  # 0 if anomaly touches last patch boundary
+            else:
+                dist_distances.append(seq_length)  # No anomaly, maximum distance
+        dist_distances = np.array(dist_distances)
+
+        scatter = ax.scatter(dist_distances, dist_total, alpha=0.5, c=dist_disc,
+                            cmap='RdYlGn_r', s=20)
+        plt.colorbar(scatter, ax=ax, label='Discrepancy')
+        ax.axhline(y=threshold, color='red', linestyle='--', lw=2, label=f'Threshold')
+        ax.set_xlabel('Distance from Last Anomaly to Last Patch Start')
+        ax.set_ylabel('Total Score')
+        ax.set_title('H2: Does recent anomaly affect score?\n(Disturbing Normal samples)', fontweight='bold')
+        ax.legend()
+
+        # Add correlation
+        corr = np.corrcoef(dist_distances, dist_total)[0, 1]
+        ax.text(0.05, 0.95, f'Correlation: {corr:.3f}', transform=ax.transAxes,
+               fontsize=10, verticalalignment='top',
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # 3. Hypothesis 3: Error variance comparison
+        ax = axes[0, 2]
+        # Compare variance of scores across sample types
+        data_for_violin = [pure_total, dist_total, anom_total]
+        labels = ['Pure\nNormal', 'Disturbing\nNormal', 'Anomaly']
+        colors = ['#3498DB', '#F39C12', '#E74C3C']
+
+        parts = ax.violinplot(data_for_violin, positions=[0, 1, 2], showmeans=True, showmedians=True)
+        for i, pc in enumerate(parts['bodies']):
+            pc.set_facecolor(colors[i])
+            pc.set_alpha(0.7)
+
+        ax.axhline(y=threshold, color='green', linestyle='--', lw=2, label=f'Global Threshold')
+        ax.set_xticks([0, 1, 2])
+        ax.set_xticklabels(labels)
+        ax.set_ylabel('Total Score')
+        ax.set_title('H3: Score variance comparison\n(Higher variance → more FPs)', fontweight='bold')
+        ax.legend()
+
+        # Add variance values
+        vars_text = f"Variance:\n  Pure: {pure_total.var():.6f}\n  Dist: {dist_total.var():.6f}\n  Anom: {anom_total.var():.6f}"
+        ax.text(0.95, 0.95, vars_text, transform=ax.transAxes,
+               fontsize=9, verticalalignment='top', horizontalalignment='right',
+               fontfamily='monospace', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # 4. Classification metrics with GLOBAL threshold
+        ax = axes[1, 0]
+        # Apply global threshold to all sample types
+        pure_fp = (pure_total > threshold).sum() / len(pure_total) * 100  # False Positive Rate
+        dist_fp = (dist_total > threshold).sum() / len(dist_total) * 100  # False Positive Rate (should be low)
+        anom_tp = (anom_total > threshold).sum() / len(anom_total) * 100  # True Positive Rate
+
+        bars = ax.bar(['Pure Normal\n(FP Rate)', 'Disturbing Normal\n(FP Rate)', 'Anomaly\n(TP Rate)'],
+                      [pure_fp, dist_fp, anom_tp], color=colors)
+        ax.set_ylabel('Rate (%)')
+        ax.set_title('Classification Rates with Global Threshold', fontweight='bold')
+
+        # Add values on bars
+        for bar, val in zip(bars, [pure_fp, dist_fp, anom_tp]):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                   f'{val:.1f}%', ha='center', va='bottom', fontsize=10)
+
+        # 5. Reconstruction error by position (temporal analysis)
+        ax = axes[1, 1]
+        t = np.arange(seq_length)
+
+        pure_recon_temporal = self.detailed_data['teacher_errors'][pure_normal_mask].mean(axis=0)
+        dist_recon_temporal = self.detailed_data['teacher_errors'][disturbing_mask].mean(axis=0)
+        anom_recon_temporal = self.detailed_data['teacher_errors'][anomaly_mask].mean(axis=0)
+
+        ax.plot(t, pure_recon_temporal, label='Pure Normal', color='#3498DB', lw=2)
+        ax.plot(t, dist_recon_temporal, label='Disturbing Normal', color='#F39C12', lw=2)
+        ax.plot(t, anom_recon_temporal, label='Anomaly', color='#E74C3C', lw=2)
+        ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.2, color='gray', label='Last Patch (masked)')
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Mean Reconstruction Error')
+        ax.set_title('Temporal Reconstruction Error\n(Where does error come from?)', fontweight='bold')
+        ax.legend()
+
+        # 6. Summary statistics
+        ax = axes[1, 2]
+        ax.axis('off')
+
+        summary_text = f"""
+Hypothesis Verification Summary
+═══════════════════════════════════════════════════════
+
+Global Threshold: {threshold:.6f}
+
+H1: Anomaly Ratio Correlation
+  • Corr(anomaly_ratio, score): {np.corrcoef(dist_anomaly_ratio, dist_total)[0,1]:.3f}
+  • Interpretation: {'Positive' if corr > 0.1 else 'Weak/None'} correlation
+    → Anomaly in window {'DOES' if corr > 0.1 else 'does NOT'} increase score
+
+H2: Distance from Anomaly Effect
+  • Corr(distance, score): {np.corrcoef(dist_distances, dist_total)[0,1]:.3f}
+  • Interpretation: Recent anomaly {'affects' if np.corrcoef(dist_distances, dist_total)[0,1] < -0.1 else 'does NOT affect'} last patch
+
+H3: Variance Analysis
+  • Pure Normal variance:      {pure_total.var():.6f}
+  • Disturbing Normal variance:{dist_total.var():.6f}
+  • Anomaly variance:          {anom_total.var():.6f}
+  • Pure > Dist variance: {pure_total.var() > dist_total.var()}
+    → {'Higher pure variance → more FPs' if pure_total.var() > dist_total.var() else 'Similar variance'}
+
+Classification with Global Threshold:
+  • Pure Normal FP Rate:      {pure_fp:.1f}%
+  • Disturbing Normal FP Rate:{dist_fp:.1f}%
+  • Anomaly TP Rate:          {anom_tp:.1f}%
+        """
+
+        ax.text(0.05, 0.95, summary_text, transform=ax.transAxes, fontsize=9,
+               verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+
+        plt.suptitle('Hypothesis Verification: Why might Disturbing Normal outperform Pure Normal?',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'hypothesis_verification.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - hypothesis_verification.png")
+
+    def plot_case_study_gallery(self, experiment_dir: str = None):
+        """Generate qualitative case studies showing representative examples for each category.
+
+        Shows one detailed example for each:
+        - True Positive (correctly detected anomaly)
+        - True Negative (correctly identified normal)
+        - False Positive (false alarm)
+        - False Negative (missed anomaly)
+        - For each anomaly type (spike, memory_leak, noise, drift, network_congestion)
+        """
+        # Get predictions using pred_data (has scores)
+        threshold = self._get_optimal_threshold()
+        scores = self._get_scores()
+        predictions = (scores >= threshold).astype(int)
+        labels = self.pred_data['labels']
+        sample_types = self.detailed_data['sample_types']
+
+        # Find examples for each category
+        tp_idx = np.where((labels == 1) & (predictions == 1))[0]
+        tn_idx = np.where((labels == 0) & (predictions == 0))[0]
+        fp_idx = np.where((labels == 0) & (predictions == 1))[0]
+        fn_idx = np.where((labels == 1) & (predictions == 0))[0]
+
+        categories = [
+            ('True Positive', tp_idx, '#27AE60'),
+            ('True Negative', tn_idx, '#3498DB'),
+            ('False Positive', fp_idx, '#E67E22'),
+            ('False Negative', fn_idx, '#E74C3C')
+        ]
+
+        fig, axes = plt.subplots(4, 3, figsize=(18, 20))
+
+        for row, (cat_name, indices, color) in enumerate(categories):
+            if len(indices) == 0:
+                for col in range(3):
+                    axes[row, col].text(0.5, 0.5, f'No {cat_name} found',
+                                       ha='center', va='center', transform=axes[row, col].transAxes)
+                    axes[row, col].set_title(f'{cat_name}')
+                continue
+
+            # Select a representative sample (median score among category)
+            cat_scores = scores[indices]
+            median_idx = indices[np.argsort(cat_scores)[len(cat_scores)//2]]
+
+            # Column 1: Time series with reconstruction
+            ax = axes[row, 0]
+            original = self.detailed_data['originals'][median_idx, :, 0]
+            teacher_recon = self.detailed_data['teacher_recons'][median_idx, :, 0]
+            student_recon = self.detailed_data['student_recons'][median_idx, :, 0]
+            point_labels = self.detailed_data['point_labels'][median_idx]
+
+            ax.plot(original, 'b-', lw=1.2, alpha=0.8, label='Original')
+            ax.plot(teacher_recon, 'g--', lw=1.5, alpha=0.7, label='Teacher')
+            ax.plot(student_recon, 'r:', lw=1.5, alpha=0.7, label='Student')
+
+            # Highlight anomaly and masked regions
+            anomaly_region = np.where(point_labels == 1)[0]
+            if len(anomaly_region) > 0:
+                ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red', label='Anomaly')
+            mask_start = len(original) - self.config.mask_last_n
+            ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow', label='Masked')
+
+            ax.set_title(f'{cat_name}: Time Series', fontweight='bold', color=color)
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Value')
+            if row == 0:
+                ax.legend(fontsize=7, loc='upper right')
+
+            # Column 2: Discrepancy profile
+            ax = axes[row, 1]
+            discrepancy = self.detailed_data['discrepancies'][median_idx]
+            ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#9B59B6')
+            ax.plot(discrepancy, color='#8E44AD', lw=1)
+
+            if len(anomaly_region) > 0:
+                ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
+            ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow')
+            ax.axhline(y=np.mean(discrepancy[-self.config.mask_last_n:]), color='green', linestyle='--',
+                      label=f'Masked Mean: {np.mean(discrepancy[-self.config.mask_last_n:]):.4f}')
+
+            ax.set_title(f'{cat_name}: Discrepancy (|T-S|)', fontweight='bold', color=color)
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Discrepancy')
+            ax.legend(fontsize=8)
+
+            # Column 3: Statistics
+            ax = axes[row, 2]
+            ax.axis('off')
+
+            sample_score = scores[median_idx]
+            teacher_err = np.mean((original[-self.config.mask_last_n:] - teacher_recon[-self.config.mask_last_n:])**2)
+            student_err = np.mean((original[-self.config.mask_last_n:] - student_recon[-self.config.mask_last_n:])**2)
+            masked_disc = np.mean(discrepancy[-self.config.mask_last_n:])
+
+            stype = sample_types[median_idx]
+            stype_name = ['Pure Normal', 'Disturbing Normal', 'Anomaly'][stype]
+
+            stats_text = f"""
+{cat_name} Case Study
+═══════════════════════════════════
+
+Sample Index: {median_idx}
+Sample Type:  {stype_name}
+True Label:   {'Anomaly' if labels[median_idx] == 1 else 'Normal'}
+Prediction:   {'Anomaly' if predictions[median_idx] == 1 else 'Normal'}
+
+Score Analysis:
+  • Total Score:    {sample_score:.6f}
+  • Threshold:      {threshold:.6f}
+  • Margin:         {sample_score - threshold:+.6f}
+
+Masked Region Metrics:
+  • Teacher MSE:    {teacher_err:.6f}
+  • Student MSE:    {student_err:.6f}
+  • Discrepancy:    {masked_disc:.6f}
+
+Anomaly Location:
+  • Points: {len(anomaly_region)} / {len(original)}
+  • In Mask: {sum(point_labels[-self.config.mask_last_n:])}
+            """
+
+            ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
+                   verticalalignment='top', fontfamily='monospace',
+                   bbox=dict(boxstyle='round', facecolor=color, alpha=0.15))
+
+        plt.suptitle('Case Study Gallery: Representative Examples for Each Outcome\n'
+                    '(Yellow=Masked Region, Red=Anomaly Region)',
+                    fontsize=14, fontweight='bold', y=1.01)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'case_study_gallery.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - case_study_gallery.png")
+
+    def plot_anomaly_type_case_studies(self, experiment_dir: str = None):
+        """Generate detailed case studies for each anomaly type.
+
+        Shows representative TP and FN examples for each anomaly type:
+        spike, memory_leak, noise, drift, network_congestion
+        """
+        if experiment_dir is None:
+            print("  ! Skipping anomaly_type_case_studies (need experiment_dir)")
+            return
+
+        # Load detailed results with anomaly types
+        detailed_path = os.path.join(experiment_dir, 'best_model_detailed_results.csv')
+        if not os.path.exists(detailed_path):
+            print(f"  ! Skipping anomaly_type_case_studies (no detailed results)")
+            return
+
+        df = pd.read_csv(detailed_path)
+        threshold = self._get_optimal_threshold()
+
+        anomaly_types = ['spike', 'memory_leak', 'noise', 'drift', 'network_congestion']
+        anomaly_type_map = {1: 'spike', 2: 'memory_leak', 3: 'noise', 4: 'drift', 5: 'network_congestion'}
+
+        fig, axes = plt.subplots(5, 4, figsize=(20, 25))
+
+        for row, atype in enumerate(anomaly_types):
+            # Find samples of this anomaly type
+            type_mask = df['anomaly_type_name'] == atype if 'anomaly_type_name' in df.columns else np.zeros(len(df), dtype=bool)
+
+            if type_mask.sum() == 0:
+                # Try numeric type
+                type_num = anomaly_types.index(atype) + 1
+                if 'anomaly_type' in df.columns:
+                    type_mask = df['anomaly_type'] == type_num
+
+            if type_mask.sum() == 0:
+                for col in range(4):
+                    axes[row, col].text(0.5, 0.5, f'No {atype} samples',
+                                       ha='center', va='center', transform=axes[row, col].transAxes)
+                continue
+
+            type_indices = np.where(type_mask)[0]
+            type_scores = df.loc[type_mask, 'total_score'].values if 'total_score' in df.columns else self._get_scores()[type_indices]
+            type_preds = (type_scores >= threshold).astype(int)
+
+            tp_mask = type_preds == 1
+            fn_mask = type_preds == 0
+
+            # Column 1: TP example time series
+            ax = axes[row, 0]
+            if tp_mask.sum() > 0:
+                tp_local_idx = np.where(tp_mask)[0][0]
+                tp_idx = type_indices[tp_local_idx]
+
+                if tp_idx < len(self.detailed_data['originals']):
+                    original = self.detailed_data['originals'][tp_idx, :, 0]
+                    teacher_recon = self.detailed_data['teacher_recons'][tp_idx, :, 0]
+                    point_labels = self.detailed_data['point_labels'][tp_idx]
+
+                    ax.plot(original, 'b-', lw=1.2, alpha=0.8)
+                    ax.plot(teacher_recon, 'g--', lw=1.5, alpha=0.7)
+
+                    anomaly_region = np.where(point_labels == 1)[0]
+                    if len(anomaly_region) > 0:
+                        ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
+                    ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+
+                ax.set_title(f'{atype.upper()}: TP Example', fontweight='bold', color='#27AE60')
+            else:
+                ax.text(0.5, 0.5, 'No TP', ha='center', va='center', transform=ax.transAxes)
+                ax.set_title(f'{atype.upper()}: TP Example', fontweight='bold')
+            ax.set_xlabel('Time Step')
+            if row == 0:
+                ax.set_ylabel('Value')
+
+            # Column 2: TP discrepancy
+            ax = axes[row, 1]
+            if tp_mask.sum() > 0 and tp_idx < len(self.detailed_data['discrepancies']):
+                discrepancy = self.detailed_data['discrepancies'][tp_idx]
+                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#27AE60')
+                if len(anomaly_region) > 0:
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
+                ax.axvspan(len(discrepancy) - self.config.mask_last_n, len(discrepancy), alpha=0.2, color='yellow')
+            ax.set_title(f'{atype.upper()}: TP Discrepancy', fontweight='bold', color='#27AE60')
+            ax.set_xlabel('Time Step')
+
+            # Column 3: FN example time series
+            ax = axes[row, 2]
+            if fn_mask.sum() > 0:
+                fn_local_idx = np.where(fn_mask)[0][0]
+                fn_idx = type_indices[fn_local_idx]
+
+                if fn_idx < len(self.detailed_data['originals']):
+                    original = self.detailed_data['originals'][fn_idx, :, 0]
+                    teacher_recon = self.detailed_data['teacher_recons'][fn_idx, :, 0]
+                    point_labels = self.detailed_data['point_labels'][fn_idx]
+
+                    ax.plot(original, 'b-', lw=1.2, alpha=0.8)
+                    ax.plot(teacher_recon, 'g--', lw=1.5, alpha=0.7)
+
+                    anomaly_region_fn = np.where(point_labels == 1)[0]
+                    if len(anomaly_region_fn) > 0:
+                        ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color='red')
+                    ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+
+                ax.set_title(f'{atype.upper()}: FN Example', fontweight='bold', color='#E74C3C')
+            else:
+                ax.text(0.5, 0.5, 'No FN (All Detected!)', ha='center', va='center', transform=ax.transAxes, color='#27AE60')
+                ax.set_title(f'{atype.upper()}: FN Example', fontweight='bold')
+            ax.set_xlabel('Time Step')
+
+            # Column 4: FN discrepancy
+            ax = axes[row, 3]
+            if fn_mask.sum() > 0 and fn_idx < len(self.detailed_data['discrepancies']):
+                discrepancy = self.detailed_data['discrepancies'][fn_idx]
+                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#E74C3C')
+                if len(anomaly_region_fn) > 0:
+                    ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color='red')
+                ax.axvspan(len(discrepancy) - self.config.mask_last_n, len(discrepancy), alpha=0.2, color='yellow')
+            ax.set_title(f'{atype.upper()}: FN Discrepancy', fontweight='bold', color='#E74C3C')
+            ax.set_xlabel('Time Step')
+
+        plt.suptitle('Anomaly Type Case Studies: TP vs FN Examples\n'
+                    '(Yellow=Masked Region, Red=Anomaly Region, Green=Reconstruction)',
+                    fontsize=14, fontweight='bold', y=1.01)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'anomaly_type_case_studies.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - anomaly_type_case_studies.png")
+
+    def plot_feature_contribution_analysis(self):
+        """Analyze which features contribute most to anomaly detection.
+
+        Shows per-feature reconstruction error and discrepancy patterns.
+        """
+        # Get per-feature statistics
+        num_features = self.detailed_data['originals'].shape[2]
+        threshold = self._get_optimal_threshold()
+        scores = self._get_scores()
+        predictions = (scores >= threshold).astype(int)
+        labels = self.pred_data['labels']
+
+        tp_mask = (labels == 1) & (predictions == 1)
+        fn_mask = (labels == 1) & (predictions == 0)
+        tn_mask = (labels == 0) & (predictions == 0)
+
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+        # 1. Per-feature reconstruction error for TP vs FN
+        ax = axes[0, 0]
+        feature_errors_tp = []
+        feature_errors_fn = []
+        feature_errors_tn = []
+
+        for f in range(num_features):
+            original_f = self.detailed_data['originals'][:, -self.config.mask_last_n:, f]
+            teacher_f = self.detailed_data['teacher_recons'][:, -self.config.mask_last_n:, f]
+            mse_f = ((original_f - teacher_f) ** 2).mean(axis=1)
+
+            feature_errors_tp.append(mse_f[tp_mask].mean() if tp_mask.sum() > 0 else 0)
+            feature_errors_fn.append(mse_f[fn_mask].mean() if fn_mask.sum() > 0 else 0)
+            feature_errors_tn.append(mse_f[tn_mask].mean() if tn_mask.sum() > 0 else 0)
+
+        x = np.arange(num_features)
+        width = 0.25
+        ax.bar(x - width, feature_errors_tp, width, label='TP (Detected Anomaly)', color='#27AE60')
+        ax.bar(x, feature_errors_fn, width, label='FN (Missed Anomaly)', color='#E74C3C')
+        ax.bar(x + width, feature_errors_tn, width, label='TN (Normal)', color='#3498DB')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'F{i}' for i in range(num_features)])
+        ax.set_xlabel('Feature')
+        ax.set_ylabel('Mean Teacher MSE (Masked Region)')
+        ax.set_title('Per-Feature Reconstruction Error', fontweight='bold')
+        ax.legend()
+
+        # 2. Per-feature discrepancy
+        ax = axes[0, 1]
+        feature_disc_tp = []
+        feature_disc_fn = []
+        feature_disc_tn = []
+
+        for f in range(num_features):
+            teacher_f = self.detailed_data['teacher_recons'][:, -self.config.mask_last_n:, f]
+            student_f = self.detailed_data['student_recons'][:, -self.config.mask_last_n:, f]
+            disc_f = np.abs(teacher_f - student_f).mean(axis=1)
+
+            feature_disc_tp.append(disc_f[tp_mask].mean() if tp_mask.sum() > 0 else 0)
+            feature_disc_fn.append(disc_f[fn_mask].mean() if fn_mask.sum() > 0 else 0)
+            feature_disc_tn.append(disc_f[tn_mask].mean() if tn_mask.sum() > 0 else 0)
+
+        ax.bar(x - width, feature_disc_tp, width, label='TP', color='#27AE60')
+        ax.bar(x, feature_disc_fn, width, label='FN', color='#E74C3C')
+        ax.bar(x + width, feature_disc_tn, width, label='TN', color='#3498DB')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'F{i}' for i in range(num_features)])
+        ax.set_xlabel('Feature')
+        ax.set_ylabel('Mean Discrepancy (Masked Region)')
+        ax.set_title('Per-Feature Discrepancy', fontweight='bold')
+        ax.legend()
+
+        # 3. Feature importance ranking
+        ax = axes[0, 2]
+        # Importance = how much a feature contributes to TP-TN separation
+        importance = np.array(feature_errors_tp) - np.array(feature_errors_tn)
+        sorted_idx = np.argsort(importance)[::-1]
+
+        colors = ['#27AE60' if imp > 0 else '#E74C3C' for imp in importance[sorted_idx]]
+        bars = ax.barh([f'Feature {i}' for i in sorted_idx], importance[sorted_idx], color=colors)
+        ax.axvline(x=0, color='black', linestyle='-', lw=1)
+        ax.set_xlabel('Importance (TP Error - TN Error)')
+        ax.set_title('Feature Importance Ranking', fontweight='bold')
+
+        # 4. Example: Most important feature for a TP
+        ax = axes[1, 0]
+        if tp_mask.sum() > 0:
+            most_important_f = sorted_idx[0]
+            tp_idx = np.where(tp_mask)[0][0]
+
+            original = self.detailed_data['originals'][tp_idx, :, most_important_f]
+            teacher = self.detailed_data['teacher_recons'][tp_idx, :, most_important_f]
+            student = self.detailed_data['student_recons'][tp_idx, :, most_important_f]
+
+            ax.plot(original, 'b-', lw=1.2, label='Original')
+            ax.plot(teacher, 'g--', lw=1.5, label='Teacher')
+            ax.plot(student, 'r:', lw=1.5, label='Student')
+            ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+            ax.set_title(f'Most Important Feature (F{most_important_f}) - TP Example', fontweight='bold')
+            ax.legend()
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Value')
+
+        # 5. Example: Least important feature
+        ax = axes[1, 1]
+        if tp_mask.sum() > 0:
+            least_important_f = sorted_idx[-1]
+            tp_idx = np.where(tp_mask)[0][0]
+
+            original = self.detailed_data['originals'][tp_idx, :, least_important_f]
+            teacher = self.detailed_data['teacher_recons'][tp_idx, :, least_important_f]
+            student = self.detailed_data['student_recons'][tp_idx, :, least_important_f]
+
+            ax.plot(original, 'b-', lw=1.2, label='Original')
+            ax.plot(teacher, 'g--', lw=1.5, label='Teacher')
+            ax.plot(student, 'r:', lw=1.5, label='Student')
+            ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+            ax.set_title(f'Least Important Feature (F{least_important_f}) - Same TP', fontweight='bold')
+            ax.legend()
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Value')
+
+        # 6. Summary
+        ax = axes[1, 2]
+        ax.axis('off')
+
+        summary_text = f"""
+Feature Contribution Analysis
+═══════════════════════════════════════════════════
+
+Feature Importance Ranking:
+{''.join([f'  {i+1}. Feature {sorted_idx[i]}: {importance[sorted_idx[i]]:+.6f}' + chr(10) for i in range(min(5, num_features))])}
+
+Interpretation:
+  • Positive = Feature helps detect anomalies
+  • Negative = Feature hurts detection
+
+Key Insight:
+  Features with high TP error but low TN error
+  are most discriminative for anomaly detection.
+
+Detection Statistics:
+  • TP samples: {tp_mask.sum()}
+  • FN samples: {fn_mask.sum()}
+  • TN samples: {tn_mask.sum()}
+        """
+
+        ax.text(0.05, 0.95, summary_text, transform=ax.transAxes, fontsize=10,
+               verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+
+        plt.suptitle('Feature Contribution Analysis: Which Features Drive Anomaly Detection?',
+                    fontsize=14, fontweight='bold', y=1.01)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'feature_contribution_analysis.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - feature_contribution_analysis.png")
+
+    def plot_hardest_samples(self):
+        """Analyze the hardest-to-detect samples (lowest margin FN and FP)."""
+        threshold = self._get_optimal_threshold()
+        scores = self._get_scores()
+        labels = self.pred_data['labels']
+        predictions = (scores >= threshold).astype(int)
+
+        # FN: anomalies with lowest scores (furthest below threshold)
+        fn_mask = (labels == 1) & (predictions == 0)
+        fn_indices = np.where(fn_mask)[0]
+        if len(fn_indices) > 0:
+            fn_scores = scores[fn_mask]
+            fn_sorted = fn_indices[np.argsort(fn_scores)]  # Lowest score first
+        else:
+            fn_sorted = np.array([])
+
+        # FP: normals with highest scores (furthest above threshold)
+        fp_mask = (labels == 0) & (predictions == 1)
+        fp_indices = np.where(fp_mask)[0]
+        if len(fp_indices) > 0:
+            fp_scores = scores[fp_mask]
+            fp_sorted = fp_indices[np.argsort(fp_scores)[::-1]]  # Highest score first
+        else:
+            fp_sorted = np.array([])
+
+        fig, axes = plt.subplots(4, 3, figsize=(18, 20))
+
+        # Top 2 hardest FN
+        for row in range(2):
+            if row < len(fn_sorted):
+                idx = fn_sorted[row]
+                self._plot_sample_detail(axes[row], idx, f'Hardest FN #{row+1}', '#E74C3C', threshold)
+            else:
+                for col in range(3):
+                    axes[row, col].text(0.5, 0.5, f'No FN #{row+1}', ha='center', va='center')
+                    axes[row, col].axis('off')
+
+        # Top 2 hardest FP
+        for row in range(2, 4):
+            fp_row = row - 2
+            if fp_row < len(fp_sorted):
+                idx = fp_sorted[fp_row]
+                self._plot_sample_detail(axes[row], idx, f'Hardest FP #{fp_row+1}', '#E67E22', threshold)
+            else:
+                for col in range(3):
+                    axes[row, col].text(0.5, 0.5, f'No FP #{fp_row+1}', ha='center', va='center')
+                    axes[row, col].axis('off')
+
+        plt.suptitle('Hardest Samples Analysis\n'
+                    'FN: Anomalies with lowest scores (hardest to detect)\n'
+                    'FP: Normals with highest scores (most confusing)',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'hardest_samples.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - hardest_samples.png")
+
+    def _plot_sample_detail(self, axes_row, idx, title_prefix, color, threshold):
+        """Helper to plot detailed sample analysis in a row of 3 axes."""
+        original = self.detailed_data['originals'][idx, :, 0]
+        teacher_recon = self.detailed_data['teacher_recons'][idx, :, 0]
+        student_recon = self.detailed_data['student_recons'][idx, :, 0]
+        discrepancy = self.detailed_data['discrepancies'][idx]
+        point_labels = self.detailed_data['point_labels'][idx]
+        score = self._get_scores()[idx]
+        label = self.pred_data['labels'][idx]
+        sample_type = self.detailed_data['sample_types'][idx]
+
+        anomaly_region = np.where(point_labels == 1)[0]
+        mask_start = len(original) - self.config.mask_last_n
+
+        # Column 1: Time series
+        ax = axes_row[0]
+        ax.plot(original, 'b-', lw=1.2, alpha=0.8, label='Original')
+        ax.plot(teacher_recon, 'g--', lw=1.5, alpha=0.7, label='Teacher')
+        ax.plot(student_recon, 'r:', lw=1.5, alpha=0.7, label='Student')
+        if len(anomaly_region) > 0:
+            ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
+        ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow')
+        ax.set_title(f'{title_prefix}: Time Series', fontweight='bold', color=color)
+        ax.legend(fontsize=7)
+
+        # Column 2: Discrepancy
+        ax = axes_row[1]
+        ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#9B59B6')
+        ax.plot(discrepancy, color='#8E44AD', lw=1)
+        if len(anomaly_region) > 0:
+            ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
+        ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow')
+        ax.set_title(f'{title_prefix}: Discrepancy', fontweight='bold', color=color)
+
+        # Column 3: Stats
+        ax = axes_row[2]
+        ax.axis('off')
+
+        stype_name = ['Pure Normal', 'Disturbing Normal', 'Anomaly'][sample_type]
+        margin = score - threshold
+
+        stats_text = f"""
+{title_prefix}
+═══════════════════════════════
+
+Index: {idx}
+Type:  {stype_name}
+Label: {'Anomaly' if label == 1 else 'Normal'}
+
+Score:     {score:.6f}
+Threshold: {threshold:.6f}
+Margin:    {margin:+.6f}
+
+Anomaly in masked region:
+  {sum(point_labels[-self.config.mask_last_n:])} / {self.config.mask_last_n} points
+        """
+
+        ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
+               verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor=color, alpha=0.15))
+
+    def _get_optimal_threshold(self):
+        """Get the optimal threshold from ROC curve."""
+        from sklearn.metrics import roc_curve
+        fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
+        optimal_idx = np.argmax(tpr - fpr)
+        return thresholds[optimal_idx]
+
+    def _get_scores(self):
+        """Get scores array (from pred_data or compute from detailed_data)."""
+        return self.pred_data['scores']
+
     def generate_all(self, experiment_dir: str = None):
         """Generate all best model visualizations
 
@@ -2319,12 +3829,998 @@ class BestModelVisualizer:
         self.plot_reconstruction_examples()
         self.plot_detection_examples()
         self.plot_summary_statistics()
+        self.plot_pure_vs_disturbing_normal()
+        self.plot_discrepancy_trend()
+        self.plot_hypothesis_verification()
+
+        # Qualitative case studies
+        self.plot_case_study_gallery(experiment_dir)
+        self.plot_anomaly_type_case_studies(experiment_dir)
+        self.plot_feature_contribution_analysis()
+        self.plot_hardest_samples()
 
         # Anomaly type analysis (requires detailed results from experiment)
         self.plot_loss_by_anomaly_type(experiment_dir)
         self.plot_performance_by_anomaly_type(experiment_dir)
         self.plot_loss_scatter_by_anomaly_type(experiment_dir)
         self.plot_sample_type_analysis(experiment_dir)
+
+
+# =============================================================================
+# TrainingProgressVisualizer - Training Progress Analysis
+# =============================================================================
+
+class TrainingProgressVisualizer:
+    """Visualize how the model learns over training epochs
+
+    Re-trains the best model configuration and collects data at checkpoints
+    to visualize:
+    - Score distribution evolution
+    - Sample trajectory (how each sample's score changes)
+    - Metrics evolution (ROC-AUC, F1 over epochs)
+    - Late bloomer analysis (samples that were FN early but TP later)
+    - Anomaly type learning speed
+    """
+
+    def __init__(self, best_config: Dict, output_dir: str,
+                 checkpoint_epochs: List[int] = None,
+                 num_train: int = 2000, num_test: int = 500, max_epochs: int = 100):
+        """Initialize TrainingProgressVisualizer
+
+        Args:
+            best_config: Best model configuration dict
+            output_dir: Output directory for visualizations
+            checkpoint_epochs: Epochs at which to collect data
+            num_train: Number of training samples (Stage 2 default: 2000)
+            num_test: Number of test samples (Stage 2 default: 500)
+            max_epochs: Maximum epochs to train (Stage 2 default: 100)
+        """
+        self.best_config = best_config
+        self.output_dir = output_dir
+        self.num_train = num_train
+        self.num_test = num_test
+        self.max_epochs = max_epochs
+
+        if checkpoint_epochs is None:
+            self.checkpoint_epochs = [0, 5, 10, 20, 40, 60, 80, 100]
+        else:
+            self.checkpoint_epochs = checkpoint_epochs
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Will be populated by retrain_with_checkpoints()
+        self.checkpoint_data = {}
+        self.config = None
+
+    def retrain_with_checkpoints(self):
+        """Re-train the model and collect data at checkpoint epochs"""
+        from mae_anomaly.trainer import Trainer
+        from mae_anomaly.evaluator import Evaluator
+
+        print("\n  Re-training model with checkpoints...")
+        print(f"  Checkpoints at epochs: {self.checkpoint_epochs}")
+
+        # Create config from best_config
+        self.config = Config()
+        for key, value in self.best_config.items():
+            if hasattr(self.config, key):
+                setattr(self.config, key, value)
+
+        # Set Stage 2 settings
+        self.config.num_train_samples = self.num_train
+        self.config.num_test_samples = self.num_test
+        self.config.num_epochs = self.max_epochs
+
+        # Create datasets with same seeds as run_experiments.py
+        set_seed(self.config.random_seed)
+        generator = SlidingWindowTimeSeriesGenerator(
+            total_length=self.config.sliding_window_total_length,
+            num_features=self.config.num_features,
+            interval_scale=self.config.anomaly_interval_scale,
+            seed=self.config.random_seed
+        )
+        signals, point_labels, anomaly_regions = generator.generate()
+
+        train_dataset = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=self.config.seq_length,
+            stride=self.config.sliding_window_stride,
+            mask_last_n=10,
+            split='train',
+            train_ratio=0.5,
+            seed=self.config.random_seed
+        )
+
+        test_dataset = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=self.config.seq_length,
+            stride=self.config.sliding_window_stride,
+            mask_last_n=10,
+            split='test',
+            train_ratio=0.5,
+            target_counts={
+                'pure_normal': self.config.test_target_pure_normal,
+                'disturbing_normal': self.config.test_target_disturbing_normal,
+                'anomaly': self.config.test_target_anomaly
+            },
+            seed=self.config.random_seed
+        )
+
+        train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=self.config.batch_size, shuffle=False)
+
+        # Create model and trainer
+        model = SelfDistilledMAEMultivariate(self.config)
+        model = model.to(self.config.device)
+
+        trainer = Trainer(model, self.config, train_loader, test_loader, verbose=False)
+        evaluator = Evaluator(model, self.config, test_loader)
+
+        # Collect data at epoch 0 (before training)
+        print(f"  Collecting data at epoch 0 (before training)...")
+        self._collect_checkpoint_data(0, model, test_loader, evaluator)
+
+        # Train and collect at checkpoints
+        for epoch in range(self.max_epochs):
+            # Train one epoch (Trainer.train_epoch takes epoch index)
+            trainer.train_epoch(epoch)
+            trainer.scheduler.step()
+
+            actual_epoch = epoch + 1
+            if actual_epoch in self.checkpoint_epochs:
+                print(f"  Collecting data at epoch {actual_epoch}...")
+                self._collect_checkpoint_data(actual_epoch, model, test_loader, evaluator)
+
+        print(f"  Training complete! Collected {len(self.checkpoint_data)} checkpoints.")
+
+    def _collect_checkpoint_data(self, epoch: int, model, test_loader, evaluator):
+        """Collect data at a checkpoint epoch"""
+        model.eval()
+        device = self.config.device
+
+        # Compute scores using evaluator (same method as run_experiments.py)
+        scores, labels, sample_types, anomaly_types = evaluator.compute_anomaly_scores()
+
+        # Compute metrics
+        metrics = evaluator.evaluate()
+
+        # Collect detailed data for a subset of samples (for reconstruction visualization)
+        detailed_samples = self._collect_sample_details(model, test_loader, num_samples=20)
+
+        self.checkpoint_data[epoch] = {
+            'scores': scores,
+            'labels': labels,
+            'sample_types': sample_types,
+            'anomaly_types': anomaly_types,
+            'roc_auc': metrics['roc_auc'],
+            'f1_score': metrics['f1_score'],
+            'precision': metrics['precision'],
+            'recall': metrics['recall'],
+            'detailed_samples': detailed_samples
+        }
+
+    def _collect_sample_details(self, model, test_loader, num_samples: int = 20) -> Dict:
+        """Collect detailed reconstruction data for a subset of samples"""
+        model.eval()
+        device = self.config.device
+
+        originals = []
+        teacher_recons = []
+        student_recons = []
+        labels = []
+        sample_types = []
+        point_labels = []
+
+        collected = 0
+        with torch.no_grad():
+            for batch in test_loader:
+                sequences, last_patch_labels, pt_labels, st, _ = batch
+                sequences = sequences.to(device)
+                batch_size, seq_length, num_features = sequences.shape
+
+                # Create mask for last n positions
+                mask = torch.ones(batch_size, seq_length, device=device)
+                mask[:, -self.config.mask_last_n:] = 0
+
+                teacher_output, student_output, _ = model(sequences, masking_ratio=0.0, mask=mask)
+
+                for i in range(batch_size):
+                    if collected >= num_samples:
+                        break
+                    originals.append(sequences[i].cpu().numpy())
+                    teacher_recons.append(teacher_output[i].cpu().numpy())
+                    student_recons.append(student_output[i].cpu().numpy())
+                    labels.append(last_patch_labels[i].item())
+                    sample_types.append(st[i].item())
+                    point_labels.append(pt_labels[i].numpy())
+                    collected += 1
+
+                if collected >= num_samples:
+                    break
+
+        return {
+            'originals': np.array(originals),
+            'teacher_recons': np.array(teacher_recons),
+            'student_recons': np.array(student_recons),
+            'labels': np.array(labels),
+            'sample_types': np.array(sample_types),
+            'point_labels': np.array(point_labels)
+        }
+
+    def plot_score_evolution(self):
+        """Plot how score distributions evolve over training"""
+        epochs_to_plot = [e for e in self.checkpoint_epochs if e in self.checkpoint_data]
+
+        # Use 2x3 grid for 6 checkpoints
+        n_plots = min(6, len(epochs_to_plot))
+        if n_plots < 6:
+            indices = list(range(n_plots))
+        else:
+            # Select 6 evenly spaced epochs
+            indices = [0, 1, 2, len(epochs_to_plot)//2, -2, -1]
+            indices = sorted(set([i % len(epochs_to_plot) for i in indices]))[:6]
+
+        selected_epochs = [epochs_to_plot[i] for i in indices[:n_plots]]
+
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        axes = axes.flatten()
+
+        for idx, epoch in enumerate(selected_epochs):
+            if idx >= 6:
+                break
+            ax = axes[idx]
+            data = self.checkpoint_data[epoch]
+
+            normal_mask = data['labels'] == 0
+            anomaly_mask = data['labels'] == 1
+
+            # Histogram
+            ax.hist(data['scores'][normal_mask], bins=30, alpha=0.6,
+                   label=f'Normal (n={normal_mask.sum()})', color='#3498DB', density=True)
+            ax.hist(data['scores'][anomaly_mask], bins=30, alpha=0.6,
+                   label=f'Anomaly (n={anomaly_mask.sum()})', color='#E74C3C', density=True)
+
+            # Add vertical lines for means
+            ax.axvline(data['scores'][normal_mask].mean(), color='#3498DB', linestyle='--', lw=2)
+            ax.axvline(data['scores'][anomaly_mask].mean(), color='#E74C3C', linestyle='--', lw=2)
+
+            ax.set_xlabel('Anomaly Score')
+            ax.set_ylabel('Density')
+            ax.set_title(f'Epoch {epoch} (ROC-AUC: {data["roc_auc"]:.4f})', fontsize=12, fontweight='bold')
+            ax.legend(fontsize=8)
+
+        # Hide unused axes
+        for idx in range(n_plots, 6):
+            axes[idx].axis('off')
+
+        plt.suptitle('Score Distribution Evolution During Training\n'
+                    '(Normal=Blue, Anomaly=Red, Dashed=Mean)',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'score_evolution.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - score_evolution.png")
+
+    def plot_sample_trajectories(self):
+        """Plot how individual sample scores change over training"""
+        epochs = sorted(self.checkpoint_data.keys())
+        n_samples = len(self.checkpoint_data[epochs[0]]['scores'])
+
+        # Build score matrix: (n_samples, n_epochs)
+        score_matrix = np.zeros((n_samples, len(epochs)))
+        for i, epoch in enumerate(epochs):
+            score_matrix[:, i] = self.checkpoint_data[epoch]['scores']
+
+        labels = self.checkpoint_data[epochs[0]]['labels']
+        sample_types = self.checkpoint_data[epochs[0]]['sample_types']
+
+        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+        # Left: All samples with color by label
+        ax = axes[0]
+        for i in range(n_samples):
+            if labels[i] == 0:
+                color = '#3498DB'
+                alpha = 0.1
+            else:
+                color = '#E74C3C'
+                alpha = 0.3
+            ax.plot(epochs, score_matrix[i, :], color=color, alpha=alpha, lw=0.5)
+
+        # Add mean trajectories
+        normal_mean = score_matrix[labels == 0].mean(axis=0)
+        anomaly_mean = score_matrix[labels == 1].mean(axis=0)
+        ax.plot(epochs, normal_mean, color='#2980B9', lw=3, label='Normal Mean')
+        ax.plot(epochs, anomaly_mean, color='#C0392B', lw=3, label='Anomaly Mean')
+
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Anomaly Score')
+        ax.set_title('Sample Score Trajectories (Normal=Blue, Anomaly=Red)', fontweight='bold')
+        ax.legend()
+
+        # Right: By sample type (Pure Normal, Disturbing Normal, Anomaly)
+        ax = axes[1]
+        colors = {0: '#3498DB', 1: '#F39C12', 2: '#E74C3C'}
+        labels_map = {0: 'Pure Normal', 1: 'Disturbing Normal', 2: 'Anomaly'}
+
+        for stype in [0, 1, 2]:
+            mask = sample_types == stype
+            if mask.sum() > 0:
+                mean_traj = score_matrix[mask].mean(axis=0)
+                std_traj = score_matrix[mask].std(axis=0)
+                ax.plot(epochs, mean_traj, color=colors[stype], lw=2, label=f'{labels_map[stype]} (n={mask.sum()})')
+                ax.fill_between(epochs, mean_traj - std_traj, mean_traj + std_traj,
+                               color=colors[stype], alpha=0.2)
+
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Anomaly Score')
+        ax.set_title('Mean Score Trajectory by Sample Type (±1 std)', fontweight='bold')
+        ax.legend()
+
+        plt.suptitle('Learning Trajectories: How Scores Evolve During Training',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'sample_trajectories.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - sample_trajectories.png")
+
+    def plot_metrics_evolution(self):
+        """Plot how metrics evolve over training"""
+        epochs = sorted(self.checkpoint_data.keys())
+
+        roc_aucs = [self.checkpoint_data[e]['roc_auc'] for e in epochs]
+        f1_scores = [self.checkpoint_data[e]['f1_score'] for e in epochs]
+        precisions = [self.checkpoint_data[e]['precision'] for e in epochs]
+        recalls = [self.checkpoint_data[e]['recall'] for e in epochs]
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        # ROC-AUC
+        ax = axes[0, 0]
+        ax.plot(epochs, roc_aucs, 'o-', color='#E74C3C', lw=2, markersize=8)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('ROC-AUC')
+        ax.set_title('ROC-AUC Evolution', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([min(0.5, min(roc_aucs) - 0.05), 1.0])
+
+        # F1 Score
+        ax = axes[0, 1]
+        ax.plot(epochs, f1_scores, 'o-', color='#27AE60', lw=2, markersize=8)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('F1-Score')
+        ax.set_title('F1-Score Evolution', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        # Precision and Recall
+        ax = axes[1, 0]
+        ax.plot(epochs, precisions, 'o-', color='#3498DB', lw=2, markersize=8, label='Precision')
+        ax.plot(epochs, recalls, 's-', color='#9B59B6', lw=2, markersize=8, label='Recall')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Score')
+        ax.set_title('Precision & Recall Evolution', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # All metrics together
+        ax = axes[1, 1]
+        ax.plot(epochs, roc_aucs, 'o-', lw=2, label='ROC-AUC')
+        ax.plot(epochs, f1_scores, 's-', lw=2, label='F1-Score')
+        ax.plot(epochs, precisions, '^-', lw=2, label='Precision')
+        ax.plot(epochs, recalls, 'v-', lw=2, label='Recall')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Score')
+        ax.set_title('All Metrics Combined', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        plt.suptitle('Model Performance Metrics Over Training',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'metrics_evolution.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - metrics_evolution.png")
+
+    def plot_late_bloomer_analysis(self):
+        """Analyze samples that changed classification status over training.
+
+        Late bloomers include:
+        - Anomalies: FN → TP (missed at start, detected at end)
+        - Normals: FP → TN (false alarm at start, correct at end)
+
+        Uses per-epoch optimal thresholds for fair comparison.
+        """
+        epochs = sorted(self.checkpoint_data.keys())
+        first_epoch = epochs[0]
+        last_epoch = epochs[-1]
+
+        first_data = self.checkpoint_data[first_epoch]
+        last_data = self.checkpoint_data[last_epoch]
+
+        # Calculate per-epoch optimal thresholds
+        def get_optimal_threshold(data):
+            fpr, tpr, thresholds = roc_curve(data['labels'], data['scores'])
+            optimal_idx = np.argmax(tpr - fpr)
+            return thresholds[optimal_idx]
+
+        first_threshold = get_optimal_threshold(first_data)
+        last_threshold = get_optimal_threshold(last_data)
+
+        # Get predictions using per-epoch thresholds
+        first_preds = (first_data['scores'] >= first_threshold).astype(int)
+        last_preds = (last_data['scores'] >= last_threshold).astype(int)
+
+        # Late bloomer anomalies: FN → TP
+        late_bloomer_anomalies = np.where(
+            (first_data['labels'] == 1) &  # True anomaly
+            (first_preds == 0) &  # Predicted normal at first
+            (last_preds == 1)  # Predicted anomaly at last
+        )[0]
+
+        # Late bloomer normals: FP → TN (false alarm corrected)
+        late_bloomer_normals = np.where(
+            (first_data['labels'] == 0) &  # True normal
+            (first_preds == 1) &  # Predicted anomaly at first (FP)
+            (last_preds == 0)  # Predicted normal at last (TN)
+        )[0]
+
+        # Persistent FN: Still missed at last epoch
+        persistent_fn = np.where(
+            (first_data['labels'] == 1) &  # True anomaly
+            (last_preds == 0)  # Still predicted normal at last
+        )[0]
+
+        # Early correct anomalies: TP from the start
+        early_correct_anomalies = np.where(
+            (first_data['labels'] == 1) &
+            (first_preds == 1) &
+            (last_preds == 1)
+        )[0]
+
+        print(f"  Found {len(late_bloomer_anomalies)} late bloomer anomalies (FN→TP)")
+        print(f"  Found {len(late_bloomer_normals)} late bloomer normals (FP→TN)")
+
+        # Build score matrix and threshold trajectory
+        n_samples = len(self.checkpoint_data[epochs[0]]['scores'])
+        score_matrix = np.zeros((n_samples, len(epochs)))
+        thresholds_by_epoch = []
+        for i, epoch in enumerate(epochs):
+            data = self.checkpoint_data[epoch]
+            score_matrix[:, i] = data['scores']
+            thresholds_by_epoch.append(get_optimal_threshold(data))
+
+        fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+
+        # 1. Late bloomer anomaly trajectories (FN → TP)
+        ax = axes[0, 0]
+        ax.plot(epochs, thresholds_by_epoch, 'k--', lw=2, alpha=0.7, label='Threshold')
+        if len(late_bloomer_anomalies) > 0:
+            for i in late_bloomer_anomalies[:15]:
+                ax.plot(epochs, score_matrix[i, :], alpha=0.6, lw=1.5)
+            ax.set_title(f'Late Bloomer Anomalies (FN→TP): n={len(late_bloomer_anomalies)}', fontweight='bold')
+        else:
+            ax.text(0.5, 0.5, 'No FN→TP transitions found', ha='center', va='center', transform=ax.transAxes, fontsize=12)
+            ax.set_title('Late Bloomer Anomalies (FN→TP)', fontweight='bold')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Anomaly Score')
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+
+        # 2. Late bloomer normals trajectories (FP → TN)
+        ax = axes[0, 1]
+        ax.plot(epochs, thresholds_by_epoch, 'k--', lw=2, alpha=0.7, label='Threshold')
+        if len(late_bloomer_normals) > 0:
+            for i in late_bloomer_normals[:15]:
+                ax.plot(epochs, score_matrix[i, :], alpha=0.6, lw=1.5, color='#F39C12')
+            ax.set_title(f'Late Bloomer Normals (FP→TN): n={len(late_bloomer_normals)}', fontweight='bold')
+        else:
+            ax.text(0.5, 0.5, 'No FP→TN transitions found', ha='center', va='center', transform=ax.transAxes, fontsize=12)
+            ax.set_title('Late Bloomer Normals (FP→TN)', fontweight='bold')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Anomaly Score')
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+
+        # 3. Persistent FN trajectories
+        ax = axes[0, 2]
+        ax.plot(epochs, thresholds_by_epoch, 'k--', lw=2, alpha=0.7, label='Threshold')
+        if len(persistent_fn) > 0:
+            for i in persistent_fn[:15]:
+                ax.plot(epochs, score_matrix[i, :], alpha=0.6, lw=1.5, color='#E74C3C')
+            ax.set_title(f'Persistent FN (Always Missed): n={len(persistent_fn)}', fontweight='bold')
+        else:
+            ax.text(0.5, 0.5, 'No persistent FN found', ha='center', va='center', transform=ax.transAxes, fontsize=12)
+            ax.set_title('Persistent FN Trajectories', fontweight='bold')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Anomaly Score')
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+
+        # 4. Detection metrics evolution with per-epoch thresholds
+        ax = axes[1, 0]
+        detection_rates = []
+        false_alarm_rates = []
+        for i, epoch in enumerate(epochs):
+            data = self.checkpoint_data[epoch]
+            thresh = thresholds_by_epoch[i]
+            preds = (data['scores'] >= thresh).astype(int)
+            anomaly_mask = data['labels'] == 1
+            normal_mask = data['labels'] == 0
+            if anomaly_mask.sum() > 0:
+                detection_rates.append((preds[anomaly_mask] == 1).sum() / anomaly_mask.sum() * 100)
+            else:
+                detection_rates.append(0)
+            if normal_mask.sum() > 0:
+                false_alarm_rates.append((preds[normal_mask] == 1).sum() / normal_mask.sum() * 100)
+            else:
+                false_alarm_rates.append(0)
+
+        ax.plot(epochs, detection_rates, 'o-', color='#E74C3C', lw=2, markersize=8, label='Detection Rate (TPR)')
+        ax.plot(epochs, false_alarm_rates, 's-', color='#3498DB', lw=2, markersize=8, label='False Alarm Rate (FPR)')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Rate (%)')
+        ax.set_title('Detection & False Alarm Rate Over Training', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, 105])
+
+        # 5. Threshold evolution
+        ax = axes[1, 1]
+        ax.plot(epochs, thresholds_by_epoch, 'o-', color='#27AE60', lw=2, markersize=8)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Optimal Threshold')
+        ax.set_title('Optimal Threshold Evolution', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        # 6. Summary statistics
+        ax = axes[1, 2]
+        ax.axis('off')
+
+        # Count all transitions
+        total_anomalies = (first_data['labels'] == 1).sum()
+        total_normals = (first_data['labels'] == 0).sum()
+
+        tp_at_start = ((first_data['labels'] == 1) & (first_preds == 1)).sum()
+        tp_at_end = ((last_data['labels'] == 1) & (last_preds == 1)).sum()
+        fp_at_start = ((first_data['labels'] == 0) & (first_preds == 1)).sum()
+        fp_at_end = ((last_data['labels'] == 0) & (last_preds == 1)).sum()
+
+        summary_text = f"""
+Late Bloomer Analysis Summary (Per-Epoch Thresholds)
+═══════════════════════════════════════════════════════════
+
+Thresholds:
+  • Epoch {first_epoch}: {first_threshold:.4f}
+  • Epoch {last_epoch}: {last_threshold:.4f}
+
+Anomaly Detection (n={total_anomalies}):
+  ┌─────────────────────────────────────────┐
+  │ Epoch {first_epoch:3d}    │ Epoch {last_epoch:3d}    │ Count  │
+  ├─────────────────────────────────────────┤
+  │ TP         │ TP         │ {len(early_correct_anomalies):5d}  │ (Always Correct)
+  │ FN         │ TP         │ {len(late_bloomer_anomalies):5d}  │ (Late Bloomer)
+  │ FN         │ FN         │ {len(persistent_fn):5d}  │ (Persistent Miss)
+  └─────────────────────────────────────────┘
+
+Normal Classification (n={total_normals}):
+  • FP→TN (Late Bloomer):  {len(late_bloomer_normals):5d}
+  • FP at start:          {fp_at_start:5d}
+  • FP at end:            {fp_at_end:5d}
+
+Performance Improvement:
+  • Detection Rate: {detection_rates[0]:.1f}% → {detection_rates[-1]:.1f}%  ({detection_rates[-1]-detection_rates[0]:+.1f}%)
+  • False Alarm:    {false_alarm_rates[0]:.1f}% → {false_alarm_rates[-1]:.1f}%  ({false_alarm_rates[-1]-false_alarm_rates[0]:+.1f}%)
+        """
+
+        ax.text(0.02, 0.98, summary_text, transform=ax.transAxes, fontsize=10,
+               verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+
+        plt.suptitle('Late Bloomer Analysis: Samples That Changed Classification Over Training\n'
+                    '(Using Per-Epoch Optimal Thresholds)',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'late_bloomer_analysis.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - late_bloomer_analysis.png")
+
+    def plot_anomaly_type_learning(self):
+        """Plot how detection improves for each anomaly type over training"""
+        epochs = sorted(self.checkpoint_data.keys())
+        last_data = self.checkpoint_data[epochs[-1]]
+
+        # Get threshold
+        fpr, tpr, thresholds = roc_curve(last_data['labels'], last_data['scores'])
+        optimal_idx = np.argmax(tpr - fpr)
+        threshold = thresholds[optimal_idx]
+
+        # Anomaly type names (from dataset.py)
+        anomaly_type_names = ['normal', 'spike', 'memory_leak', 'noise', 'drift', 'network_congestion']
+
+        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+        # 1. Detection rate by anomaly type over epochs
+        ax = axes[0]
+        colors = ['#3498DB', '#E74C3C', '#F39C12', '#9B59B6', '#1ABC9C', '#E67E22']
+
+        for atype_idx, atype_name in enumerate(anomaly_type_names[1:], start=1):  # Skip normal
+            detection_rates = []
+            for epoch in epochs:
+                data = self.checkpoint_data[epoch]
+                mask = data['anomaly_types'] == atype_idx
+                if mask.sum() > 0:
+                    preds = (data['scores'][mask] >= threshold).astype(int)
+                    detection_rates.append(preds.sum() / mask.sum() * 100)
+                else:
+                    detection_rates.append(np.nan)
+
+            ax.plot(epochs, detection_rates, 'o-', lw=2, markersize=6,
+                   label=f'{atype_name} (n={mask.sum()})', color=colors[atype_idx])
+
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Detection Rate (%)')
+        ax.set_title('Detection Rate by Anomaly Type Over Training', fontweight='bold')
+        ax.legend(loc='lower right')
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, 105])
+
+        # 2. Mean score by anomaly type over epochs
+        ax = axes[1]
+
+        for atype_idx, atype_name in enumerate(anomaly_type_names[1:], start=1):
+            mean_scores = []
+            for epoch in epochs:
+                data = self.checkpoint_data[epoch]
+                mask = data['anomaly_types'] == atype_idx
+                if mask.sum() > 0:
+                    mean_scores.append(data['scores'][mask].mean())
+                else:
+                    mean_scores.append(np.nan)
+
+            ax.plot(epochs, mean_scores, 'o-', lw=2, markersize=6,
+                   label=atype_name, color=colors[atype_idx])
+
+        # Add normal for comparison
+        normal_scores = []
+        for epoch in epochs:
+            data = self.checkpoint_data[epoch]
+            mask = data['labels'] == 0
+            if mask.sum() > 0:
+                normal_scores.append(data['scores'][mask].mean())
+            else:
+                normal_scores.append(np.nan)
+        ax.plot(epochs, normal_scores, 'o--', lw=2, markersize=6, label='Normal', color='#3498DB')
+
+        ax.axhline(y=threshold, color='green', linestyle='--', lw=2, alpha=0.7, label='Threshold')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Mean Anomaly Score')
+        ax.set_title('Mean Score by Anomaly Type Over Training', fontweight='bold')
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+
+        plt.suptitle('Anomaly Type Learning: Which Types Are Easier/Harder to Detect?',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'anomaly_type_learning.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - anomaly_type_learning.png")
+
+    def plot_reconstruction_evolution(self):
+        """Show how reconstruction quality improves for specific samples.
+
+        Enhanced version showing:
+        - Original signal
+        - Teacher reconstruction
+        - Student reconstruction
+        - Teacher-Student discrepancy (key for anomaly detection)
+        """
+        epochs = sorted(self.checkpoint_data.keys())
+
+        # Select epochs to show
+        if len(epochs) >= 4:
+            show_epochs = [epochs[0], epochs[len(epochs)//3], epochs[2*len(epochs)//3], epochs[-1]]
+        else:
+            show_epochs = epochs
+
+        # Get detailed samples
+        first_details = self.checkpoint_data[epochs[0]]['detailed_samples']
+
+        # Find anomaly samples
+        anomaly_indices = np.where(first_details['labels'] == 1)[0]
+
+        if len(anomaly_indices) == 0:
+            print("  ! Skipping reconstruction_evolution (no anomaly samples)")
+            return
+
+        # Select up to 2 anomaly samples for better visualization
+        selected_indices = anomaly_indices[:2]
+
+        # Create figure: 2 rows per sample (reconstruction + discrepancy)
+        n_samples = len(selected_indices)
+        fig, axes = plt.subplots(n_samples * 2, len(show_epochs), figsize=(5*len(show_epochs), 3*n_samples*2))
+
+        if n_samples == 1:
+            axes = axes.reshape(2, -1)
+
+        for sample_num, sample_idx in enumerate(selected_indices):
+            original = first_details['originals'][sample_idx, :, 0]  # First feature
+            point_labels = first_details['point_labels'][sample_idx]
+
+            for col, epoch in enumerate(show_epochs):
+                details = self.checkpoint_data[epoch]['detailed_samples']
+
+                teacher_recon = details['teacher_recons'][sample_idx, :, 0]
+                student_recon = details['student_recons'][sample_idx, :, 0]
+
+                # Row 1: Reconstruction comparison
+                ax = axes[sample_num * 2, col]
+
+                ax.plot(original, 'b-', alpha=0.7, lw=1.2, label='Original')
+                ax.plot(teacher_recon, 'g--', alpha=0.8, lw=1.5, label='Teacher')
+                ax.plot(student_recon, 'r:', alpha=0.8, lw=1.5, label='Student')
+
+                # Highlight anomaly region
+                anomaly_region = np.where(point_labels == 1)[0]
+                if len(anomaly_region) > 0:
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.15, color='red')
+
+                # Highlight last patch (masked region)
+                ax.axvspan(len(original) - self.config.mask_last_n, len(original),
+                          alpha=0.15, color='yellow')
+
+                # Compute metrics in masked region
+                masked_region = slice(-self.config.mask_last_n, None)
+                teacher_mse = np.mean((original[masked_region] - teacher_recon[masked_region])**2)
+                student_mse = np.mean((original[masked_region] - student_recon[masked_region])**2)
+
+                ax.set_title(f'Epoch {epoch}\nT-MSE: {teacher_mse:.4f}, S-MSE: {student_mse:.4f}', fontsize=9)
+                if col == 0:
+                    ax.set_ylabel(f'Sample {sample_idx}\nReconstruction', fontsize=9)
+                if sample_num == 0 and col == len(show_epochs) - 1:
+                    ax.legend(fontsize=7, loc='upper right')
+
+                # Row 2: Discrepancy (Teacher - Student)
+                ax = axes[sample_num * 2 + 1, col]
+
+                # Point-level discrepancy
+                discrepancy = np.abs(teacher_recon - student_recon)
+                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#9B59B6', label='|T-S| Discrepancy')
+                ax.plot(discrepancy, color='#8E44AD', lw=1)
+
+                # Highlight regions
+                if len(anomaly_region) > 0:
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.15, color='red')
+                ax.axvspan(len(original) - self.config.mask_last_n, len(original),
+                          alpha=0.15, color='yellow')
+
+                # Compute discrepancy in masked region
+                masked_disc = np.mean(discrepancy[masked_region])
+                full_disc = np.mean(discrepancy)
+
+                ax.set_title(f'Discrepancy\nMasked: {masked_disc:.4f}, Full: {full_disc:.4f}', fontsize=9)
+                if col == 0:
+                    ax.set_ylabel(f'Sample {sample_idx}\nDiscrepancy', fontsize=9)
+                if sample_num == n_samples - 1:
+                    ax.set_xlabel('Time Step')
+                if sample_num == 0 and col == len(show_epochs) - 1:
+                    ax.legend(fontsize=7, loc='upper right')
+
+        plt.suptitle('Reconstruction & Discrepancy Evolution for Anomaly Samples\n'
+                    '(Yellow=Masked Region, Red=Anomaly Region)\n'
+                    'Key Insight: Discrepancy should increase in masked anomaly regions as training progresses',
+                    fontsize=12, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'reconstruction_evolution.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - reconstruction_evolution.png")
+
+    def plot_decision_boundary_evolution(self):
+        """Show how the decision boundary (threshold) evolves"""
+        epochs = sorted(self.checkpoint_data.keys())
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        # 1. Optimal threshold over epochs
+        ax = axes[0]
+        thresholds = []
+        for epoch in epochs:
+            data = self.checkpoint_data[epoch]
+            fpr, tpr, ths = roc_curve(data['labels'], data['scores'])
+            optimal_idx = np.argmax(tpr - fpr)
+            thresholds.append(ths[optimal_idx])
+
+        ax.plot(epochs, thresholds, 'o-', color='#27AE60', lw=2, markersize=8)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Optimal Threshold')
+        ax.set_title('Optimal Threshold Evolution', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        # 2. Score separation over epochs
+        ax = axes[1]
+        separations = []
+        for epoch in epochs:
+            data = self.checkpoint_data[epoch]
+            normal_mean = data['scores'][data['labels'] == 0].mean()
+            anomaly_mean = data['scores'][data['labels'] == 1].mean()
+            separations.append(anomaly_mean - normal_mean)
+
+        ax.plot(epochs, separations, 'o-', color='#9B59B6', lw=2, markersize=8)
+        ax.axhline(y=0, color='black', linestyle='-', lw=1)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Score Separation (Anomaly Mean - Normal Mean)')
+        ax.set_title('Score Separation Evolution', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        plt.suptitle('Decision Boundary Analysis: How Separation Improves',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'decision_boundary_evolution.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - decision_boundary_evolution.png")
+
+    def plot_late_bloomer_case_studies(self):
+        """Generate detailed case studies of late bloomer samples.
+
+        Shows time series, reconstruction, and discrepancy evolution for
+        samples that transitioned from incorrect to correct classification.
+        """
+        epochs = sorted(self.checkpoint_data.keys())
+        first_epoch = epochs[0]
+        last_epoch = epochs[-1]
+
+        first_data = self.checkpoint_data[first_epoch]
+        last_data = self.checkpoint_data[last_epoch]
+
+        # Per-epoch thresholds
+        def get_optimal_threshold(data):
+            fpr, tpr, thresholds = roc_curve(data['labels'], data['scores'])
+            optimal_idx = np.argmax(tpr - fpr)
+            return thresholds[optimal_idx]
+
+        first_threshold = get_optimal_threshold(first_data)
+        last_threshold = get_optimal_threshold(last_data)
+
+        first_preds = (first_data['scores'] >= first_threshold).astype(int)
+        last_preds = (last_data['scores'] >= last_threshold).astype(int)
+
+        # Find late bloomer anomalies (FN → TP)
+        late_bloomer_anomalies = np.where(
+            (first_data['labels'] == 1) &
+            (first_preds == 0) &
+            (last_preds == 1)
+        )[0]
+
+        if len(late_bloomer_anomalies) == 0:
+            print("  ! Skipping late_bloomer_case_studies (no late bloomers found)")
+            return
+
+        # Get detailed samples - check how many we have
+        first_details = self.checkpoint_data[epochs[0]]['detailed_samples']
+        n_detailed = len(first_details['originals'])
+
+        # Filter late bloomers to only those in detailed samples
+        valid_late_bloomers = [idx for idx in late_bloomer_anomalies if idx < n_detailed]
+
+        if len(valid_late_bloomers) == 0:
+            print(f"  ! Skipping late_bloomer_case_studies (late bloomers not in detailed samples, need idx < {n_detailed})")
+            return
+
+        # Select up to 3 late bloomers with most interesting score trajectories
+        n_samples = min(3, len(valid_late_bloomers))
+        selected_indices = valid_late_bloomers[:n_samples]
+
+        print(f"  Plotting {n_samples} late bloomer case studies...")
+
+        # Select epochs to show
+        if len(epochs) >= 4:
+            show_epochs = [epochs[0], epochs[len(epochs)//3], epochs[2*len(epochs)//3], epochs[-1]]
+        else:
+            show_epochs = epochs
+
+        fig, axes = plt.subplots(n_samples * 3, len(show_epochs), figsize=(5*len(show_epochs), 4*n_samples*3))
+
+        if n_samples == 1:
+            axes = axes.reshape(3, -1)
+
+        for sample_num, sample_idx in enumerate(selected_indices):
+            # Get sample data from first epoch (sample_idx is already validated)
+            original = first_details['originals'][sample_idx, :, 0]
+            point_labels = first_details['point_labels'][sample_idx]
+            anomaly_region = np.where(point_labels == 1)[0]
+
+            for col, epoch in enumerate(show_epochs):
+                details = self.checkpoint_data[epoch]['detailed_samples']
+
+                teacher_recon = details['teacher_recons'][sample_idx, :, 0]
+                student_recon = details['student_recons'][sample_idx, :, 0]
+
+                # Get threshold and prediction for this epoch
+                data = self.checkpoint_data[epoch]
+                epoch_thresh = get_optimal_threshold(data)
+                epoch_pred = 'Detected' if data['scores'][sample_idx] >= epoch_thresh else 'Missed'
+                epoch_score = data['scores'][sample_idx]
+
+                # Row 1: Time series with reconstruction
+                ax = axes[sample_num * 3, col]
+                ax.plot(original, 'b-', lw=1.2, alpha=0.8, label='Original')
+                ax.plot(teacher_recon, 'g--', lw=1.5, alpha=0.7, label='Teacher')
+                ax.plot(student_recon, 'r:', lw=1.5, alpha=0.7, label='Student')
+
+                if len(anomaly_region) > 0:
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
+                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+
+                pred_color = '#27AE60' if epoch_pred == 'Detected' else '#E74C3C'
+                ax.set_title(f'Epoch {epoch}: {epoch_pred}\nScore: {epoch_score:.4f} (Thresh: {epoch_thresh:.4f})',
+                           fontsize=9, color=pred_color, fontweight='bold')
+                if col == 0:
+                    ax.set_ylabel(f'Late Bloomer #{sample_num+1}\nTime Series', fontsize=9)
+                if sample_num == 0 and col == len(show_epochs) - 1:
+                    ax.legend(fontsize=7, loc='upper right')
+
+                # Row 2: Discrepancy
+                ax = axes[sample_num * 3 + 1, col]
+                discrepancy = np.abs(teacher_recon - student_recon)
+                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#9B59B6')
+                ax.plot(discrepancy, color='#8E44AD', lw=1)
+
+                if len(anomaly_region) > 0:
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
+                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+
+                masked_disc = np.mean(discrepancy[-self.config.mask_last_n:])
+                ax.set_title(f'Discrepancy (Masked Mean: {masked_disc:.4f})', fontsize=9)
+                if col == 0:
+                    ax.set_ylabel(f'Late Bloomer #{sample_num+1}\n|T-S|', fontsize=9)
+
+                # Row 3: Reconstruction error profile
+                ax = axes[sample_num * 3 + 2, col]
+                teacher_err = np.abs(original - teacher_recon)
+                student_err = np.abs(original - student_recon)
+
+                ax.plot(teacher_err, 'g-', lw=1.2, alpha=0.8, label='Teacher Error')
+                ax.plot(student_err, 'r-', lw=1.2, alpha=0.8, label='Student Error')
+
+                if len(anomaly_region) > 0:
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
+                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+
+                if col == 0:
+                    ax.set_ylabel(f'Late Bloomer #{sample_num+1}\nRecon Error', fontsize=9)
+                if sample_num == n_samples - 1:
+                    ax.set_xlabel('Time Step')
+                if sample_num == 0 and col == len(show_epochs) - 1:
+                    ax.legend(fontsize=7, loc='upper right')
+
+        plt.suptitle('Late Bloomer Case Studies: Samples That Learned to Be Detected\n'
+                    '(FN at start → TP at end)\n'
+                    'Yellow=Masked Region, Red=Anomaly Region',
+                    fontsize=12, fontweight='bold', y=1.01)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'late_bloomer_case_studies.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - late_bloomer_case_studies.png")
+
+    def generate_all(self):
+        """Generate all training progress visualizations"""
+        print("\n  Generating Training Progress Visualizations...")
+
+        # First, retrain with checkpoints
+        self.retrain_with_checkpoints()
+
+        # Then generate all plots
+        self.plot_score_evolution()
+        self.plot_sample_trajectories()
+        self.plot_metrics_evolution()
+        self.plot_late_bloomer_analysis()
+        self.plot_late_bloomer_case_studies()  # NEW: Detailed case studies
+        self.plot_anomaly_type_learning()
+        self.plot_reconstruction_evolution()
+        self.plot_decision_boundary_evolution()
 
 
 # =============================================================================
@@ -2350,6 +4846,8 @@ def main():
                        help='Skip experiment result visualizations')
     parser.add_argument('--skip-model', action='store_true',
                        help='Skip best model visualizations')
+    parser.add_argument('--retrain', action='store_true',
+                       help='Re-train best model to visualize learning progress (takes ~10 min)')
     args = parser.parse_args()
 
     print("="*80)
@@ -2392,8 +4890,8 @@ def main():
             if hasattr(config, key):
                 setattr(config, key, value)
 
-    # Get param keys
-    param_keys = ['masking_ratio', 'num_patches', 'margin', 'lambda_disc',
+    # Get param keys (margin and lambda_disc are fixed, not in grid search)
+    param_keys = ['masking_ratio', 'masking_strategy', 'num_patches',
                   'margin_type', 'force_mask_anomaly', 'patch_level_loss', 'patchify_mode']
 
     # 1. Data Visualizations
@@ -2431,6 +4929,19 @@ def main():
         model, config, test_loader, _ = load_best_model(exp_data['model_path'], args.num_test)
         best_vis = BestModelVisualizer(model, config, test_loader, best_dir)
         best_vis.generate_all(experiment_dir=experiment_dir)
+
+    # 6. Training Progress Visualizations (requires re-training)
+    if args.retrain and exp_data['best_config']:
+        progress_dir = os.path.join(vis_dir, 'training_progress')
+        progress_vis = TrainingProgressVisualizer(
+            best_config=exp_data['best_config'],
+            output_dir=progress_dir,
+            checkpoint_epochs=[0, 5, 10, 20, 40, 60, 80, 100],
+            num_train=2000,  # Stage 2 settings
+            num_test=500,
+            max_epochs=100
+        )
+        progress_vis.generate_all()
 
     print("\n" + "="*80)
     print(" " * 20 + "ALL VISUALIZATIONS COMPLETE!")

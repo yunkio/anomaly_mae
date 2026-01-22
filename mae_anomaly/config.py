@@ -14,11 +14,22 @@ class Config:
     """Configuration for MAE anomaly detection experiments"""
     # Data parameters
     seq_length: int = 100
-    num_features: int = 5  # Multivariate: 5 features
-    num_train_samples: int = 10000  # 5x increase
-    num_test_samples: int = 2500  # 5x increase
-    train_anomaly_ratio: float = 0.05
+    num_features: int = 8  # Multivariate: 8 features (expanded for sliding window dataset)
+    num_train_samples: int = 10000  # (for legacy dataset)
+    num_test_samples: int = 2500  # (for legacy dataset)
+    train_anomaly_ratio: float = 0.05  # ~5% anomaly in train
     test_anomaly_ratio: float = 0.25
+
+    # Sliding window dataset parameters
+    use_sliding_window_dataset: bool = True  # Use new sliding window dataset
+    sliding_window_total_length: int = 440000  # Total length of long time series (1/5 of original 2.2M)
+    sliding_window_stride: int = 10  # Stride for window extraction (overlapping windows)
+    anomaly_interval_scale: float = 1.5  # Scale factor for anomaly intervals (tuned for ~5% anomaly)
+
+    # Test set target counts (for downsampling)
+    test_target_pure_normal: int = 1200
+    test_target_disturbing_normal: int = 300
+    test_target_anomaly: int = 500
 
     # Model parameters
     d_model: int = 64
