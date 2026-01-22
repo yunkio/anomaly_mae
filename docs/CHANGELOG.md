@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-01-23 (Update 20): Quick Search Dataset Configuration
+
+### Changes
+- `quick_length`: 100,000 → 200,000 timesteps
+- `quick_train_ratio`: 0.3 → 0.2 (20% train, 80% test)
+- "Anomaly Types" → "Anomaly Types (samples)" for clarity
+- Removed sample count warning messages
+
+### Files Modified
+- `scripts/run_experiments.py`
+- `mae_anomaly/dataset_sliding.py`
+
+---
+
 ## 2026-01-23 (Update 19): Enhanced Dataset Statistics Display
 
 ### Changes

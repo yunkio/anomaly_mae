@@ -42,7 +42,6 @@ ANOMALY_TYPE_NAMES = [
 ANOMALY_TYPES = {name: idx for idx, name in enumerate(ANOMALY_TYPE_NAMES)}
 NUM_FEATURES = len(FEATURE_NAMES)
 NUM_ANOMALY_TYPES = len(ANOMALY_TYPE_NAMES) - 1  # Exclude 'normal'
-MIN_SAMPLE_WARNING_THRESHOLD = 300  # Only warn if sample count below this
 
 # Per-anomaly-type configuration: (length_min, length_max, interval_mean)
 # Designed based on realistic characteristics of each anomaly type
@@ -956,18 +955,12 @@ class SlidingWindowDataset(Dataset):
             target_disturb = target_counts.get('disturbing_normal', len(disturb_indices))
             target_anomaly = target_counts.get('anomaly', len(anomaly_indices))
 
-            # Check if we have enough samples (warn only if below threshold)
+            # Adjust targets if not enough samples available
             if len(anomaly_indices) < target_anomaly:
-                if len(anomaly_indices) < MIN_SAMPLE_WARNING_THRESHOLD:
-                    print(f"Warning: Not enough anomaly samples ({len(anomaly_indices)} < {MIN_SAMPLE_WARNING_THRESHOLD})")
                 target_anomaly = len(anomaly_indices)
             if len(disturb_indices) < target_disturb:
-                if len(disturb_indices) < MIN_SAMPLE_WARNING_THRESHOLD:
-                    print(f"Warning: Not enough disturbing samples ({len(disturb_indices)} < {MIN_SAMPLE_WARNING_THRESHOLD})")
                 target_disturb = len(disturb_indices)
             if len(pure_indices) < target_pure:
-                if len(pure_indices) < MIN_SAMPLE_WARNING_THRESHOLD:
-                    print(f"Warning: Not enough pure normal samples ({len(pure_indices)} < {MIN_SAMPLE_WARNING_THRESHOLD})")
                 target_pure = len(pure_indices)
 
             # Sample from each category

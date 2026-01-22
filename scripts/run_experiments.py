@@ -125,7 +125,7 @@ class ExperimentRunner:
         full_length = full_length or config.sliding_window_total_length
 
         # Store train_ratio settings for quick/full search
-        self.quick_train_ratio = 0.3  # 30% train, 70% test for quick search
+        self.quick_train_ratio = 0.2  # 20% train, 80% test for quick search
         self.full_train_ratio = 0.5   # 50% train, 50% test for full search
 
         # Configure normal data complexity (default: enabled with all features)
@@ -241,7 +241,7 @@ class ExperimentRunner:
         print(f"    - Disturbing Normal: {train_disturb:,} ({100*train_disturb/train_total:.1f}%)")
         print(f"    - Anomaly:           {train_anomaly:,} ({100*train_anomaly/train_total:.1f}%)")
         print(f"    - Total:             {train_total:,}")
-        print(f"    Anomaly Types:")
+        print(f"    Anomaly Types (samples):")
         print_anomaly_types(get_anomaly_type_counts(temp_train.anomaly_type_labels), "      ")
 
         # ========== 2. Test Set (Raw) ==========
@@ -268,7 +268,7 @@ class ExperimentRunner:
         print(f"    - Disturbing Normal: {test_raw_disturb:,} ({100*test_raw_disturb/test_raw_total:.1f}%)")
         print(f"    - Anomaly:           {test_raw_anomaly:,} ({100*test_raw_anomaly/test_raw_total:.1f}%)")
         print(f"    - Total:             {test_raw_total:,}")
-        print(f"    Anomaly Types:")
+        print(f"    Anomaly Types (samples):")
         print_anomaly_types(get_anomaly_type_counts(temp_test_raw.anomaly_type_labels), "      ")
 
         # ========== 3. Test Set (Downsampled) ==========
@@ -304,7 +304,7 @@ class ExperimentRunner:
         print(f"    - Disturbing Normal: {test_ds_disturb:,} ({100*test_ds_disturb/test_ds_total:.1f}%)")
         print(f"    - Anomaly:           {test_ds_anomaly:,} ({100*test_ds_anomaly/test_ds_total:.1f}%)")
         print(f"    - Total:             {test_ds_total:,}")
-        print(f"    Anomaly Types:")
+        print(f"    Anomaly Types (samples):")
         print_anomaly_types(get_anomaly_type_counts(temp_test_ds.anomaly_type_labels), "      ")
 
         # Clean up
@@ -1040,7 +1040,7 @@ def run_experiments(
     full_epochs: int = 2,
     full_train: int = 2000,
     full_test: int = 500,
-    quick_length: int = 100000,  # Quick search dataset
+    quick_length: int = 200000,  # Quick search dataset
     full_length: int = 440000,   # Full search dataset
     two_stage: bool = True,
     use_complexity: bool = True,
@@ -1136,7 +1136,7 @@ if __name__ == "__main__":
     parser.add_argument('--full-epochs', type=int, default=2, help='Epochs for full search')
     parser.add_argument('--full-train', type=int, default=2000, help='Training samples for full search')
     parser.add_argument('--full-test', type=int, default=500, help='Test samples for full search')
-    parser.add_argument('--quick-length', type=int, default=100000, help='Time series length for quick search dataset')
+    parser.add_argument('--quick-length', type=int, default=200000, help='Time series length for quick search dataset')
     parser.add_argument('--full-length', type=int, default=440000, help='Time series length for full search dataset')
     parser.add_argument('--no-two-stage', action='store_true', help='Disable two-stage search')
     parser.add_argument('--no-complexity', action='store_true', help='Disable normal data complexity features')
