@@ -70,12 +70,62 @@ class AnomalyRegion:
     anomaly_type: int  # 1-7 (not 0, which is normal)
 
 
+@dataclass
+class NormalDataComplexity:
+    """Configuration for normal data complexity features.
+
+    All features are designed to add realistic variation to normal data
+    WITHOUT being confused with anomaly patterns. Key safety constraints:
+    - All transitions >= 1000 timesteps (gradual changes)
+    - Values stay in [0.05, 0.70] range (below anomaly thresholds)
+    - Bump magnitudes << anomaly magnitudes
+    """
+    # Master switch
+    enable_complexity: bool = True
+
+    # 1. Regime Switching - Different operational states
+    enable_regime_switching: bool = True
+    regime_duration_range: tuple = (8000, 25000)  # Duration of each regime
+    regime_transition_length: int = 1500  # Smooth transition over 1500 timesteps
+
+    # 2. Multi-Scale Periodicity - Multiple overlapping cycles
+    enable_multi_scale_periodicity: bool = True
+    # freq1: fast (hourly-like), freq2: medium (daily-like), freq3: slow (weekly-like)
+
+    # 3. Heteroscedastic Noise - Load-dependent noise variance
+    enable_heteroscedastic_noise: bool = True
+    base_noise: float = 0.025
+    noise_load_sensitivity: float = 0.8  # noise = base * (1 + sensitivity * load)
+
+    # 4. Time-Varying Correlations - Feature correlations that slowly change
+    enable_varying_correlations: bool = True
+    correlation_variation_period: int = 15000  # Period of correlation change
+    correlation_variation_amplitude: float = 0.08  # ±0.08 variation in correlation
+
+    # 5. Bounded Drift (Ornstein-Uhlenbeck) - Mean-reverting random walk
+    enable_drift: bool = True
+    drift_theta: float = 0.002  # Mean reversion speed (higher = faster reversion)
+    drift_sigma: float = 0.025  # Volatility
+    drift_max: float = 0.08  # Maximum drift from base (clipped)
+
+    # 6. Normal Bumps - Small, gradual load increases (NOT anomalies)
+    enable_normal_bumps: bool = True
+    bump_interval_range: tuple = (6000, 15000)  # Interval between bumps
+    bump_duration_range: tuple = (100, 300)  # Duration (much longer than spike's 10-25)
+    bump_magnitude_max: float = 0.10  # Max magnitude (much less than anomaly's 0.3+)
+    bump_features_affected: int = 2  # Only 1-2 features affected (not correlated degradation)
+
+
 class SlidingWindowTimeSeriesGenerator:
     """
     Generates a long continuous time series with anomalies injected.
 
     The time series simulates server monitoring data with 8 correlated features.
     Anomalies are injected at random intervals throughout the series.
+
+    Normal data can include various complexity features (regime switching,
+    multi-scale periodicity, heteroscedastic noise, etc.) controlled by
+    the `complexity` parameter.
     """
 
     def __init__(
@@ -84,12 +134,16 @@ class SlidingWindowTimeSeriesGenerator:
         num_features: int = 8,
         anomaly_type_configs: Optional[Dict] = None,  # Per-type configs
         interval_scale: float = 1.0,  # Scale factor for all intervals (for tuning)
+        complexity: Optional[NormalDataComplexity] = None,  # Normal data complexity config
         seed: Optional[int] = None
     ):
         self.total_length = total_length
         self.num_features = min(num_features, NUM_FEATURES)
         self.interval_scale = interval_scale
         self.seed = seed
+
+        # Normal data complexity configuration
+        self.complexity = complexity or NormalDataComplexity()
 
         # Use default configs or provided ones
         self.anomaly_type_configs = anomaly_type_configs or ANOMALY_TYPE_CONFIGS
@@ -100,98 +154,375 @@ class SlidingWindowTimeSeriesGenerator:
     def _generate_normal_series(self) -> np.ndarray:
         """
         Generate a long normal time series with 8 correlated features.
-        Uses consistent parameters throughout (no segments).
+
+        With complexity enabled, includes:
+        1. Regime switching (different operational states)
+        2. Multi-scale periodicity (overlapping cycles)
+        3. Heteroscedastic noise (load-dependent variance)
+        4. Time-varying correlations
+        5. Bounded drift (Ornstein-Uhlenbeck process)
+        6. Normal bumps (small, gradual load increases)
         """
+        from scipy.ndimage import gaussian_filter1d
+
+        signals = np.zeros((self.total_length, self.num_features), dtype=np.float32)
+        c = self.complexity  # Shorthand
+
+        # If complexity is disabled, use simple generation
+        if not c.enable_complexity:
+            return self._generate_simple_normal_series()
+
+        # === Step 1: Generate regime schedule ===
+        if c.enable_regime_switching:
+            regimes = self._generate_regimes()
+        else:
+            regimes = [{'start': 0, 'end': self.total_length, 'params': self._random_regime_params()}]
+
+        # === Step 2: Generate base CPU signal with regime-aware multi-scale periodicity ===
+        for regime in regimes:
+            start, end = regime['start'], regime['end']
+            params = regime['params']
+            length = end - start
+            t = np.arange(length) * 0.01  # Time scale
+
+            if c.enable_multi_scale_periodicity:
+                # Three overlapping frequencies
+                signals[start:end, 0] = (
+                    params['cpu_base'] +
+                    params['cpu_amp1'] * np.sin(params['freq1'] * t) +  # Fast (hourly-like)
+                    params['cpu_amp2'] * np.sin(params['freq2'] * t) +  # Medium (daily-like)
+                    params['cpu_amp3'] * np.sin(params['freq3'] * t)    # Slow (weekly-like)
+                )
+            else:
+                signals[start:end, 0] = (
+                    params['cpu_base'] +
+                    params['cpu_amp1'] * np.sin(params['freq1'] * t)
+                )
+
+        # === Step 3: Apply smooth regime transitions ===
+        if c.enable_regime_switching and len(regimes) > 1:
+            signals[:, 0] = self._apply_regime_transitions(signals[:, 0], regimes)
+
+        # === Step 4: Generate correlated features with time-varying correlations ===
+        signals = self._generate_correlated_features(signals, regimes)
+
+        # === Step 5: Add bounded drift (Ornstein-Uhlenbeck process) ===
+        if c.enable_drift:
+            drift = self._generate_ou_drift()
+            for i in range(self.num_features):
+                signals[:, i] += drift[:, i]
+
+        # === Step 6: Add heteroscedastic noise ===
+        if c.enable_heteroscedastic_noise:
+            signals = self._add_heteroscedastic_noise(signals)
+        else:
+            for i in range(self.num_features):
+                signals[:, i] += np.random.normal(0, 0.03, self.total_length)
+
+        # === Step 7: Add normal bumps ===
+        if c.enable_normal_bumps:
+            signals = self._add_normal_bumps(signals)
+
+        # === Step 8: Safety clip to [0.05, 0.70] ===
+        # This keeps values in "normal" range, below anomaly thresholds
+        signals = np.clip(signals, 0.05, 0.70)
+
+        return signals.astype(np.float32)
+
+    def _generate_simple_normal_series(self) -> np.ndarray:
+        """Simple normal series generation (when complexity is disabled)."""
+        from scipy.ndimage import gaussian_filter1d
+
         t = np.linspace(0, self.total_length * 0.1, self.total_length)
         signals = np.zeros((self.total_length, self.num_features), dtype=np.float32)
 
-        # Base parameters (consistent throughout)
         cpu_freq = np.random.uniform(0.5, 1.5)
         cpu_amp = np.random.uniform(0.2, 0.4)
         cpu_base = np.random.uniform(0.3, 0.5)
 
-        # Feature 0: CPU usage (base pattern with daily/weekly cycles)
         signals[:, 0] = (
-            cpu_base +
-            cpu_amp * np.sin(cpu_freq * t) +
-            0.1 * np.sin(cpu_freq * 0.3 * t) +  # Slower cycle
+            cpu_base + cpu_amp * np.sin(cpu_freq * t) +
+            0.1 * np.sin(cpu_freq * 0.3 * t) +
             np.random.normal(0, 0.03, self.total_length)
         )
 
-        # Feature 1: Memory usage (correlated with CPU, slower variation)
         if self.num_features > 1:
-            mem_base = np.random.uniform(0.4, 0.6)
-            signals[:, 1] = (
-                mem_base +
-                0.25 * signals[:, 0] +
-                0.15 * np.sin(cpu_freq * 0.4 * t) +
-                np.random.normal(0, 0.02, self.total_length)
-            )
-
-        # Feature 2: Disk I/O (spiky, correlated with memory)
+            signals[:, 1] = 0.5 + 0.25 * signals[:, 0] + np.random.normal(0, 0.02, self.total_length)
         if self.num_features > 2:
-            disk_base = np.random.uniform(0.1, 0.25)
-            disk_spikes = np.random.poisson(0.05, self.total_length) * 0.15
-            signals[:, 2] = (
-                disk_base +
-                0.15 * signals[:, 1] +
-                disk_spikes +
-                np.random.normal(0, 0.03, self.total_length)
-            )
-
-        # Feature 3: Network traffic (bursty pattern)
+            signals[:, 2] = 0.2 + 0.15 * signals[:, 1] + np.random.normal(0, 0.03, self.total_length)
         if self.num_features > 3:
-            net_freq = np.random.uniform(0.8, 1.5)
-            net_amp = np.random.uniform(0.15, 0.35)
-            signals[:, 3] = (
-                net_amp * np.abs(np.sin(net_freq * t)) +
-                0.1 * np.random.exponential(0.1, self.total_length) +
-                np.random.normal(0, 0.03, self.total_length)
-            )
-
-        # Feature 4: Response time (correlated with CPU and Network)
+            signals[:, 3] = 0.25 * np.abs(np.sin(cpu_freq * 1.2 * t)) + np.random.normal(0, 0.03, self.total_length)
         if self.num_features > 4:
-            resp_base = np.random.uniform(0.1, 0.25)
-            signals[:, 4] = (
-                resp_base +
-                0.25 * signals[:, 0] +
-                0.15 * signals[:, 3] +
-                np.random.normal(0, 0.03, self.total_length)
-            )
-
-        # Feature 5: Thread count (correlated with CPU, smoother)
+            signals[:, 4] = 0.2 + 0.25 * signals[:, 0] + 0.15 * signals[:, 3] + np.random.normal(0, 0.03, self.total_length)
         if self.num_features > 5:
-            thread_base = np.random.uniform(0.3, 0.5)
-            # Smooth version of CPU
-            from scipy.ndimage import gaussian_filter1d
             cpu_smooth = gaussian_filter1d(signals[:, 0], sigma=10)
-            signals[:, 5] = (
-                thread_base +
-                0.3 * cpu_smooth +
-                np.random.normal(0, 0.02, self.total_length)
-            )
-
-        # Feature 6: Error rate (low base, correlated with response time)
+            signals[:, 5] = 0.4 + 0.3 * cpu_smooth + np.random.normal(0, 0.02, self.total_length)
         if self.num_features > 6:
-            error_base = np.random.uniform(0.02, 0.08)
-            signals[:, 6] = (
-                error_base +
-                0.1 * np.maximum(0, signals[:, 4] - 0.3) +  # Errors increase with high response time
-                np.random.exponential(0.02, self.total_length)
-            )
-
-        # Feature 7: Queue length (correlated with CPU and threads)
+            signals[:, 6] = 0.05 + 0.1 * np.maximum(0, signals[:, 4] - 0.3) + np.random.exponential(0.02, self.total_length)
         if self.num_features > 7:
-            queue_base = np.random.uniform(0.1, 0.25)
-            signals[:, 7] = (
-                queue_base +
-                0.2 * signals[:, 0] +
-                0.15 * signals[:, 5] +
-                np.random.normal(0, 0.03, self.total_length)
-            )
+            signals[:, 7] = 0.2 + 0.2 * signals[:, 0] + 0.15 * signals[:, 5] + np.random.normal(0, 0.03, self.total_length)
 
-        # Clip to [0, 1] range
-        signals = np.clip(signals, 0, 1)
+        return np.clip(signals, 0, 1).astype(np.float32)
+
+    def _random_regime_params(self) -> Dict:
+        """Generate random parameters for a single regime."""
+        return {
+            # Base values (kept in safe range 0.25-0.55)
+            'cpu_base': np.random.uniform(0.28, 0.48),
+            'mem_base': np.random.uniform(0.35, 0.55),
+            'disk_base': np.random.uniform(0.12, 0.25),
+            'net_base': np.random.uniform(0.15, 0.35),
+            'resp_base': np.random.uniform(0.12, 0.25),
+            'thread_base': np.random.uniform(0.30, 0.48),
+            'error_base': np.random.uniform(0.03, 0.08),
+            'queue_base': np.random.uniform(0.12, 0.25),
+            # Multi-scale periodicity parameters
+            'cpu_amp1': np.random.uniform(0.06, 0.12),  # Fast cycle amplitude
+            'cpu_amp2': np.random.uniform(0.04, 0.08),  # Medium cycle amplitude
+            'cpu_amp3': np.random.uniform(0.02, 0.05),  # Slow cycle amplitude
+            'freq1': np.random.uniform(0.8, 1.5),       # Fast frequency
+            'freq2': np.random.uniform(0.08, 0.15),     # Medium frequency (~10x slower)
+            'freq3': np.random.uniform(0.015, 0.03),    # Slow frequency (~50x slower)
+            # Correlation strengths (will vary over time if enabled)
+            'corr_cpu_mem': np.random.uniform(0.20, 0.30),
+            'corr_cpu_resp': np.random.uniform(0.20, 0.30),
+            'corr_cpu_thread': np.random.uniform(0.25, 0.35),
+            'corr_mem_disk': np.random.uniform(0.12, 0.20),
+        }
+
+    def _generate_regimes(self) -> List[Dict]:
+        """Generate regime schedule with smooth transitions."""
+        c = self.complexity
+        regimes = []
+        current_pos = 0
+
+        while current_pos < self.total_length:
+            # Random regime duration
+            duration = np.random.randint(c.regime_duration_range[0], c.regime_duration_range[1])
+            end_pos = min(current_pos + duration, self.total_length)
+
+            regimes.append({
+                'start': current_pos,
+                'end': end_pos,
+                'params': self._random_regime_params()
+            })
+
+            current_pos = end_pos
+
+        return regimes
+
+    def _apply_regime_transitions(self, signal: np.ndarray, regimes: List[Dict]) -> np.ndarray:
+        """Apply smooth sigmoid transitions between regimes."""
+        c = self.complexity
+        transition_len = c.regime_transition_length
+
+        for i in range(1, len(regimes)):
+            prev_regime = regimes[i - 1]
+            curr_regime = regimes[i]
+            transition_start = curr_regime['start']
+
+            # Create smooth transition using sigmoid
+            if transition_start + transition_len <= self.total_length:
+                t = np.arange(transition_len)
+                # Sigmoid from 0 to 1
+                sigmoid = 1 / (1 + np.exp(-10 * (t / transition_len - 0.5)))
+
+                # Blend values
+                old_vals = signal[transition_start:transition_start + transition_len].copy()
+                # Recalculate with new regime params would be complex,
+                # so we just smooth the existing transition
+                smoothed = gaussian_filter1d(signal[max(0, transition_start - 500):
+                                                    min(self.total_length, transition_start + transition_len + 500)],
+                                             sigma=transition_len // 6)
+                # Apply smoothed values to transition region
+                smooth_start = transition_start - max(0, transition_start - 500)
+                signal[transition_start:transition_start + transition_len] = \
+                    smoothed[smooth_start:smooth_start + transition_len]
+
+        return signal
+
+    def _generate_correlated_features(self, signals: np.ndarray, regimes: List[Dict]) -> np.ndarray:
+        """Generate correlated features with optional time-varying correlations."""
+        from scipy.ndimage import gaussian_filter1d
+        c = self.complexity
+
+        # Time-varying correlation modifier
+        if c.enable_varying_correlations:
+            t = np.arange(self.total_length)
+            corr_modifier = c.correlation_variation_amplitude * np.sin(
+                2 * np.pi * t / c.correlation_variation_period
+            )
+        else:
+            corr_modifier = np.zeros(self.total_length)
+
+        # Get base correlation from first regime (will be modified)
+        base_params = regimes[0]['params']
+
+        # Feature 1: Memory (correlated with CPU)
+        if self.num_features > 1:
+            corr = base_params['corr_cpu_mem'] + corr_modifier
+            for regime in regimes:
+                start, end = regime['start'], regime['end']
+                p = regime['params']
+                t = np.arange(end - start) * 0.01
+                signals[start:end, 1] = (
+                    p['mem_base'] +
+                    corr[start:end] * signals[start:end, 0] +
+                    0.05 * np.sin(p['freq2'] * t * 1.1)
+                )
+
+        # Feature 2: Disk I/O (correlated with Memory)
+        if self.num_features > 2:
+            corr = base_params['corr_mem_disk'] + corr_modifier * 0.5
+            for regime in regimes:
+                start, end = regime['start'], regime['end']
+                p = regime['params']
+                # Small random spikes (normal disk activity)
+                disk_activity = np.random.poisson(0.03, end - start) * 0.08
+                signals[start:end, 2] = (
+                    p['disk_base'] +
+                    corr[start:end] * signals[start:end, 1] +
+                    disk_activity
+                )
+
+        # Feature 3: Network (semi-independent, bursty)
+        if self.num_features > 3:
+            for regime in regimes:
+                start, end = regime['start'], regime['end']
+                p = regime['params']
+                t = np.arange(end - start) * 0.01
+                signals[start:end, 3] = (
+                    p['net_base'] +
+                    0.08 * np.abs(np.sin(p['freq1'] * t * 0.8)) +
+                    0.04 * np.abs(np.sin(p['freq2'] * t * 1.3))
+                )
+
+        # Feature 4: Response Time (correlated with CPU and Network)
+        if self.num_features > 4:
+            corr = base_params['corr_cpu_resp'] + corr_modifier
+            for regime in regimes:
+                start, end = regime['start'], regime['end']
+                p = regime['params']
+                signals[start:end, 4] = (
+                    p['resp_base'] +
+                    corr[start:end] * signals[start:end, 0] +
+                    0.10 * signals[start:end, 3]
+                )
+
+        # Feature 5: Thread Count (correlated with CPU, smoother)
+        if self.num_features > 5:
+            corr = base_params['corr_cpu_thread'] + corr_modifier
+            cpu_smooth = gaussian_filter1d(signals[:, 0], sigma=15)
+            for regime in regimes:
+                start, end = regime['start'], regime['end']
+                p = regime['params']
+                signals[start:end, 5] = (
+                    p['thread_base'] +
+                    corr[start:end] * cpu_smooth[start:end]
+                )
+
+        # Feature 6: Error Rate (low, slightly correlated with response time)
+        if self.num_features > 6:
+            for regime in regimes:
+                start, end = regime['start'], regime['end']
+                p = regime['params']
+                # Errors slightly increase when response time is higher (but stay low in normal)
+                signals[start:end, 6] = (
+                    p['error_base'] +
+                    0.05 * np.maximum(0, signals[start:end, 4] - 0.25)
+                )
+
+        # Feature 7: Queue Length (correlated with CPU and Thread)
+        if self.num_features > 7:
+            for regime in regimes:
+                start, end = regime['start'], regime['end']
+                p = regime['params']
+                signals[start:end, 7] = (
+                    p['queue_base'] +
+                    0.15 * signals[start:end, 0] +
+                    0.10 * signals[start:end, 5]
+                )
+
+        return signals
+
+    def _generate_ou_drift(self) -> np.ndarray:
+        """Generate Ornstein-Uhlenbeck (mean-reverting) drift for each feature."""
+        c = self.complexity
+        drift = np.zeros((self.total_length, self.num_features), dtype=np.float32)
+
+        for feat in range(self.num_features):
+            x = 0.0
+            for t in range(self.total_length):
+                # O-U process: dx = theta * (mu - x) * dt + sigma * dW
+                # mu = 0 (drift around zero)
+                dx = -c.drift_theta * x + c.drift_sigma * np.random.randn()
+                x += dx
+                # Clip to maximum drift
+                x = np.clip(x, -c.drift_max, c.drift_max)
+                drift[t, feat] = x
+
+        return drift
+
+    def _add_heteroscedastic_noise(self, signals: np.ndarray) -> np.ndarray:
+        """Add load-dependent noise (higher load = more variance)."""
+        c = self.complexity
+
+        # Use CPU (feature 0) as load proxy
+        load = signals[:, 0]
+
+        for i in range(self.num_features):
+            # Noise scale increases with load
+            noise_scale = c.base_noise * (1 + c.noise_load_sensitivity * load)
+            noise = np.random.randn(self.total_length) * noise_scale
+            signals[:, i] += noise
+
+        return signals
+
+    def _add_normal_bumps(self, signals: np.ndarray) -> np.ndarray:
+        """Add small, gradual load increases (normal operational bumps).
+
+        These are NOT anomalies - they represent:
+        - Scheduled batch jobs
+        - Normal traffic variations
+        - Planned maintenance activities
+
+        Key differences from anomaly spikes:
+        - Much longer duration (100-300 vs 10-25 timesteps)
+        - Much smaller magnitude (max 0.10 vs 0.3-0.6)
+        - Smooth Gaussian shape (not sudden)
+        - Only 1-2 features affected (no correlated degradation)
+        - NO error rate increase
+        """
+        c = self.complexity
+        current_pos = np.random.randint(1000, 3000)  # Start after initial period
+
+        while current_pos < self.total_length - c.bump_duration_range[1]:
+            # Random bump parameters
+            duration = np.random.randint(c.bump_duration_range[0], c.bump_duration_range[1])
+            magnitude = np.random.uniform(0.03, c.bump_magnitude_max)
+
+            # Select 1-2 features to affect (exclude error rate - feature 6)
+            safe_features = [0, 1, 3, 5, 7]  # CPU, Memory, Network, Thread, Queue
+            if self.num_features <= 6:
+                safe_features = [i for i in safe_features if i < self.num_features]
+            num_features = np.random.randint(1, min(3, len(safe_features) + 1))
+            affected_features = np.random.choice(safe_features, size=num_features, replace=False)
+
+            # Gaussian envelope (smooth bump shape)
+            t = np.arange(duration)
+            envelope = np.exp(-0.5 * ((t - duration / 2) / (duration / 4)) ** 2)
+            envelope *= magnitude
+
+            # Apply bump to selected features
+            for feat in affected_features:
+                end_pos = min(current_pos + duration, self.total_length)
+                actual_len = end_pos - current_pos
+                signals[current_pos:end_pos, feat] += envelope[:actual_len]
+
+            # Move to next bump position
+            interval = np.random.randint(c.bump_interval_range[0], c.bump_interval_range[1])
+            current_pos += duration + interval
+
         return signals
 
     def _inject_spike(self, signals: np.ndarray, start: int, end: int) -> None:

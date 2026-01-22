@@ -403,7 +403,7 @@ class BestModelVisualizer:
 ║    - Margin: {self.config.margin:.2f}                                               ║
 ║    - Lambda (disc): {self.config.lambda_disc:.2f}                                        ║
 ║    - Margin Type: {getattr(self.config, 'margin_type', 'hinge'):<10}                                  ║
-║    - Patchify Mode: {getattr(self.config, 'patchify_mode', 'cnn_first'):<12}                              ║
+║    - Patchify Mode: {getattr(self.config, 'patchify_mode', 'linear'):<12}                              ║
 ╠════════════════════════════════════════════════════════════════════╣
 ║  Sample Counts                                                      ║
 ║    - Normal: {normal_mask.sum():>6}                                             ║

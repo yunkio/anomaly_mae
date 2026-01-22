@@ -1,5 +1,127 @@
 # Changelog
 
+## 2026-01-23 (Update 12.1): Experiment Integration
+
+### Summary
+
+- Exported `NormalDataComplexity` from `mae_anomaly` package
+- Updated `run_experiments.py` to use complexity features by default
+- Added `--no-complexity` CLI flag to disable complexity features
+
+### Changes
+
+**Modified Files**:
+- `mae_anomaly/__init__.py`: Export `NormalDataComplexity`
+- `scripts/run_experiments.py`: Use complexity by default, add CLI flag
+
+**Usage**:
+```bash
+# Default: with complexity (recommended)
+python scripts/run_experiments.py
+
+# Without complexity (simple patterns)
+python scripts/run_experiments.py --no-complexity
+```
+
+---
+
+## 2026-01-23 (Update 12): Normal Data Complexity Features
+
+### Summary
+
+Added 6 configurable complexity features to make normal data more realistic and challenging for anomaly detection models. All features are designed to NOT be confused with anomaly patterns.
+
+### Changes
+
+#### 1. NormalDataComplexity Configuration
+
+**Modified Files**:
+- `mae_anomaly/dataset_sliding.py`
+
+**Added**:
+- `NormalDataComplexity` dataclass with on/off switches for each feature
+- All features enabled by default, individually toggleable
+
+```python
+@dataclass
+class NormalDataComplexity:
+    enable_complexity: bool = True
+    enable_regime_switching: bool = True
+    enable_multi_scale_periodicity: bool = True
+    enable_heteroscedastic_noise: bool = True
+    enable_varying_correlations: bool = True
+    enable_drift: bool = True
+    enable_normal_bumps: bool = True
+    # ... detailed parameters for each
+```
+
+---
+
+#### 2. Six Complexity Features Implemented
+
+| Feature | Description | Transition Time |
+|---------|-------------|-----------------|
+| **Regime Switching** | Different operational states | 1500 timesteps |
+| **Multi-Scale Periodicity** | 3 overlapping frequencies | Continuous |
+| **Heteroscedastic Noise** | Load-dependent variance | Continuous |
+| **Time-Varying Correlations** | Slowly changing correlations | Period 15000 ts |
+| **Bounded Drift (O-U)** | Mean-reverting random walk | Continuous |
+| **Normal Bumps** | Small, gradual load increases | Gaussian envelope |
+
+---
+
+#### 3. Safety Constraints
+
+All complexity features enforce strict constraints to distinguish from anomalies:
+
+| Constraint | Value | Reason |
+|------------|-------|--------|
+| Transition time | >= 1000 ts | Anomalies are 3-150 ts |
+| Value range | [0.05, 0.70] | Anomalies push to 0.7-1.0 |
+| Bump magnitude | max 0.10 | Spike adds 0.3-0.6 |
+| Bump duration | 100-300 ts | Spike is 10-25 ts |
+
+---
+
+#### 4. Documentation Updated
+
+**Modified Files**:
+- `docs/DATASET.md`
+
+**Added**:
+- New section "Normal Data Complexity Features"
+- Detailed documentation for each feature
+- Configuration examples
+- Safety constraints explanation
+
+---
+
+### Usage
+
+```python
+from mae_anomaly.dataset_sliding import NormalDataComplexity, SlidingWindowTimeSeriesGenerator
+
+# Full complexity (default)
+complexity = NormalDataComplexity()
+
+# Simple mode
+complexity = NormalDataComplexity(enable_complexity=False)
+
+# Custom
+complexity = NormalDataComplexity(
+    enable_regime_switching=True,
+    enable_normal_bumps=False,
+)
+
+generator = SlidingWindowTimeSeriesGenerator(
+    total_length=440000,
+    complexity=complexity,
+    seed=42
+)
+```
+
+---
+
 ## 2026-01-23 (Update 11): Visualization Quality Improvements
 
 ### Changes
@@ -852,11 +974,10 @@ Verifies 4 hypotheses about why disturbing normal might outperform pure normal:
 - [mae_anomaly/config.py](../mae_anomaly/config.py)
 
 **Changes**:
-- Added `patchify_mode` configuration option with 3 modes:
+- Added `patchify_mode` configuration option with 2 modes:
   - `linear`: Direct patchify + linear projection (MAE original style)
-  - `cnn_first`: CNN on full sequence, then patchify
   - `patch_cnn`: Patchify first, then CNN per patch (no cross-patch leakage)
-- Updated model to support all three patchify modes
+- Updated model to support both patchify modes
 
 **Benefits**:
 - Flexibility to test different patchification strategies

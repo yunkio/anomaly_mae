@@ -1,8 +1,7 @@
 """
 Self-Distilled MAE Model for Multivariate Time Series Anomaly Detection
 
-Supports three patchify modes:
-- 'cnn_first': CNN on full sequence, then patchify (information leakage across patches)
+Supports two patchify modes:
 - 'patch_cnn': Patchify first, then CNN per patch (no cross-patch leakage)
 - 'linear': Patchify then linear embedding (MAE original style, no CNN)
 """
@@ -37,8 +36,7 @@ class PositionalEncoding(nn.Module):
 class SelfDistilledMAEMultivariate(nn.Module):
     """Self-Distilled MAE for Multivariate Time Series
 
-    Supports three patchify modes:
-    - 'cnn_first': CNN on full sequence, then patchify (information leakage across patches)
+    Supports two patchify modes:
     - 'patch_cnn': Patchify first, then CNN per patch (no cross-patch leakage)
     - 'linear': Patchify then linear embedding (MAE original style, no CNN)
     """
@@ -119,23 +117,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
     def _build_embedding_layers(self, config: Config):
         """Build embedding layers based on patchify_mode"""
 
-        if self.patchify_mode == 'cnn_first':
-            # CNN on full sequence, then patchify
-            # Input: (batch, num_features, seq_length)
-            # Output: (batch, d_model, seq_length)
-            self.cnn_layers = nn.Sequential(
-                nn.Conv1d(config.num_features, config.d_model // 2, kernel_size=3, padding=1),
-                nn.BatchNorm1d(config.d_model // 2),
-                nn.ReLU(),
-                nn.Conv1d(config.d_model // 2, config.d_model, kernel_size=3, padding=1),
-                nn.BatchNorm1d(config.d_model),
-                nn.ReLU()
-            )
-            if self.use_patch:
-                # After CNN: (batch, d_model, seq) -> (batch, num_patches, d_model * patch_size)
-                self.patch_embed = nn.Linear(config.d_model * config.patch_size, config.d_model)
-
-        elif self.patchify_mode == 'patch_cnn':
+        if self.patchify_mode == 'patch_cnn':
             # Patchify first, then CNN per patch
             # Each patch: (batch * num_patches, num_features, patch_size)
             # CNN processes each patch independently
@@ -172,24 +154,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
         """
         batch_size, seq_length, num_features = x.shape
 
-        if self.patchify_mode == 'cnn_first':
-            # CNN on full sequence first
-            # (batch, seq, features) -> (batch, features, seq)
-            x_cnn_input = x.transpose(1, 2)
-            # (batch, d_model, seq)
-            x_cnn = self.cnn_layers(x_cnn_input)
-
-            if self.use_patch:
-                # Patchify CNN features: (batch, d_model, seq) -> (batch, num_patches, d_model*patch_size)
-                x_patches = self._patchify_cnn_output(x_cnn)
-                # Embed: (batch, num_patches, d_model*patch_size) -> (batch, num_patches, d_model)
-                x_embed = self.patch_embed(x_patches)
-                x_embed = x_embed.transpose(0, 1)  # (num_patches, batch, d_model)
-            else:
-                # Token-based: (batch, d_model, seq) -> (seq, batch, d_model)
-                x_embed = x_cnn.transpose(1, 2).transpose(0, 1)
-
-        elif self.patchify_mode == 'patch_cnn':
+        if self.patchify_mode == 'patch_cnn':
             # Patchify first, then CNN per patch
             if self.use_patch:
                 # (batch, seq, features) -> (batch, num_patches, patch_size, features)
@@ -239,22 +204,6 @@ class SelfDistilledMAEMultivariate(nn.Module):
         batch_size, seq_length, num_features = x.shape
         # Reshape to patches
         x = x.reshape(batch_size, self.num_patches, self.patch_size * num_features)
-        return x
-
-    def _patchify_cnn_output(self, x: torch.Tensor) -> torch.Tensor:
-        """Patchify CNN output (for cnn_first mode)
-        Args:
-            x: (batch, d_model, seq_length)
-        Returns:
-            patches: (batch, num_patches, d_model * patch_size)
-        """
-        batch_size, d_model, seq_length = x.shape
-        # Reshape: (batch, d_model, num_patches, patch_size)
-        x = x.reshape(batch_size, d_model, self.num_patches, self.patch_size)
-        # Permute: (batch, num_patches, d_model, patch_size)
-        x = x.permute(0, 2, 1, 3)
-        # Flatten: (batch, num_patches, d_model * patch_size)
-        x = x.reshape(batch_size, self.num_patches, d_model * self.patch_size)
         return x
 
     def unpatchify(self, x: torch.Tensor) -> torch.Tensor:

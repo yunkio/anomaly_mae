@@ -398,7 +398,6 @@ Stage 2 selects ~50-70 diverse candidates for full training using a 3-phase appr
 | margin_type=dynamic | 5 | Best with dynamic margin |
 | margin_type=softplus | 5 | Best with softplus margin |
 | margin_type=hinge | 5 | Best with hinge margin |
-| patchify_mode=cnn_first | 5 | Best with CNN-first patchify |
 | patchify_mode=patch_cnn | 5 | Best with patch-CNN patchify |
 | patchify_mode=linear | 5 | Best with linear patchify (MAE style) |
 | masking_strategy=patch | 5 | Best with patch masking strategy |
@@ -421,7 +420,7 @@ Stage 2 selects ~50-70 diverse candidates for full training using a 3-phase appr
 | margin_type | Margin type (hinge, softplus, dynamic) |
 | force_mask_anomaly | Whether to force mask anomaly patches (True/False) |
 | patch_level_loss | Whether to use patch-level loss (True/False) |
-| patchify_mode | Patchify mode (cnn_first, patch_cnn, linear) |
+| patchify_mode | Patchify mode (patch_cnn, linear) |
 | roc_auc | ROC-AUC score |
 | f1_score | F1 score |
 | precision | Precision |
@@ -463,7 +462,6 @@ Consistent colors across all visualizations:
 
 | Mode | Color |
 |------|-------|
-| cnn_first | Steel Blue |
 | patch_cnn | Coral |
 | linear | Forest Green |
 

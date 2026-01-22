@@ -41,9 +41,8 @@ Self-Distilled Masked Autoencoder (MAE) 구현으로, 다변량 시계열 데이
 ## 주요 기능
 
 - **1D-CNN + Transformer 하이브리드 아키텍처**: 로컬 feature 추출과 글로벌 의존성 캡처
-- **3가지 Patchify 모드**:
+- **2가지 Patchify 모드**:
   - `linear`: Linear embedding (MAE 원본 스타일)
-  - `cnn_first`: CNN → Patchify (전체 시퀀스에 CNN 적용 후 패치화)
   - `patch_cnn`: Patchify → CNN (패치별 독립 CNN, cross-patch leakage 방지)
 - **Self-Distillation**: Teacher-student 아키텍처와 discrepancy loss
 - **2-Stage 실험**: Quick Search (1 epoch)로 상위 조합 선별 후 Full Training
@@ -72,7 +71,7 @@ from mae_anomaly import (
 # 설정 생성
 set_seed(42)
 config = Config()
-config.patchify_mode = 'linear'  # 'linear', 'cnn_first', 'patch_cnn'
+config.patchify_mode = 'linear'  # 'linear', 'patch_cnn'
 
 # 데이터셋 생성 (슬라이딩 윈도우 기반)
 generator = SlidingWindowTimeSeriesGenerator(

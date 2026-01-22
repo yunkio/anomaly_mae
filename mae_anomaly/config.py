@@ -45,8 +45,7 @@ class Config:
     # - 'feature_wise': Mask each feature independently (different time points per feature)
     num_patches: int = 25  # 25 patches per sequence
     patch_size: int = 4  # seq_length / num_patches = 100 / 25 = 4
-    patchify_mode: str = 'linear'  # 'cnn_first', 'patch_cnn', 'linear'
-    # - 'cnn_first': CNN on full sequence, then patchify (information leakage across patches)
+    patchify_mode: str = 'linear'  # 'patch_cnn', 'linear'
     # - 'patch_cnn': Patchify first, then CNN per patch (no cross-patch leakage)
     # - 'linear': Patchify then linear embedding (MAE original style, no CNN)
 

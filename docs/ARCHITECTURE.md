@@ -62,33 +62,7 @@ Patches: (batch, 25, 64)
 
 ---
 
-#### 2.2 CNN First Mode (`patchify_mode='cnn_first'`)
-
-**CNN on full sequence, then patchify**
-
-```
-Input: (batch, 8, 100)  # Transposed for Conv1d
-↓
-Conv1d(8 → 32, kernel=3, padding=1) + BatchNorm + ReLU
-Conv1d(32 → 64, kernel=3, padding=1) + BatchNorm + ReLU
-↓
-CNN features: (batch, 64, 100)
-↓
-Patchify: Reshape to (batch, 25, 64*4=256)
-↓
-Linear(256 → 64)
-↓
-Patches: (batch, 25, 64)
-```
-
-**Characteristics**:
-- CNN captures local temporal patterns across full sequence
-- Information can flow between patches through CNN receptive field
-- Useful when local features benefit from global context
-
----
-
-#### 2.3 Patch CNN Mode (`patchify_mode='patch_cnn'`)
+#### 2.2 Patch CNN Mode (`patchify_mode='patch_cnn'`)
 
 **Patchify first, then CNN per patch (no cross-patch leakage)**
 
@@ -118,14 +92,13 @@ Flatten + Linear: (batch*25, 256) → (batch, 25, 64)
 | Mode | CNN Position | Cross-Patch Info | Best For |
 |------|--------------|------------------|----------|
 | linear | None | No | Baseline, simplest |
-| cnn_first | Before patchify | Yes (via receptive field) | When local context helps |
 | patch_cnn | After patchify | No | Strict MAE-style masking |
 
 ---
 
 ### 3. Patch Embedding (Legacy Note)
 
-**Note**: In `cnn_first` and `patch_cnn` modes, CNN output is projected to patch embeddings. In `linear` mode, raw patches are directly projected.
+**Note**: In `patch_cnn` mode, CNN output is projected to patch embeddings. In `linear` mode, raw patches are directly projected.
 
 **Details**:
 - 25 patches per sequence (default)
@@ -455,7 +428,7 @@ anomaly_score = MSE(student_out - original)
 | d_model | 64 | Model dimension |
 | num_patches | 25 | Number of patches |
 | patch_size | 4 | Time steps per patch |
-| patchify_mode | linear | Patchify mode (linear/cnn_first/patch_cnn) |
+| patchify_mode | linear | Patchify mode (linear/patch_cnn) |
 | masking_strategy | patch | Masking strategy (patch/feature_wise) |
 | masking_ratio | 0.4 | Training masking ratio |
 | num_encoder_layers | 3 | Encoder layers |

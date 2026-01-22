@@ -128,9 +128,8 @@ Test whether fine-grained (patch-level) or coarse (window-level) discrepancy los
 ### 7. Patchify Mode Experiments
 
 **Configuration**:
-Three different patchify modes tested:
+Two different patchify modes tested:
 - **linear** (default): Patchify first, then linear projection (no CNN)
-- **cnn_first**: CNN on full sequence, then patchify
 - **patch_cnn**: Patchify first, then CNN per patch
 
 **Structure Comparison**:
@@ -138,7 +137,6 @@ Three different patchify modes tested:
 | Mode | Flow | Cross-Patch Information |
 |------|------|------------------------|
 | linear | Input → Patchify → Linear | None |
-| cnn_first | Input → CNN → Patchify → Linear | Yes (via CNN receptive field) |
 | patch_cnn | Input → Patchify → CNN (per patch) → Linear | None |
 
 **Purpose**:
@@ -148,19 +146,13 @@ Test the impact of different patchification strategies on anomaly detection:
    - No local feature extraction before patching
    - Simplest architecture
 
-2. **cnn_first**: Local features extracted globally before patching
-   - CNN sees full sequence, can share information across patches
-   - May help when local patterns benefit from global context
-   - **Potential Issue**: Information leakage across patches may compromise masking
-
-3. **patch_cnn**: Independent CNN per patch
+2. **patch_cnn**: Independent CNN per patch
    - No cross-patch information leakage
    - Maintains strict patch independence for masking
    - Combines local feature extraction with MAE-style masking
 
 **Hypothesis**:
 - `patch_cnn` may perform best due to combining local feature extraction without violating masking assumptions
-- `cnn_first` may underperform if cross-patch leakage makes masked patches predictable
 - `linear` provides a clean baseline
 
 ---
@@ -210,7 +202,6 @@ Test the impact of different patchification strategies on anomaly detection:
 **Question**: How does local feature extraction affect anomaly detection?
 
 - Linear: Pure MAE style, no CNN preprocessing
-- CNN-first: Global CNN before patching (potential information leakage)
 - Patch-CNN: Independent CNN per patch (no leakage)
 
 ---
@@ -239,9 +230,9 @@ DEFAULT_PARAM_GRID = {
     'margin_type': ['hinge', 'softplus', 'dynamic'],
     'force_mask_anomaly': [False, True],
     'patch_level_loss': [True, False],
-    'patchify_mode': ['cnn_first', 'patch_cnn', 'linear'],
+    'patchify_mode': ['patch_cnn', 'linear'],
 }
-# Total combinations: 2*2*3*3*2*2*3 = 432 (note: actual count is 288 due to grid structure)
+# Total combinations: 2*2*3*3*2*2*2 = 288
 
 # Two-stage grid search
 runner = ExperimentRunner(param_grid=DEFAULT_PARAM_GRID)
@@ -268,7 +259,7 @@ error = recon_error + self.config.lambda_disc * discrepancy
 The experiment runner uses a two-stage grid search approach:
 
 **Stage 1: Quick Screening** (1 epoch default)
-- All 432 parameter combinations evaluated quickly
+- All 288 parameter combinations evaluated quickly
 - Candidates selected for full training based on diverse criteria
 
 **Stage 2: Full Training** (2 epochs default)
@@ -288,9 +279,9 @@ DEFAULT_PARAM_GRID = {
     'margin_type': ['hinge', 'softplus', 'dynamic'],
     'force_mask_anomaly': [False, True],
     'patch_level_loss': [True, False],
-    'patchify_mode': ['cnn_first', 'patch_cnn', 'linear'],
+    'patchify_mode': ['patch_cnn', 'linear'],
 }
-# Total combinations: 2*2*3*3*2*2*3 = 432 (note: actual count is 288 due to grid structure)
+# Total combinations: 2*2*3*3*2*2*2 = 288
 ```
 
 ---
@@ -303,7 +294,7 @@ Stage 2 uses a 3-phase diverse selection strategy:
 - `force_mask_anomaly`: True (5) + False (5)
 - `patch_level_loss`: True (5) + False (5)
 - `margin_type`: hinge (5) + softplus (5) + dynamic (5)
-- `patchify_mode`: cnn_first (5) + patch_cnn (5) + linear (5)
+- `patchify_mode`: patch_cnn (5) + linear (5)
 - `masking_strategy`: patch (5) + feature_wise (5)
 - `masking_ratio`: each value (5)
 - `num_patches`: each value (5)

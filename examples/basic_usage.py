@@ -158,7 +158,7 @@ def example_3_compare_patchify_modes():
 
     results = {}
 
-    for mode in ['linear', 'cnn_first', 'patch_cnn']:
+    for mode in ['linear', 'patch_cnn']:
         print(f"\n--- Training with patchify_mode='{mode}' ---")
         set_seed(42)
 
@@ -369,7 +369,7 @@ def main():
 
     example_1_basic_usage()  # Basic training and evaluation
     # example_2_custom_config()  # Custom hyperparameters with patchify mode
-    # example_3_compare_patchify_modes()  # Compare linear vs cnn_first vs patch_cnn
+    # example_3_compare_patchify_modes()  # Compare linear vs patch_cnn
     # example_4_single_sample_inference()  # Single sequence inference
     # example_5_save_load_model()  # Model persistence
     # example_6_visualize_detection()  # Visualization

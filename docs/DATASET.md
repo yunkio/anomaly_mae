@@ -118,6 +118,222 @@ QueueLength = base + 0.2 * CPU + 0.15 * ThreadCount + noise
 
 ---
 
+## Normal Data Complexity Features
+
+The dataset includes **configurable complexity features** to make normal data more realistic and challenging for anomaly detection models. **All features are designed to NOT be confused with anomaly patterns.**
+
+### Quick Configuration
+
+```python
+from mae_anomaly.dataset_sliding import NormalDataComplexity, SlidingWindowTimeSeriesGenerator
+
+# Create complexity config (all features enabled by default)
+complexity = NormalDataComplexity(
+    enable_complexity=True,           # Master switch
+    enable_regime_switching=True,     # Different operational states
+    enable_multi_scale_periodicity=True,  # Overlapping cycles
+    enable_heteroscedastic_noise=True,    # Load-dependent noise
+    enable_varying_correlations=True,     # Time-varying correlations
+    enable_drift=True,                    # O-U mean-reverting drift
+    enable_normal_bumps=True,             # Small load bumps
+)
+
+# Create generator with complexity
+generator = SlidingWindowTimeSeriesGenerator(
+    total_length=440000,
+    complexity=complexity,
+    seed=42
+)
+```
+
+### Disabling Complexity (Simple Mode)
+
+```python
+# Disable all complexity (original behavior)
+complexity = NormalDataComplexity(enable_complexity=False)
+
+# Or disable specific features
+complexity = NormalDataComplexity(
+    enable_regime_switching=False,
+    enable_normal_bumps=False,
+)
+```
+
+---
+
+### 1. Regime Switching
+
+**Purpose**: Simulate different operational states (low load, normal, high load).
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_regime_switching` | True | On/off switch |
+| `regime_duration_range` | (8000, 25000) | Duration of each regime |
+| `regime_transition_length` | 1500 | Smooth transition period |
+
+**How it works**:
+- Time series is divided into regimes of 8000-25000 timesteps
+- Each regime has different base values, amplitudes, and frequencies
+- Transitions use sigmoid smoothing over 1500+ timesteps
+
+**Why NOT confused with anomalies**:
+- Transitions take 1500+ timesteps (anomalies are 3-150 ts)
+- Values stay in normal range (0.28-0.48 vs anomaly's 0.7+)
+- Changes are bidirectional (can go up or down)
+
+---
+
+### 2. Multi-Scale Periodicity
+
+**Purpose**: Add realistic overlapping cycles (hourly, daily, weekly patterns).
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_multi_scale_periodicity` | True | On/off switch |
+
+**Frequency scales**:
+```
+freq1: 0.8-1.5    # Fast (hourly-like)
+freq2: 0.08-0.15  # Medium (daily-like, ~10x slower)
+freq3: 0.015-0.03 # Slow (weekly-like, ~50x slower)
+
+signal = base + amp1*sin(freq1*t) + amp2*sin(freq2*t) + amp3*sin(freq3*t)
+```
+
+**Why NOT confused with anomalies**:
+- All patterns are smooth sinusoids (no sudden changes)
+- Total amplitude stays bounded (sum of amps < 0.25)
+- Patterns are predictable and continuous
+
+---
+
+### 3. Heteroscedastic Noise
+
+**Purpose**: Realistic load-dependent noise variance (busier = noisier).
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_heteroscedastic_noise` | True | On/off switch |
+| `base_noise` | 0.025 | Base noise level |
+| `noise_load_sensitivity` | 0.8 | Load multiplier |
+
+**Formula**:
+```python
+noise_scale = base_noise * (1 + noise_load_sensitivity * cpu_load)
+# CPU at 0.3 → noise ≈ 0.031
+# CPU at 0.5 → noise ≈ 0.035
+```
+
+**Why NOT confused with anomalies**:
+- Noise is symmetric (anomaly spikes are always upward)
+- Maximum amplitude ≈ 0.08 (3σ), anomalies are 0.3+
+- No sustained bias in any direction
+
+---
+
+### 4. Time-Varying Correlations
+
+**Purpose**: Feature correlations that slowly change over time.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_varying_correlations` | True | On/off switch |
+| `correlation_variation_period` | 15000 | Period of change |
+| `correlation_variation_amplitude` | 0.08 | ±variation |
+
+**Formula**:
+```python
+corr_modifier = 0.08 * sin(2π * t / 15000)
+effective_corr = base_corr + corr_modifier
+# CPU-Memory correlation varies between 0.12-0.38
+```
+
+**Why NOT confused with anomalies**:
+- Changes are extremely gradual (period = 15000 timesteps)
+- No sudden correlation changes
+- Correlations stay positive and bounded
+
+---
+
+### 5. Bounded Drift (Ornstein-Uhlenbeck Process)
+
+**Purpose**: Mean-reverting random walk for realistic baseline drift.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_drift` | True | On/off switch |
+| `drift_theta` | 0.002 | Mean reversion speed |
+| `drift_sigma` | 0.025 | Volatility |
+| `drift_max` | 0.08 | Maximum drift magnitude |
+
+**O-U Process**:
+```python
+dx = -theta * x * dt + sigma * dW
+x = clip(x + dx, -drift_max, drift_max)
+```
+
+**Why NOT confused with anomalies**:
+- Bidirectional (goes up AND down), memory_leak is monotonic
+- Maximum magnitude 0.08 << leak's 0.3-0.5 increase
+- Mean-reverting (always returns to baseline)
+
+---
+
+### 6. Normal Bumps
+
+**Purpose**: Small, gradual load increases representing normal operations (batch jobs, traffic variations).
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_normal_bumps` | True | On/off switch |
+| `bump_interval_range` | (6000, 15000) | Interval between bumps |
+| `bump_duration_range` | (100, 300) | Duration per bump |
+| `bump_magnitude_max` | 0.10 | Maximum magnitude |
+| `bump_features_affected` | 2 | Max features affected |
+
+**Comparison with Anomaly Spike**:
+
+| Aspect | Normal Bump | Anomaly Spike |
+|--------|-------------|---------------|
+| Duration | 100-300 ts | 10-25 ts |
+| Magnitude | max 0.10 | 0.3-0.6 |
+| Shape | Smooth Gaussian | Sudden |
+| Features | 1-2 only | 5+ simultaneous |
+| Error rate | NOT affected | Increases |
+
+---
+
+### Safety Constraints Summary
+
+| Constraint | Value | Reason |
+|------------|-------|--------|
+| Transition time | >= 1000 ts | Anomalies are much shorter |
+| Value range | [0.05, 0.70] | Anomalies push to 0.7-1.0 |
+| Drift magnitude | max ±0.08 | Memory leak grows 0.3-0.5 |
+| Bump magnitude | max 0.10 | Spike adds 0.3-0.6 |
+| Bump duration | 100-300 ts | Spike is 10-25 ts |
+
+---
+
+### Tuning Difficulty
+
+```python
+# Easier (less complexity)
+complexity = NormalDataComplexity(
+    enable_regime_switching=False,
+    enable_normal_bumps=False,
+)
+
+# Harder (more variation)
+complexity = NormalDataComplexity(
+    regime_duration_range=(5000, 15000),  # More frequent regime changes
+    bump_interval_range=(4000, 10000),    # More frequent bumps
+    bump_magnitude_max=0.12,              # Slightly larger bumps
+)
+```
+
+---
+
 ## Anomaly Types
 
 The dataset includes **7 distinct anomaly types** commonly observed in server monitoring systems.

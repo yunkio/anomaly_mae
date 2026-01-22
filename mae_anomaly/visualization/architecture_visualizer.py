@@ -115,24 +115,15 @@ class ArchitectureVisualizer:
         """Visualize different patchify modes as conceptual flow diagrams
 
         Shows the processing pipeline difference between:
-        1. CNN-First: Full sequence → CNN → Patchify → Embed (cross-patch leakage possible)
-        2. Patch-CNN: Sequence → Patchify → CNN per patch → Embed (isolated patches)
-        3. Linear: Sequence → Patchify → Linear embed (original MAE style)
+        1. Patch-CNN: Sequence → Patchify → CNN per patch → Embed (isolated patches)
+        2. Linear: Sequence → Patchify → Linear embed (original MAE style)
         """
-        fig, axes = plt.subplots(3, 1, figsize=(16, 12))
+        fig, axes = plt.subplots(2, 1, figsize=(16, 8))
 
         modes = [
             {
-                'name': 'cnn_first',
-                'title': '1. CNN-First Mode',
-                'flow': ['Input\nSequence\n(T, F)', 'CNN\n(full seq)', 'Patchify', 'Linear\nProjection', 'Patch\nEmbeddings'],
-                'colors': ['#3498DB', '#E74C3C', '#F39C12', '#9B59B6', '#27AE60'],
-                'issue': '⚠️ CNN receptive field spans across patch boundaries\n→ Information leakage between patches',
-                'issue_color': '#E74C3C',
-            },
-            {
                 'name': 'patch_cnn',
-                'title': '2. Patch-CNN Mode (Recommended)',
+                'title': '1. Patch-CNN Mode (Recommended)',
                 'flow': ['Input\nSequence\n(T, F)', 'Patchify', 'CNN\n(per patch)', 'Linear\nProjection', 'Patch\nEmbeddings'],
                 'colors': ['#3498DB', '#F39C12', '#27AE60', '#9B59B6', '#27AE60'],
                 'issue': '✓ CNN operates within each patch independently\n→ No cross-patch information leakage',
@@ -140,7 +131,7 @@ class ArchitectureVisualizer:
             },
             {
                 'name': 'linear',
-                'title': '3. Linear Mode (Original MAE)',
+                'title': '2. Linear Mode (Original MAE)',
                 'flow': ['Input\nSequence\n(T, F)', 'Patchify', 'Linear\nProjection', '', 'Patch\nEmbeddings'],
                 'colors': ['#3498DB', '#F39C12', '#9B59B6', '#FFFFFF', '#27AE60'],
                 'issue': '✓ Simple linear projection of patches\n→ No feature extraction, fastest',

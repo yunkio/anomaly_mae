@@ -32,6 +32,7 @@ warnings.filterwarnings('ignore')
 from mae_anomaly import (
     Config, set_seed,
     SlidingWindowTimeSeriesGenerator, SlidingWindowDataset,
+    NormalDataComplexity,
     SelfDistilledMAEMultivariate, SelfDistillationLoss,
     Trainer, Evaluator, SLIDING_ANOMALY_TYPE_NAMES
 )
@@ -57,10 +58,10 @@ DEFAULT_PARAM_GRID = {
     'patch_level_loss': [True, False],
 
     # Patchify mode (CNN vs Linear embedding)
-    'patchify_mode': ['cnn_first', 'patch_cnn', 'linear'],
+    'patchify_mode': ['patch_cnn', 'linear'],
 }
 # Note: margin=0.5, lambda_disc=0.5 are fixed (not in grid)
-# Total combinations: 2*2*3*3*2*2*3 = 432
+# Total combinations: 2*2*3*3*2*2*2 = 288
 
 
 # =============================================================================
@@ -84,10 +85,12 @@ class ExperimentRunner:
         base_config: Config = None,
         output_dir: str = 'results/experiments',
         quick_length: int = 200000,
-        full_length: int = None
+        full_length: int = None,
+        use_complexity: bool = True
     ):
         self.param_grid = param_grid or DEFAULT_PARAM_GRID
         self.base_config = base_config or Config()
+        self.use_complexity = use_complexity
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.output_dir = os.path.join(output_dir, timestamp)
@@ -121,12 +124,21 @@ class ExperimentRunner:
         self.quick_train_ratio = 0.3  # 30% train, 70% test for quick search
         self.full_train_ratio = 0.5   # 50% train, 50% test for full search
 
+        # Configure normal data complexity (default: enabled with all features)
+        if self.use_complexity:
+            complexity = NormalDataComplexity(enable_complexity=True)
+            print("Normal data complexity: ENABLED (all features)", flush=True)
+        else:
+            complexity = NormalDataComplexity(enable_complexity=False)
+            print("Normal data complexity: DISABLED (simple patterns)", flush=True)
+
         # Generate quick search time series (shorter for fast screening)
-        print("Generating quick search dataset...", flush=True)
+        print("\nGenerating quick search dataset...", flush=True)
         quick_generator = SlidingWindowTimeSeriesGenerator(
             total_length=quick_length,
             num_features=config.num_features,
             interval_scale=config.anomaly_interval_scale,
+            complexity=complexity,
             seed=config.random_seed
         )
         self.quick_signals, self.quick_point_labels, self.quick_anomaly_regions = quick_generator.generate()
@@ -148,6 +160,7 @@ class ExperimentRunner:
             total_length=full_length,
             num_features=config.num_features,
             interval_scale=config.anomaly_interval_scale,
+            complexity=complexity,
             seed=config.random_seed
         )
         self.signals, self.point_labels, self.anomaly_regions = full_generator.generate()
@@ -680,9 +693,9 @@ class ExperimentRunner:
                 added = add_candidates(df_subset, f'margin_type={val}', n_per_value)
                 print(f"    margin_type={val}: {added} models")
 
-        # patchify_mode: cnn_first, patch_cnn, linear
+        # patchify_mode: patch_cnn, linear
         if 'patchify_mode' in quick_df.columns:
-            for val in ['cnn_first', 'patch_cnn', 'linear']:
+            for val in ['patch_cnn', 'linear']:
                 df_subset = quick_df[quick_df['patchify_mode'] == val].sort_values('roc_auc', ascending=False)
                 added = add_candidates(df_subset, f'patchify_mode={val}', n_per_value)
                 print(f"    patchify_mode={val}: {added} models")
@@ -746,7 +759,7 @@ class ExperimentRunner:
             ('force_mask_anomaly', [True, False]),
             ('patch_level_loss', [True, False]),
             ('margin_type', ['hinge', 'softplus', 'dynamic']),
-            ('patchify_mode', ['cnn_first', 'patch_cnn', 'linear']),
+            ('patchify_mode', ['patch_cnn', 'linear']),
             ('masking_strategy', ['patch', 'feature_wise']),
         ]
 
@@ -938,6 +951,7 @@ def run_experiments(
     quick_length: int = 200000,
     full_length: int = 440000,
     two_stage: bool = True,
+    use_complexity: bool = True,
     output_dir: str = 'results/experiments'
 ) -> Tuple[pd.DataFrame, str]:
     """
@@ -957,6 +971,7 @@ def run_experiments(
         quick_length: Time series length for quick search dataset
         full_length: Time series length for full search dataset
         two_stage: If True, run quick then full search
+        use_complexity: If True (default), use NormalDataComplexity for realistic patterns
         output_dir: Directory to save results
 
     Returns:
@@ -971,7 +986,8 @@ def run_experiments(
         param_grid=param_grid,
         output_dir=output_dir,
         quick_length=quick_length,
-        full_length=full_length
+        full_length=full_length,
+        use_complexity=use_complexity
     )
 
     # Run grid search
@@ -1031,6 +1047,7 @@ if __name__ == "__main__":
     parser.add_argument('--quick-length', type=int, default=200000, help='Time series length for quick search dataset')
     parser.add_argument('--full-length', type=int, default=440000, help='Time series length for full search dataset')
     parser.add_argument('--no-two-stage', action='store_true', help='Disable two-stage search')
+    parser.add_argument('--no-complexity', action='store_true', help='Disable normal data complexity features')
     parser.add_argument('--output-dir', type=str, default='results/experiments', help='Output directory')
     args = parser.parse_args()
 
@@ -1044,5 +1061,6 @@ if __name__ == "__main__":
         quick_length=args.quick_length,
         full_length=args.full_length,
         two_stage=not args.no_two_stage,
+        use_complexity=not args.no_complexity,
         output_dir=args.output_dir
     )
