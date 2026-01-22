@@ -200,8 +200,34 @@ class ExperimentRunner:
         """
         config = self.base_config
 
-        # Create temporary test dataset to get sample-level statistics
-        temp_dataset = SlidingWindowDataset(
+        # Create temporary train dataset to get sample-level statistics
+        temp_train = SlidingWindowDataset(
+            signals=signals,
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            window_size=config.seq_length,
+            stride=config.sliding_window_stride,
+            mask_last_n=config.mask_last_n,
+            split='train',
+            train_ratio=train_ratio,
+            seed=config.random_seed
+        )
+
+        # Train set statistics
+        train_types = temp_train.sample_types
+        train_pure = (train_types == 0).sum()
+        train_disturb = (train_types == 1).sum()
+        train_anomaly = (train_types == 2).sum()
+        train_total = len(train_types)
+
+        print(f"\n  [{name} - Train Set (Raw, no downsampling)]")
+        print(f"    - Pure Normal:       {train_pure:,} ({100*train_pure/train_total:.1f}%)")
+        print(f"    - Disturbing Normal: {train_disturb:,} ({100*train_disturb/train_total:.1f}%)")
+        print(f"    - Anomaly:           {train_anomaly:,} ({100*train_anomaly/train_total:.1f}%)")
+        print(f"    - Total:             {train_total:,}")
+
+        # Create temporary test dataset
+        temp_test = SlidingWindowDataset(
             signals=signals,
             point_labels=point_labels,
             anomaly_regions=anomaly_regions,
@@ -211,22 +237,21 @@ class ExperimentRunner:
             split='test',
             train_ratio=train_ratio,
             seed=config.random_seed
-            # No target_counts - get raw distribution
         )
 
-        # Get sample type distribution
-        sample_types = temp_dataset.sample_types
-        n_pure_normal = (sample_types == 0).sum()
-        n_disturbing_normal = (sample_types == 1).sum()
-        n_anomaly = (sample_types == 2).sum()
-        total = len(sample_types)
+        # Test set statistics
+        test_types = temp_test.sample_types
+        test_pure = (test_types == 0).sum()
+        test_disturb = (test_types == 1).sum()
+        test_anomaly = (test_types == 2).sum()
+        test_total = len(test_types)
 
-        print(f"\n  [{name} Statistics - Test Set (Raw)]")
-        print(f"  Sample Types:")
-        print(f"    - Pure Normal:       {n_pure_normal:,} ({100*n_pure_normal/total:.1f}%)")
-        print(f"    - Disturbing Normal: {n_disturbing_normal:,} ({100*n_disturbing_normal/total:.1f}%)")
-        print(f"    - Anomaly:           {n_anomaly:,} ({100*n_anomaly/total:.1f}%)")
-        print(f"    - Total:             {total:,}")
+        print(f"\n  [{name} - Test Set (Raw, before downsampling)]")
+        print(f"    - Pure Normal:       {test_pure:,} ({100*test_pure/test_total:.1f}%)")
+        print(f"    - Disturbing Normal: {test_disturb:,} ({100*test_disturb/test_total:.1f}%)")
+        print(f"    - Anomaly:           {test_anomaly:,} ({100*test_anomaly/test_total:.1f}%)")
+        print(f"    - Total:             {test_total:,}")
+        print(f"    (Will be downsampled to {config.test_ratio_pure_normal:.0%}:{config.test_ratio_disturbing_normal:.0%}:{config.test_ratio_anomaly:.0%})")
 
         # Get anomaly type distribution (from anomaly_regions)
         anomaly_type_counts = {}
@@ -240,8 +265,8 @@ class ExperimentRunner:
             count = anomaly_type_counts[atype_idx]
             print(f"    - {atype_name}: {count}")
 
-        # Clean up temporary dataset
-        del temp_dataset
+        # Clean up
+        del temp_train, temp_test
 
     def generate_combinations(self) -> List[Dict]:
         """Generate all parameter combinations"""
@@ -398,7 +423,15 @@ class ExperimentRunner:
             seed=config.random_seed
         )
 
-        # Create test dataset with target counts
+        # Create test dataset with target counts (ratio-based)
+        # Test set ratios: 65% pure_normal, 15% disturbing, 25% anomaly
+        total_test = config.num_test_samples
+        target_counts = {
+            'pure_normal': int(total_test * config.test_ratio_pure_normal),
+            'disturbing_normal': int(total_test * config.test_ratio_disturbing_normal),
+            'anomaly': int(total_test * config.test_ratio_anomaly)
+        }
+
         test_dataset = SlidingWindowDataset(
             signals=signals,
             point_labels=point_labels,
@@ -408,11 +441,7 @@ class ExperimentRunner:
             mask_last_n=config.mask_last_n,
             split='test',
             train_ratio=train_ratio,
-            target_counts={
-                'pure_normal': config.test_target_pure_normal,
-                'disturbing_normal': config.test_target_disturbing_normal,
-                'anomaly': config.test_target_anomaly
-            },
+            target_counts=target_counts,
             seed=config.random_seed
         )
 

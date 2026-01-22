@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-01-23 (Update 18): Train/Test Set Composition Fix
+
+### Problem
+- Only test set statistics were displayed, train set was missing
+- Test set ratios were hardcoded as absolute counts (1200:300:500)
+
+### Changes
+
+#### 1. Train/Test Statistics Display
+- Now shows both **Train Set (Raw)** and **Test Set (Raw)** statistics
+- Train set: no downsampling, natural distribution (~5% anomaly from interval_scale)
+- Test set: shows raw distribution + target ratio info
+
+#### 2. Test Set Ratio-Based Downsampling
+- **Before**: Hardcoded counts (1200:300:500 = 60:15:25)
+- **After**: Ratio-based (65:15:25) scaled to `num_test_samples`
+- Config now uses `test_ratio_*` instead of `test_target_*`
+
+#### 3. Dataset Composition
+| Split | Pure Normal | Disturbing | Anomaly | Downsampling |
+|-------|-------------|------------|---------|--------------|
+| Train | Natural | Natural | ~5% | None |
+| Test | 65% | 15% | 25% | Yes |
+
+### Files Modified
+- `mae_anomaly/config.py`
+- `scripts/run_experiments.py`
+
+---
+
 ## 2026-01-23 (Update 17): Fix Anomaly Ratio in Quick Search
 
 ### Problem

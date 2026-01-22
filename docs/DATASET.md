@@ -27,8 +27,8 @@ This project uses a **Sliding Window Time Series Dataset** that simulates server
    └── Total windows: ~220,000
 
 3. Train/Test Split
-   ├── Train: First 50% (~110,000 samples)
-   └── Test: Last 50% (downsampled to 2,000)
+   ├── Train: First 50% (no downsampling, ~5% anomaly)
+   └── Test: Last 50% (downsampled to 65:15:25 ratio)
 
 4. Labeling
    ├── Check last 10 timesteps (mask_last_n)
@@ -553,10 +553,10 @@ config.sliding_window_stride = 10          # Stride (90% overlap)
 config.anomaly_interval_scale = 1.5        # Controls anomaly density
 config.mask_last_n = 10                    # Last N timesteps for labeling
 
-# Test set target counts
-config.test_target_pure_normal = 1200
-config.test_target_disturbing_normal = 300
-config.test_target_anomaly = 500
+# Test set target ratios (for downsampling)
+config.test_ratio_pure_normal = 0.65      # 65%
+config.test_ratio_disturbing_normal = 0.15  # 15%
+config.test_ratio_anomaly = 0.25           # 25%
 ```
 
 ### Anomaly Type Configurations
@@ -639,9 +639,9 @@ test_dataset = SlidingWindowDataset(
     split='test',
     train_ratio=0.5,
     target_counts={
-        'pure_normal': config.test_target_pure_normal,
-        'disturbing_normal': config.test_target_disturbing_normal,
-        'anomaly': config.test_target_anomaly
+        'pure_normal': int(num_test * config.test_ratio_pure_normal),
+        'disturbing_normal': int(num_test * config.test_ratio_disturbing_normal),
+        'anomaly': int(num_test * config.test_ratio_anomaly)
     },
     seed=config.random_seed
 )

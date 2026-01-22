@@ -26,10 +26,11 @@ class Config:
     sliding_window_stride: int = 10  # Stride for window extraction (overlapping windows)
     anomaly_interval_scale: float = 1.5  # Scale factor for anomaly intervals (tuned for ~5% anomaly)
 
-    # Test set target counts (for downsampling)
-    test_target_pure_normal: int = 1200
-    test_target_disturbing_normal: int = 300
-    test_target_anomaly: int = 500
+    # Test set target ratios (for downsampling)
+    # Ratios: pure_normal=65%, disturbing_normal=15%, anomaly=25%
+    test_ratio_pure_normal: float = 0.65
+    test_ratio_disturbing_normal: float = 0.15
+    test_ratio_anomaly: float = 0.25
 
     # Model parameters
     d_model: int = 64
