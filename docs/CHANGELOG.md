@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-01-23 (Update 17): Fix Anomaly Ratio in Quick Search
+
+### Problem
+- Previous fix scaled interval proportionally: `quick_interval_scale = base * (quick/full)`
+- This reduced interval → more frequent anomalies → 19% anomaly ratio (too high)
+
+### Solution
+- Use same `interval_scale` for both quick and full search
+- Anomaly ratio determined by interval_scale, not data length
+- Consistent ~5% anomaly ratio regardless of dataset size
+
+### Files Modified
+- `scripts/run_experiments.py`
+
+---
+
 ## 2026-01-23 (Update 16): Quick Search Dataset Size Increase
 
 ### Changes

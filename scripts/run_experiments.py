@@ -137,13 +137,12 @@ class ExperimentRunner:
             print("Normal data complexity: DISABLED (simple patterns)", flush=True)
 
         # Generate quick search time series (shorter for fast screening)
-        # Scale interval proportionally to maintain similar anomaly ratio
-        quick_interval_scale = config.anomaly_interval_scale * (quick_length / full_length)
-        print(f"\nGenerating quick search dataset (interval_scale={quick_interval_scale:.3f})...", flush=True)
+        # Use same interval_scale as full search to maintain consistent anomaly ratio (~5%)
+        print(f"\nGenerating quick search dataset (interval_scale={config.anomaly_interval_scale})...", flush=True)
         quick_generator = SlidingWindowTimeSeriesGenerator(
             total_length=quick_length,
             num_features=config.num_features,
-            interval_scale=quick_interval_scale,
+            interval_scale=config.anomaly_interval_scale,
             complexity=complexity,
             seed=config.random_seed
         )
