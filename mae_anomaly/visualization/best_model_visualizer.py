@@ -30,6 +30,7 @@ from tqdm import tqdm
 from mae_anomaly import Config, ANOMALY_TYPE_NAMES
 from .base import (
     get_anomaly_colors, SAMPLE_TYPE_NAMES, SAMPLE_TYPE_COLORS,
+    VIS_COLORS, VIS_MARKERS, VIS_LINESTYLES,
     collect_predictions, collect_detailed_data,
 )
 
@@ -49,7 +50,10 @@ class BestModelVisualizer:
         print("  Collecting detailed data...")
         self.detailed_data = collect_detailed_data(model, test_loader, config)
 
-    def _highlight_anomaly_regions(self, ax, point_labels, color='red', alpha=0.2, label='Anomaly Region'):
+    def _highlight_anomaly_regions(self, ax, point_labels, color=None, alpha=0.2, label='Anomaly Region'):
+        # Use VIS_COLORS if color not specified
+        if color is None:
+            color = VIS_COLORS['anomaly_region']
         """Highlight anomaly regions with shaded areas
 
         Args:
@@ -94,9 +98,9 @@ class BestModelVisualizer:
         optimal_threshold = thresholds[optimal_idx]
 
         fig, ax = plt.subplots(figsize=(8, 8))
-        ax.plot(fpr, tpr, color='#E74C3C', lw=2, label=f'ROC curve (AUC = {roc_auc:.4f})')
-        ax.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--')
-        ax.scatter(fpr[optimal_idx], tpr[optimal_idx], s=100, c='green', zorder=5,
+        ax.plot(fpr, tpr, color=VIS_COLORS['anomaly'], lw=2, label=f'ROC curve (AUC = {roc_auc:.4f})')
+        ax.plot([0, 1], [0, 1], color=VIS_COLORS['reference'], lw=2, linestyle='--')
+        ax.scatter(fpr[optimal_idx], tpr[optimal_idx], s=100, c=VIS_COLORS['threshold'], zorder=5,
                   label=f'Optimal (threshold={optimal_threshold:.4f})')
         ax.set_xlim([0.0, 1.0])
         ax.set_ylim([0.0, 1.05])
@@ -121,11 +125,11 @@ class BestModelVisualizer:
         # Histogram
         ax = axes[0]
         ax.hist(self.pred_data['scores'][normal_mask], bins=50, alpha=0.6,
-               label='Normal', color='#3498DB', density=True)
+               label='Normal', color=VIS_COLORS['normal'], density=True)
         ax.hist(self.pred_data['scores'][anomaly_mask], bins=50, alpha=0.6,
-               label='Anomaly', color='#E74C3C', density=True)
-        ax.axvline(self.pred_data['scores'][normal_mask].mean(), color='#3498DB', linestyle='--', lw=2)
-        ax.axvline(self.pred_data['scores'][anomaly_mask].mean(), color='#E74C3C', linestyle='--', lw=2)
+               label='Anomaly', color=VIS_COLORS['anomaly'], density=True)
+        ax.axvline(self.pred_data['scores'][normal_mask].mean(), color=VIS_COLORS['normal'], linestyle='--', lw=2)
+        ax.axvline(self.pred_data['scores'][anomaly_mask].mean(), color=VIS_COLORS['anomaly'], linestyle='--', lw=2)
         ax.set_xlabel('Anomaly Score')
         ax.set_ylabel('Density')
         ax.set_title('Anomaly Score Distribution', fontsize=12, fontweight='bold')
@@ -135,8 +139,8 @@ class BestModelVisualizer:
         ax = axes[1]
         box_data = [self.pred_data['scores'][normal_mask], self.pred_data['scores'][anomaly_mask]]
         bp = ax.boxplot(box_data, labels=['Normal', 'Anomaly'], patch_artist=True)
-        bp['boxes'][0].set_facecolor('#3498DB')
-        bp['boxes'][1].set_facecolor('#E74C3C')
+        bp['boxes'][0].set_facecolor(VIS_COLORS['normal'])
+        bp['boxes'][1].set_facecolor(VIS_COLORS['anomaly'])
         ax.set_ylabel('Anomaly Score')
         ax.set_title('Anomaly Score Box Plot', fontsize=12, fontweight='bold')
 
@@ -178,10 +182,10 @@ class BestModelVisualizer:
         ax = axes[0]
         ax.scatter(self.pred_data['recon_errors'][normal_mask],
                   self.pred_data['discrepancies'][normal_mask],
-                  alpha=0.5, label='Normal', color='#3498DB', s=30)
+                  alpha=0.5, label='Normal', color=VIS_COLORS['normal'], s=30)
         ax.scatter(self.pred_data['recon_errors'][anomaly_mask],
                   self.pred_data['discrepancies'][anomaly_mask],
-                  alpha=0.5, label='Anomaly', color='#E74C3C', s=30)
+                  alpha=0.5, label='Anomaly', color=VIS_COLORS['anomaly'], s=30)
         ax.set_xlabel('Reconstruction Error')
         ax.set_ylabel('Discrepancy')
         ax.set_title('Reconstruction Error vs Discrepancy', fontsize=12, fontweight='bold')
@@ -197,8 +201,8 @@ class BestModelVisualizer:
         anomaly_recon = self.pred_data['recon_errors'][anomaly_mask].mean()
         anomaly_disc = self.pred_data['discrepancies'][anomaly_mask].mean()
 
-        bars1 = ax.bar(x - width/2, [normal_recon, anomaly_recon], width, label='Recon Error', color='#3498DB')
-        bars2 = ax.bar(x + width/2, [normal_disc, anomaly_disc], width, label='Discrepancy', color='#E74C3C')
+        bars1 = ax.bar(x - width/2, [normal_recon, anomaly_recon], width, label='Recon Error', color=VIS_COLORS['normal'])
+        bars2 = ax.bar(x + width/2, [normal_disc, anomaly_disc], width, label='Discrepancy', color=VIS_COLORS['anomaly'])
 
         ax.set_xticks(x)
         ax.set_xticklabels(['Normal', 'Anomaly'])
@@ -226,9 +230,9 @@ class BestModelVisualizer:
         # Scatter plot
         ax = axes[0]
         ax.scatter(teacher_mean[normal_mask], student_mean[normal_mask],
-                  alpha=0.6, label='Normal', color='#3498DB', s=30)
+                  alpha=0.6, label='Normal', color=VIS_COLORS['normal'], s=30)
         ax.scatter(teacher_mean[anomaly_mask], student_mean[anomaly_mask],
-                  alpha=0.6, label='Anomaly', color='#E74C3C', s=30)
+                  alpha=0.6, label='Anomaly', color=VIS_COLORS['anomaly'], s=30)
 
         max_val = max(teacher_mean.max(), student_mean.max())
         ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.5, label='y=x')
@@ -242,8 +246,8 @@ class BestModelVisualizer:
         ax = axes[1]
         disc_mean = (self.detailed_data['discrepancies'] * mask_inverse).sum(axis=1) / (mask_inverse.sum(axis=1) + 1e-8)
 
-        ax.hist(disc_mean[normal_mask], bins=30, alpha=0.6, label='Normal', color='#3498DB', density=True)
-        ax.hist(disc_mean[anomaly_mask], bins=30, alpha=0.6, label='Anomaly', color='#E74C3C', density=True)
+        ax.hist(disc_mean[normal_mask], bins=30, alpha=0.6, label='Normal', color=VIS_COLORS['normal'], density=True)
+        ax.hist(disc_mean[anomaly_mask], bins=30, alpha=0.6, label='Anomaly', color=VIS_COLORS['anomaly'], density=True)
         ax.set_xlabel('Mean Discrepancy')
         ax.set_ylabel('Density')
         ax.set_title('Discrepancy Distribution', fontsize=12, fontweight='bold')
@@ -286,28 +290,28 @@ class BestModelVisualizer:
 
             # Original vs Teacher
             ax = axes[row, 0] if len(all_samples) > 1 else axes[0]
-            self._highlight_anomaly_regions(ax, point_labels, color='red', alpha=0.3, label='Anomaly')
+            self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly')
             ax.plot(x, original, 'b-', label='Original', alpha=0.8)
             ax.plot(x, teacher, 'g--', label='Teacher', alpha=0.8)
-            ax.axvspan(mask_start, mask_end, alpha=0.2, color='yellow', label='Masked')
+            ax.axvspan(mask_start, mask_end, alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked')
             ax.set_title(f'{label} - Original vs Teacher')
             ax.legend(fontsize=8)
 
             # Original vs Student
             ax = axes[row, 1] if len(all_samples) > 1 else axes[1]
-            self._highlight_anomaly_regions(ax, point_labels, color='red', alpha=0.3, label='Anomaly')
+            self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly')
             ax.plot(x, original, 'b-', label='Original', alpha=0.8)
             ax.plot(x, student, 'r--', label='Student', alpha=0.8)
-            ax.axvspan(mask_start, mask_end, alpha=0.2, color='yellow', label='Masked')
+            ax.axvspan(mask_start, mask_end, alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked')
             ax.set_title(f'{label} - Original vs Student')
             ax.legend(fontsize=8)
 
             # Discrepancy
             ax = axes[row, 2] if len(all_samples) > 1 else axes[2]
-            self._highlight_anomaly_regions(ax, point_labels, color='red', alpha=0.3, label='Anomaly')
-            ax.plot(x, disc, 'purple', lw=2)
-            ax.axvspan(mask_start, mask_end, alpha=0.2, color='yellow', label='Masked')
-            ax.axhline(y=disc.mean(), color='orange', linestyle='--', label=f'Mean: {disc.mean():.4f}')
+            self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly')
+            ax.plot(x, disc, color=VIS_COLORS['student'], lw=2)
+            ax.axvspan(mask_start, mask_end, alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked')
+            ax.axhline(y=disc.mean(), color=VIS_COLORS['disturbing'], linestyle='--', label=f'Mean: {disc.mean():.4f}')
             ax.set_title(f'{label} - Discrepancy Profile')
             ax.legend(fontsize=8)
 
@@ -334,10 +338,10 @@ class BestModelVisualizer:
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
         examples = [
-            (tp_idx, 'True Positive', '#27AE60'),
-            (tn_idx, 'True Negative', '#3498DB'),
-            (fp_idx, 'False Positive', '#F39C12'),
-            (fn_idx, 'False Negative', '#E74C3C')
+            (tp_idx, 'True Positive', VIS_COLORS['true_positive']),
+            (tn_idx, 'True Negative', VIS_COLORS['true_negative']),
+            (fp_idx, 'False Positive', VIS_COLORS['false_positive']),
+            (fn_idx, 'False Negative', VIS_COLORS['false_negative'])
         ]
 
         for ax, (indices, title, color) in zip(axes.flatten(), examples):
@@ -348,11 +352,11 @@ class BestModelVisualizer:
                 x = np.arange(len(original))
 
                 # Highlight anomaly regions first (so they appear behind the line)
-                self._highlight_anomaly_regions(ax, point_labels, color='red', alpha=0.3, label='Anomaly Region')
+                self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly Region')
 
                 # Highlight masked region (last patch)
                 mask_start = len(original) - self.config.mask_last_n
-                ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow', label='Masked Region')
+                ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked Region')
 
                 ax.plot(x, original, color=color, lw=2, label='Signal')
                 ax.set_title(f'{title}\nScore: {self.pred_data["scores"][idx]:.4f}, '
@@ -480,7 +484,7 @@ class BestModelVisualizer:
 
             # Color the violins
             for i, pc in enumerate(parts['bodies']):
-                pc.set_facecolor(colors.get(atype, '#95A5A6'))
+                pc.set_facecolor(colors.get(atype, VIS_COLORS['reference']))
                 pc.set_alpha(0.7)
 
             ax.set_xticks([1, 2])
@@ -544,8 +548,9 @@ class BestModelVisualizer:
 
         # Detection rate bar chart
         ax = axes[0]
-        colors = ['#E74C3C', '#F39C12', '#9B59B6', '#1ABC9C', '#E67E22'][:len(anomaly_types)]
-        bars = ax.bar(anomaly_types, detection_rates, color=colors, alpha=0.8, edgecolor='black')
+        anomaly_colors = get_anomaly_colors()
+        colors = [anomaly_colors.get(atype, VIS_COLORS['reference']) for atype in anomaly_types]
+        bars = ax.bar(anomaly_types, detection_rates, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
         ax.set_ylabel('Detection Rate (%)')
         ax.set_title('Detection Rate by Anomaly Type', fontweight='bold')
         ax.set_ylim(0, 105)
@@ -557,7 +562,7 @@ class BestModelVisualizer:
 
         # Mean score bar chart
         ax = axes[1]
-        bars = ax.bar(anomaly_types, mean_scores, color=colors, alpha=0.8, edgecolor='black')
+        bars = ax.bar(anomaly_types, mean_scores, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
         ax.set_ylabel('Mean Anomaly Score')
         ax.set_title('Mean Score by Anomaly Type', fontweight='bold')
 
@@ -605,7 +610,7 @@ class BestModelVisualizer:
             if len(type_data) > 0:
                 ax.scatter(type_data['reconstruction_loss'], type_data['discrepancy_loss'],
                           alpha=0.6, label=atype.replace('_', ' ').title(),
-                          color=colors.get(atype, '#95A5A6'), s=30)
+                          color=colors.get(atype, VIS_COLORS['reference']), s=30)
 
         ax.set_xlabel('Reconstruction Loss')
         ax.set_ylabel('Discrepancy Loss')
@@ -618,9 +623,9 @@ class BestModelVisualizer:
         anomaly_data = detailed_csv[detailed_csv['anomaly_type_name'] != 'normal']
 
         ax.scatter(normal_data['reconstruction_loss'], normal_data['discrepancy_loss'],
-                  alpha=0.5, label='Normal', color='#3498DB', s=30)
+                  alpha=0.5, label='Normal', color=VIS_COLORS['normal'], s=30)
         ax.scatter(anomaly_data['reconstruction_loss'], anomaly_data['discrepancy_loss'],
-                  alpha=0.5, label='Anomaly', color='#E74C3C', s=30)
+                  alpha=0.5, label='Anomaly', color=VIS_COLORS['anomaly'], s=30)
 
         ax.set_xlabel('Reconstruction Loss')
         ax.set_ylabel('Discrepancy Loss')
@@ -716,8 +721,8 @@ class BestModelVisualizer:
 
         if recon_means:
             x = np.arange(len(labels))
-            ax.bar(x - width/2, recon_means, width, label='Reconstruction', color='#3498DB', alpha=0.8)
-            ax.bar(x + width/2, disc_means, width, label='Discrepancy', color='#E74C3C', alpha=0.8)
+            ax.bar(x - width/2, recon_means, width, label='Reconstruction', color=VIS_COLORS['normal'], alpha=0.8)
+            ax.bar(x + width/2, disc_means, width, label='Discrepancy', color=VIS_COLORS['anomaly'], alpha=0.8)
             ax.set_xticks(x)
             ax.set_xticklabels(labels)
         ax.set_ylabel('Mean Loss')
@@ -756,9 +761,9 @@ class BestModelVisualizer:
 
         # 1. Total score distribution
         ax = axes[0, 0]
-        ax.hist(pure_total, bins=30, alpha=0.6, label=f'Pure Normal (n={pure_normal_mask.sum()})', color='#3498DB', density=True)
-        ax.hist(dist_total, bins=30, alpha=0.6, label=f'Disturbing Normal (n={disturbing_mask.sum()})', color='#F39C12', density=True)
-        ax.hist(anom_total, bins=30, alpha=0.6, label=f'Anomaly (n={anomaly_mask.sum()})', color='#E74C3C', density=True)
+        ax.hist(pure_total, bins=30, alpha=0.6, label=f'Pure Normal (n={pure_normal_mask.sum()})', color=VIS_COLORS['normal'], density=True)
+        ax.hist(dist_total, bins=30, alpha=0.6, label=f'Disturbing Normal (n={disturbing_mask.sum()})', color=VIS_COLORS['disturbing'], density=True)
+        ax.hist(anom_total, bins=30, alpha=0.6, label=f'Anomaly (n={anomaly_mask.sum()})', color=VIS_COLORS['anomaly'], density=True)
         ax.set_xlabel('Total Score (Recon + λ·Disc)')
         ax.set_ylabel('Density')
         ax.set_title('Score Distribution by Sample Type', fontweight='bold')
@@ -769,8 +774,8 @@ class BestModelVisualizer:
         box_data = [pure_total, dist_total, anom_total]
         labels = ['Pure\nNormal', 'Disturbing\nNormal', 'Anomaly']
         bp = ax.boxplot(box_data, labels=labels, patch_artist=True)
-        colors = ['#3498DB', '#F39C12', '#E74C3C']
-        for patch, color in zip(bp['boxes'], colors):
+        sample_colors = [VIS_COLORS['normal'], VIS_COLORS['disturbing'], VIS_COLORS['anomaly']]
+        for patch, color in zip(bp['boxes'], sample_colors):
             patch.set_facecolor(color)
             patch.set_alpha(0.7)
         ax.set_ylabel('Total Score')
@@ -778,9 +783,9 @@ class BestModelVisualizer:
 
         # 3. Discrepancy comparison (key metric)
         ax = axes[0, 2]
-        ax.hist(pure_disc, bins=30, alpha=0.6, label='Pure Normal', color='#3498DB', density=True)
-        ax.hist(dist_disc, bins=30, alpha=0.6, label='Disturbing Normal', color='#F39C12', density=True)
-        ax.hist(anom_disc, bins=30, alpha=0.6, label='Anomaly', color='#E74C3C', density=True)
+        ax.hist(pure_disc, bins=30, alpha=0.6, label='Pure Normal', color=VIS_COLORS['normal'], density=True)
+        ax.hist(dist_disc, bins=30, alpha=0.6, label='Disturbing Normal', color=VIS_COLORS['disturbing'], density=True)
+        ax.hist(anom_disc, bins=30, alpha=0.6, label='Anomaly', color=VIS_COLORS['anomaly'], density=True)
         ax.set_xlabel('Discrepancy (Teacher-Student)')
         ax.set_ylabel('Density')
         ax.set_title('Discrepancy Distribution', fontweight='bold')
@@ -788,9 +793,9 @@ class BestModelVisualizer:
 
         # 4. Teacher vs Student scatter
         ax = axes[1, 0]
-        ax.scatter(pure_teacher, pure_student, alpha=0.5, label='Pure Normal', color='#3498DB', s=20)
-        ax.scatter(dist_teacher, dist_student, alpha=0.5, label='Disturbing Normal', color='#F39C12', s=20)
-        ax.scatter(anom_teacher, anom_student, alpha=0.5, label='Anomaly', color='#E74C3C', s=20)
+        ax.scatter(pure_teacher, pure_student, alpha=0.5, label='Pure Normal', color=VIS_COLORS['normal'], s=20)
+        ax.scatter(dist_teacher, dist_student, alpha=0.5, label='Disturbing Normal', color=VIS_COLORS['disturbing'], s=20)
+        ax.scatter(anom_teacher, anom_student, alpha=0.5, label='Anomaly', color=VIS_COLORS['anomaly'], s=20)
         max_val = max(np.max([pure_teacher.max(), dist_teacher.max(), anom_teacher.max()]),
                       np.max([pure_student.max(), dist_student.max(), anom_student.max()]))
         ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.5, label='y=x')
@@ -808,9 +813,10 @@ class BestModelVisualizer:
         means_student = [pure_student.mean(), dist_student.mean(), anom_student.mean()]
         means_disc = [pure_disc.mean(), dist_disc.mean(), anom_disc.mean()]
 
-        bars1 = ax.bar(x - width, means_teacher, width, label='Teacher Error', color='#27AE60')
-        bars2 = ax.bar(x, means_student, width, label='Student Error', color='#9B59B6')
-        bars3 = ax.bar(x + width, means_disc, width, label='Discrepancy', color='#E74C3C')
+        # Use consistent colors: Teacher=green, Student=purple, Discrepancy=anomaly(red)
+        bars1 = ax.bar(x - width, means_teacher, width, label='Teacher Error', color=VIS_COLORS['teacher'])
+        bars2 = ax.bar(x, means_student, width, label='Student Error', color=VIS_COLORS['student'])
+        bars3 = ax.bar(x + width, means_disc, width, label='Discrepancy', color=VIS_COLORS['anomaly'])
 
         ax.set_xticks(x)
         ax.set_xticklabels(['Pure\nNormal', 'Disturbing\nNormal', 'Anomaly'])
@@ -895,17 +901,17 @@ Separation Analysis:
         anom_std = anom_disc.std(axis=0)
 
         # Plot with std bands
-        ax.plot(t, pure_mean, label=f'Pure Normal (n={pure_normal_mask.sum()})', color='#3498DB', lw=2)
-        ax.fill_between(t, pure_mean - pure_std, pure_mean + pure_std, color='#3498DB', alpha=0.2)
+        ax.plot(t, pure_mean, label=f'Pure Normal (n={pure_normal_mask.sum()})', color=VIS_COLORS['normal'], lw=2)
+        ax.fill_between(t, pure_mean - pure_std, pure_mean + pure_std, color=VIS_COLORS['normal'], alpha=0.2)
 
-        ax.plot(t, dist_mean, label=f'Disturbing Normal (n={disturbing_mask.sum()})', color='#F39C12', lw=2)
-        ax.fill_between(t, dist_mean - dist_std, dist_mean + dist_std, color='#F39C12', alpha=0.2)
+        ax.plot(t, dist_mean, label=f'Disturbing Normal (n={disturbing_mask.sum()})', color=VIS_COLORS['disturbing'], lw=2)
+        ax.fill_between(t, dist_mean - dist_std, dist_mean + dist_std, color=VIS_COLORS['disturbing'], alpha=0.2)
 
-        ax.plot(t, anom_mean, label=f'Anomaly (n={anomaly_mask.sum()})', color='#E74C3C', lw=2)
-        ax.fill_between(t, anom_mean - anom_std, anom_mean + anom_std, color='#E74C3C', alpha=0.2)
+        ax.plot(t, anom_mean, label=f'Anomaly (n={anomaly_mask.sum()})', color=VIS_COLORS['anomaly'], lw=2)
+        ax.fill_between(t, anom_mean - anom_std, anom_mean + anom_std, color=VIS_COLORS['anomaly'], alpha=0.2)
 
         # Highlight masked region (last patch)
-        ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.3, color='yellow', label='Masked Region')
+        ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.3, color=VIS_COLORS['masked_region'], label='Masked Region')
 
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Mean Discrepancy (±1 std)')
@@ -920,17 +926,21 @@ Separation Analysis:
         dist_last = dist_disc[:, -mask_last_n:]
         anom_last = anom_disc[:, -mask_last_n:]
 
-        ax.plot(t_last, pure_last.mean(axis=0), label='Pure Normal', color='#3498DB', lw=2, marker='o', ms=4)
+        # Use consistent colors from VIS_COLORS (Normal=blue, Anomaly=red, Disturbing=orange)
+        ax.plot(t_last, pure_last.mean(axis=0), label='Pure Normal',
+               color=VIS_COLORS['normal'], lw=2, marker='o', ms=4)
         ax.fill_between(t_last, pure_last.mean(axis=0) - pure_last.std(axis=0),
-                       pure_last.mean(axis=0) + pure_last.std(axis=0), color='#3498DB', alpha=0.2)
+                       pure_last.mean(axis=0) + pure_last.std(axis=0), color=VIS_COLORS['normal'], alpha=0.2)
 
-        ax.plot(t_last, dist_last.mean(axis=0), label='Disturbing Normal', color='#F39C12', lw=2, marker='s', ms=4)
+        ax.plot(t_last, dist_last.mean(axis=0), label='Disturbing Normal',
+               color=VIS_COLORS['disturbing'], lw=2, marker='s', ms=4)
         ax.fill_between(t_last, dist_last.mean(axis=0) - dist_last.std(axis=0),
-                       dist_last.mean(axis=0) + dist_last.std(axis=0), color='#F39C12', alpha=0.2)
+                       dist_last.mean(axis=0) + dist_last.std(axis=0), color=VIS_COLORS['disturbing'], alpha=0.2)
 
-        ax.plot(t_last, anom_last.mean(axis=0), label='Anomaly', color='#E74C3C', lw=2, marker='^', ms=4)
+        ax.plot(t_last, anom_last.mean(axis=0), label='Anomaly',
+               color=VIS_COLORS['anomaly'], lw=2, marker='^', ms=4)
         ax.fill_between(t_last, anom_last.mean(axis=0) - anom_last.std(axis=0),
-                       anom_last.mean(axis=0) + anom_last.std(axis=0), color='#E74C3C', alpha=0.2)
+                       anom_last.mean(axis=0) + anom_last.std(axis=0), color=VIS_COLORS['anomaly'], alpha=0.2)
 
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Mean Discrepancy')
@@ -963,16 +973,16 @@ Separation Analysis:
         # Box plot for better comparison
         data_to_plot = [last_patch_pure, last_patch_dist, last_patch_anom]
         labels = ['Pure Normal', 'Disturbing Normal', 'Anomaly']
-        colors = ['#3498DB', '#F39C12', '#E74C3C']
+        sample_colors = [VIS_COLORS['normal'], VIS_COLORS['disturbing'], VIS_COLORS['anomaly']]
 
         bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True)
-        for patch, color in zip(bp['boxes'], colors):
+        for patch, color in zip(bp['boxes'], sample_colors):
             patch.set_facecolor(color)
             patch.set_alpha(0.6)
 
         # Add mean markers
         means = [d.mean() for d in data_to_plot]
-        ax.scatter([1, 2, 3], means, color='black', marker='D', s=50, zorder=5, label='Mean')
+        ax.scatter([1, 2, 3], means, color=VIS_COLORS['baseline'], marker='D', s=50, zorder=5, label='Mean')
 
         ax.set_ylabel('Mean Discrepancy (Last Patch)')
         ax.set_title('Last Patch Discrepancy Distribution\n(Masked Region Only)', fontweight='bold')
@@ -1034,7 +1044,7 @@ Separation Analysis:
         scatter = ax.scatter(dist_anomaly_ratio, dist_total, alpha=0.5, c=dist_disc,
                             cmap='RdYlGn_r', s=20)
         plt.colorbar(scatter, ax=ax, label='Discrepancy')
-        ax.axhline(y=threshold, color='red', linestyle='--', lw=2, label=f'Threshold={threshold:.4f}')
+        ax.axhline(y=threshold, color=VIS_COLORS['anomaly_region'], linestyle='--', lw=2, label=f'Threshold={threshold:.4f}')
         ax.set_xlabel('Anomaly Ratio in Window (excluding last patch)')
         ax.set_ylabel('Total Score')
         ax.set_title('H1: Does anomaly in window increase score?\n(Disturbing Normal samples)', fontweight='bold')
@@ -1063,7 +1073,7 @@ Separation Analysis:
         scatter = ax.scatter(dist_distances, dist_total, alpha=0.5, c=dist_disc,
                             cmap='RdYlGn_r', s=20)
         plt.colorbar(scatter, ax=ax, label='Discrepancy')
-        ax.axhline(y=threshold, color='red', linestyle='--', lw=2, label=f'Threshold')
+        ax.axhline(y=threshold, color=VIS_COLORS['anomaly_region'], linestyle='--', lw=2, label=f'Threshold')
         ax.set_xlabel('Distance from Last Anomaly to Last Patch Start')
         ax.set_ylabel('Total Score')
         ax.set_title('H2: Does recent anomaly affect score?\n(Disturbing Normal samples)', fontweight='bold')
@@ -1080,14 +1090,14 @@ Separation Analysis:
         # Compare variance of scores across sample types
         data_for_violin = [pure_total, dist_total, anom_total]
         labels = ['Pure\nNormal', 'Disturbing\nNormal', 'Anomaly']
-        colors = ['#3498DB', '#F39C12', '#E74C3C']
+        sample_colors = [VIS_COLORS['normal'], VIS_COLORS['disturbing'], VIS_COLORS['anomaly']]
 
         parts = ax.violinplot(data_for_violin, positions=[0, 1, 2], showmeans=True, showmedians=True)
         for i, pc in enumerate(parts['bodies']):
-            pc.set_facecolor(colors[i])
+            pc.set_facecolor(sample_colors[i])
             pc.set_alpha(0.7)
 
-        ax.axhline(y=threshold, color='green', linestyle='--', lw=2, label=f'Global Threshold')
+        ax.axhline(y=threshold, color=VIS_COLORS['threshold'], linestyle='--', lw=2, label=f'Global Threshold')
         ax.set_xticks([0, 1, 2])
         ax.set_xticklabels(labels)
         ax.set_ylabel('Total Score')
@@ -1125,10 +1135,10 @@ Separation Analysis:
         dist_recon_temporal = self.detailed_data['teacher_errors'][disturbing_mask].mean(axis=0)
         anom_recon_temporal = self.detailed_data['teacher_errors'][anomaly_mask].mean(axis=0)
 
-        ax.plot(t, pure_recon_temporal, label='Pure Normal', color='#3498DB', lw=2)
-        ax.plot(t, dist_recon_temporal, label='Disturbing Normal', color='#F39C12', lw=2)
-        ax.plot(t, anom_recon_temporal, label='Anomaly', color='#E74C3C', lw=2)
-        ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.2, color='gray', label='Last Patch (masked)')
+        ax.plot(t, pure_recon_temporal, label='Pure Normal', color=VIS_COLORS['normal'], lw=2)
+        ax.plot(t, dist_recon_temporal, label='Disturbing Normal', color=VIS_COLORS['disturbing'], lw=2)
+        ax.plot(t, anom_recon_temporal, label='Anomaly', color=VIS_COLORS['anomaly'], lw=2)
+        ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.2, color=VIS_COLORS['reference'], label='Last Patch (masked)')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Mean Reconstruction Error')
         ax.set_title('Temporal Reconstruction Error\n(Where does error come from?)', fontweight='bold')
@@ -1201,10 +1211,10 @@ Classification with Global Threshold:
         fn_idx = np.where((labels == 1) & (predictions == 0))[0]
 
         categories = [
-            ('True Positive', tp_idx, '#27AE60'),
-            ('True Negative', tn_idx, '#3498DB'),
-            ('False Positive', fp_idx, '#E67E22'),
-            ('False Negative', fn_idx, '#E74C3C')
+            ('True Positive', tp_idx, VIS_COLORS['true_positive']),
+            ('True Negative', tn_idx, VIS_COLORS['true_negative']),
+            ('False Positive', fp_idx, VIS_COLORS['false_positive']),
+            ('False Negative', fn_idx, VIS_COLORS['false_negative'])
         ]
 
         fig, axes = plt.subplots(4, 3, figsize=(18, 20))
@@ -1235,9 +1245,9 @@ Classification with Global Threshold:
             # Highlight anomaly and masked regions
             anomaly_region = np.where(point_labels == 1)[0]
             if len(anomaly_region) > 0:
-                ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red', label='Anomaly')
+                ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'], label='Anomaly')
             mask_start = len(original) - self.config.mask_last_n
-            ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow', label='Masked')
+            ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked')
 
             ax.set_title(f'{cat_name}: Time Series', fontweight='bold', color=color)
             ax.set_xlabel('Time Step')
@@ -1248,13 +1258,13 @@ Classification with Global Threshold:
             # Column 2: Discrepancy profile
             ax = axes[row, 1]
             discrepancy = self.detailed_data['discrepancies'][median_idx]
-            ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#9B59B6')
-            ax.plot(discrepancy, color='#8E44AD', lw=1)
+            ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['student'])
+            ax.plot(discrepancy, color=VIS_COLORS['student_dark'], lw=1)
 
             if len(anomaly_region) > 0:
-                ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
-            ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow')
-            ax.axhline(y=np.mean(discrepancy[-self.config.mask_last_n:]), color='green', linestyle='--',
+                ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+            ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
+            ax.axhline(y=np.mean(discrepancy[-self.config.mask_last_n:]), color=VIS_COLORS['threshold'], linestyle='--',
                       label=f'Masked Mean: {np.mean(discrepancy[-self.config.mask_last_n:]):.4f}')
 
             ax.set_title(f'{cat_name}: Discrepancy (|T-S|)', fontweight='bold', color=color)
@@ -1377,10 +1387,10 @@ Anomaly Location:
 
                     anomaly_region = np.where(point_labels == 1)[0]
                     if len(anomaly_region) > 0:
-                        ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
-                    ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+                        ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+                    ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
 
-                ax.set_title(f'{atype.upper()}: TP Example', fontweight='bold', color='#27AE60')
+                ax.set_title(f'{atype.upper()}: TP Example', fontweight='bold', color=VIS_COLORS['teacher'])
             else:
                 ax.text(0.5, 0.5, 'No TP', ha='center', va='center', transform=ax.transAxes)
                 ax.set_title(f'{atype.upper()}: TP Example', fontweight='bold')
@@ -1392,11 +1402,11 @@ Anomaly Location:
             ax = axes[row, 1]
             if tp_mask.sum() > 0 and tp_idx < len(self.detailed_data['discrepancies']):
                 discrepancy = self.detailed_data['discrepancies'][tp_idx]
-                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#27AE60')
+                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['teacher'])
                 if len(anomaly_region) > 0:
-                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
-                ax.axvspan(len(discrepancy) - self.config.mask_last_n, len(discrepancy), alpha=0.2, color='yellow')
-            ax.set_title(f'{atype.upper()}: TP Discrepancy', fontweight='bold', color='#27AE60')
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+                ax.axvspan(len(discrepancy) - self.config.mask_last_n, len(discrepancy), alpha=0.2, color=VIS_COLORS['masked_region'])
+            ax.set_title(f'{atype.upper()}: TP Discrepancy', fontweight='bold', color=VIS_COLORS['teacher'])
             ax.set_xlabel('Time Step')
 
             # Column 3: FN example time series
@@ -1415,12 +1425,12 @@ Anomaly Location:
 
                     anomaly_region_fn = np.where(point_labels == 1)[0]
                     if len(anomaly_region_fn) > 0:
-                        ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color='red')
-                    ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+                        ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+                    ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
 
-                ax.set_title(f'{atype.upper()}: FN Example', fontweight='bold', color='#E74C3C')
+                ax.set_title(f'{atype.upper()}: FN Example', fontweight='bold', color=VIS_COLORS['anomaly'])
             else:
-                ax.text(0.5, 0.5, 'No FN (All Detected!)', ha='center', va='center', transform=ax.transAxes, color='#27AE60')
+                ax.text(0.5, 0.5, 'No FN (All Detected!)', ha='center', va='center', transform=ax.transAxes, color=VIS_COLORS['teacher'])
                 ax.set_title(f'{atype.upper()}: FN Example', fontweight='bold')
             ax.set_xlabel('Time Step')
 
@@ -1428,11 +1438,11 @@ Anomaly Location:
             ax = axes[row, 3]
             if fn_mask.sum() > 0 and fn_idx < len(self.detailed_data['discrepancies']):
                 discrepancy = self.detailed_data['discrepancies'][fn_idx]
-                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#E74C3C')
+                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['anomaly'])
                 if len(anomaly_region_fn) > 0:
-                    ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color='red')
-                ax.axvspan(len(discrepancy) - self.config.mask_last_n, len(discrepancy), alpha=0.2, color='yellow')
-            ax.set_title(f'{atype.upper()}: FN Discrepancy', fontweight='bold', color='#E74C3C')
+                    ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+                ax.axvspan(len(discrepancy) - self.config.mask_last_n, len(discrepancy), alpha=0.2, color=VIS_COLORS['masked_region'])
+            ax.set_title(f'{atype.upper()}: FN Discrepancy', fontweight='bold', color=VIS_COLORS['anomaly'])
             ax.set_xlabel('Time Step')
 
         plt.suptitle('Anomaly Type Case Studies: TP vs FN Examples\n'
@@ -1478,9 +1488,9 @@ Anomaly Location:
 
         x = np.arange(num_features)
         width = 0.25
-        ax.bar(x - width, feature_errors_tp, width, label='TP (Detected Anomaly)', color='#27AE60')
-        ax.bar(x, feature_errors_fn, width, label='FN (Missed Anomaly)', color='#E74C3C')
-        ax.bar(x + width, feature_errors_tn, width, label='TN (Normal)', color='#3498DB')
+        ax.bar(x - width, feature_errors_tp, width, label='TP (Detected Anomaly)', color=VIS_COLORS['teacher'])
+        ax.bar(x, feature_errors_fn, width, label='FN (Missed Anomaly)', color=VIS_COLORS['anomaly'])
+        ax.bar(x + width, feature_errors_tn, width, label='TN (Normal)', color=VIS_COLORS['normal'])
         ax.set_xticks(x)
         ax.set_xticklabels([f'F{i}' for i in range(num_features)])
         ax.set_xlabel('Feature')
@@ -1503,9 +1513,9 @@ Anomaly Location:
             feature_disc_fn.append(disc_f[fn_mask].mean() if fn_mask.sum() > 0 else 0)
             feature_disc_tn.append(disc_f[tn_mask].mean() if tn_mask.sum() > 0 else 0)
 
-        ax.bar(x - width, feature_disc_tp, width, label='TP', color='#27AE60')
-        ax.bar(x, feature_disc_fn, width, label='FN', color='#E74C3C')
-        ax.bar(x + width, feature_disc_tn, width, label='TN', color='#3498DB')
+        ax.bar(x - width, feature_disc_tp, width, label='TP', color=VIS_COLORS['teacher'])
+        ax.bar(x, feature_disc_fn, width, label='FN', color=VIS_COLORS['anomaly'])
+        ax.bar(x + width, feature_disc_tn, width, label='TN', color=VIS_COLORS['normal'])
         ax.set_xticks(x)
         ax.set_xticklabels([f'F{i}' for i in range(num_features)])
         ax.set_xlabel('Feature')
@@ -1519,9 +1529,9 @@ Anomaly Location:
         importance = np.array(feature_errors_tp) - np.array(feature_errors_tn)
         sorted_idx = np.argsort(importance)[::-1]
 
-        colors = ['#27AE60' if imp > 0 else '#E74C3C' for imp in importance[sorted_idx]]
-        bars = ax.barh([f'Feature {i}' for i in sorted_idx], importance[sorted_idx], color=colors)
-        ax.axvline(x=0, color='black', linestyle='-', lw=1)
+        importance_colors = [VIS_COLORS['true_positive'] if imp > 0 else VIS_COLORS['false_negative'] for imp in importance[sorted_idx]]
+        bars = ax.barh([f'Feature {i}' for i in sorted_idx], importance[sorted_idx], color=importance_colors)
+        ax.axvline(x=0, color=VIS_COLORS['baseline'], linestyle='-', lw=1)
         ax.set_xlabel('Importance (TP Error - TN Error)')
         ax.set_title('Feature Importance Ranking', fontweight='bold')
 
@@ -1538,7 +1548,7 @@ Anomaly Location:
             ax.plot(original, 'b-', lw=1.2, label='Original')
             ax.plot(teacher, 'g--', lw=1.5, label='Teacher')
             ax.plot(student, 'r:', lw=1.5, label='Student')
-            ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+            ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
             ax.set_title(f'Most Important Feature (F{most_important_f}) - TP Example', fontweight='bold')
             ax.legend()
         ax.set_xlabel('Time Step')
@@ -1557,7 +1567,7 @@ Anomaly Location:
             ax.plot(original, 'b-', lw=1.2, label='Original')
             ax.plot(teacher, 'g--', lw=1.5, label='Teacher')
             ax.plot(student, 'r:', lw=1.5, label='Student')
-            ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+            ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
             ax.set_title(f'Least Important Feature (F{least_important_f}) - Same TP', fontweight='bold')
             ax.legend()
         ax.set_xlabel('Time Step')
@@ -1630,7 +1640,7 @@ Detection Statistics:
         for row in range(2):
             if row < len(fn_sorted):
                 idx = fn_sorted[row]
-                self._plot_sample_detail(axes[row], idx, f'Hardest FN #{row+1}', '#E74C3C', threshold)
+                self._plot_sample_detail(axes[row], idx, f'Hardest FN #{row+1}', VIS_COLORS['false_negative'], threshold)
             else:
                 for col in range(3):
                     axes[row, col].text(0.5, 0.5, f'No FN #{row+1}', ha='center', va='center')
@@ -1641,7 +1651,7 @@ Detection Statistics:
             fp_row = row - 2
             if fp_row < len(fp_sorted):
                 idx = fp_sorted[fp_row]
-                self._plot_sample_detail(axes[row], idx, f'Hardest FP #{fp_row+1}', '#E67E22', threshold)
+                self._plot_sample_detail(axes[row], idx, f'Hardest FP #{fp_row+1}', VIS_COLORS['false_positive'], threshold)
             else:
                 for col in range(3):
                     axes[row, col].text(0.5, 0.5, f'No FP #{fp_row+1}', ha='center', va='center')
@@ -1676,18 +1686,18 @@ Detection Statistics:
         ax.plot(teacher_recon, 'g--', lw=1.5, alpha=0.7, label='Teacher')
         ax.plot(student_recon, 'r:', lw=1.5, alpha=0.7, label='Student')
         if len(anomaly_region) > 0:
-            ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
-        ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow')
+            ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+        ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
         ax.set_title(f'{title_prefix}: Time Series', fontweight='bold', color=color)
         ax.legend(fontsize=7)
 
         # Column 2: Discrepancy
         ax = axes_row[1]
-        ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#9B59B6')
-        ax.plot(discrepancy, color='#8E44AD', lw=1)
+        ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['student'])
+        ax.plot(discrepancy, color=VIS_COLORS['student_dark'], lw=1)
         if len(anomaly_region) > 0:
-            ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
-        ax.axvspan(mask_start, len(original), alpha=0.2, color='yellow')
+            ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+        ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
         ax.set_title(f'{title_prefix}: Discrepancy', fontweight='bold', color=color)
 
         # Column 3: Stats
@@ -1717,6 +1727,167 @@ Anomaly in masked region:
                verticalalignment='top', fontfamily='monospace',
                bbox=dict(boxstyle='round', facecolor=color, alpha=0.15))
 
+    def plot_learning_curve(self, history: Dict, use_student_recon: bool = False):
+        """Plot learning curves for training losses.
+
+        Uses consistent color/marker scheme:
+        - Colors: Normal=blue, Anomaly=red, Teacher=green, Student=purple
+        - Markers: Discrepancy=square, Teacher recon=circle, Student recon=triangle
+
+        Args:
+            history: Training history dictionary with keys:
+                - epoch: list of epoch numbers
+                - train_rec_loss: teacher reconstruction loss per epoch
+                - train_disc_loss: discrepancy loss per epoch
+                - train_student_recon_loss: student reconstruction loss (optional)
+                - train_normal_loss: normal discrepancy loss (optional)
+                - train_anomaly_loss: anomaly discrepancy loss (optional)
+                - train_teacher_recon_normal/anomaly: teacher recon by type
+                - train_student_recon_normal/anomaly: student recon by type
+            use_student_recon: Whether student reconstruction loss is enabled
+        """
+        if history is None:
+            print("  ! Skipping learning_curve (no history provided)")
+            return
+
+        epochs = history.get('epoch', [])
+        if len(epochs) == 0:
+            print("  ! Skipping learning_curve (empty history)")
+            return
+
+        # Check for detailed metrics
+        has_detailed = 'train_teacher_recon_normal' in history
+
+        # Create comprehensive 2x3 figure for detailed view
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+
+        # Get warmup epochs from history (count epochs where disc_loss is 0)
+        warmup_epochs = 1
+        if 'train_disc_loss' in history:
+            for i, d in enumerate(history['train_disc_loss']):
+                if d > 0:
+                    warmup_epochs = i
+                    break
+
+        # Style constants for consistency
+        c_normal = VIS_COLORS['normal']      # Blue
+        c_anomaly = VIS_COLORS['anomaly']    # Red
+        c_teacher = VIS_COLORS['teacher']    # Green
+        c_student = VIS_COLORS['student']    # Purple
+        c_total = VIS_COLORS['total']        # Green
+        m_disc = VIS_MARKERS['discrepancy']  # Square
+        m_teacher = VIS_MARKERS['teacher_recon']  # Circle
+        m_student = VIS_MARKERS['student_recon']  # Triangle
+
+        # 1. Teacher Reconstruction Loss (Normal vs Anomaly)
+        ax = axes[0, 0]
+        if has_detailed and 'train_teacher_recon_normal' in history:
+            ax.plot(epochs, history['train_teacher_recon_normal'],
+                   color=c_normal, ls='-', lw=2, marker=m_teacher, ms=4, label='Normal')
+            ax.plot(epochs, history['train_teacher_recon_anomaly'],
+                   color=c_anomaly, ls='-', lw=2, marker=m_teacher, ms=4, label='Anomaly')
+        else:
+            ax.plot(epochs, history['train_rec_loss'],
+                   color=c_teacher, ls='-', lw=2, marker=m_teacher, ms=4, label='Teacher Recon')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('MSE Loss')
+        ax.set_title('Teacher Reconstruction Loss (○)', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        if warmup_epochs > 0:
+            ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
+
+        # 2. Student Reconstruction Loss (Normal vs Anomaly)
+        ax = axes[0, 1]
+        if has_detailed and 'train_student_recon_normal' in history:
+            ax.plot(epochs, history['train_student_recon_normal'],
+                   color=c_normal, ls='-', lw=2, marker=m_student, ms=4, label='Normal')
+            ax.plot(epochs, history['train_student_recon_anomaly'],
+                   color=c_anomaly, ls='-', lw=2, marker=m_student, ms=4, label='Anomaly')
+        else:
+            ax.plot(epochs, history.get('train_student_recon_loss', [0]*len(epochs)),
+                   color=c_student, ls='-', lw=2, marker=m_student, ms=4, label='Student Recon')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('MSE Loss')
+        ax.set_title('Student Reconstruction Loss (△)', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        if warmup_epochs > 0:
+            ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
+
+        # 3. Discrepancy Loss (Normal vs Anomaly)
+        ax = axes[0, 2]
+        if 'train_normal_loss' in history and 'train_anomaly_loss' in history:
+            ax.plot(epochs, history['train_normal_loss'],
+                   color=c_normal, ls='-', lw=2, marker=m_disc, ms=4, label='Normal (minimize)')
+            ax.plot(epochs, history['train_anomaly_loss'],
+                   color=c_anomaly, ls='-', lw=2, marker=m_disc, ms=4, label='Anomaly (margin)')
+        ax.plot(epochs, history['train_disc_loss'],
+               color=c_total, ls='--', lw=1.5, label='Total')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Discrepancy Loss')
+        ax.set_title('Discrepancy Loss (□)', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        if warmup_epochs > 0:
+            ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
+
+        # 4. Teacher vs Student (Normal samples)
+        ax = axes[1, 0]
+        if has_detailed:
+            ax.plot(epochs, history['train_teacher_recon_normal'],
+                   color=c_teacher, ls='-', lw=2, marker=m_teacher, ms=4, label='Teacher (○)')
+            ax.plot(epochs, history['train_student_recon_normal'],
+                   color=c_student, ls='--', lw=2, marker=m_student, ms=4, label='Student (△)')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('MSE Loss')
+        ax.set_title('Normal Data: Teacher vs Student', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        if warmup_epochs > 0:
+            ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
+
+        # 5. Teacher vs Student (Anomaly samples)
+        ax = axes[1, 1]
+        if has_detailed:
+            ax.plot(epochs, history['train_teacher_recon_anomaly'],
+                   color=c_teacher, ls='-', lw=2, marker=m_teacher, ms=4, label='Teacher (○)')
+            ax.plot(epochs, history['train_student_recon_anomaly'],
+                   color=c_student, ls='--', lw=2, marker=m_student, ms=4, label='Student (△)')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('MSE Loss')
+        ax.set_title('Anomaly Data: Teacher vs Student', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        if warmup_epochs > 0:
+            ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
+
+        # 6. All Losses Combined
+        ax = axes[1, 2]
+        ax.plot(epochs, history['train_rec_loss'],
+               color=c_teacher, ls='-', lw=2, marker=m_teacher, ms=3, label='Teacher Recon (○)')
+        ax.plot(epochs, history['train_disc_loss'],
+               color=c_anomaly, ls='-', lw=2, marker=m_disc, ms=3, label='Discrepancy (□)')
+        ax.plot(epochs, history['train_loss'],
+               color=VIS_COLORS['baseline'], ls='--', lw=1.5, label='Total Loss')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Loss')
+        ax.set_title('All Losses Combined', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        if warmup_epochs > 0:
+            ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'], label='Warm-up')
+
+        # Add legend for color/marker scheme
+        legend_text = ('Color: Blue=Normal, Red=Anomaly, Green=Teacher, Purple=Student\n'
+                      'Marker: ○=Teacher Recon, △=Student Recon, □=Discrepancy')
+        plt.suptitle(f'Learning Curves\n(Yellow: Warm-up epochs = {warmup_epochs}, Teacher only)\n{legend_text}',
+                    fontsize=11, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'learning_curve.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - learning_curve.png")
+
     def _get_optimal_threshold(self):
         """Get the optimal threshold from ROC curve."""
         from sklearn.metrics import roc_curve
@@ -1728,11 +1899,13 @@ Anomaly in masked region:
         """Get scores array (from pred_data or compute from detailed_data)."""
         return self.pred_data['scores']
 
-    def generate_all(self, experiment_dir: str = None):
+    def generate_all(self, experiment_dir: str = None, history: Dict = None, use_student_recon: bool = False):
         """Generate all best model visualizations
 
         Args:
             experiment_dir: Path to experiment directory for loading detailed results
+            history: Training history dictionary for learning curve visualization
+            use_student_recon: Whether student reconstruction loss is enabled
         """
         print("\n  Generating Best Model Visualizations...")
         self.plot_roc_curve()
@@ -1743,6 +1916,7 @@ Anomaly in masked region:
         self.plot_reconstruction_examples()
         self.plot_detection_examples()
         self.plot_summary_statistics()
+        self.plot_learning_curve(history, use_student_recon)
         self.plot_pure_vs_disturbing_normal()
         self.plot_discrepancy_trend()
         self.plot_hypothesis_verification()

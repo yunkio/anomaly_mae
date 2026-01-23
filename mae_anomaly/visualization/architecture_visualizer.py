@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 from mae_anomaly import Config
+from .base import VIS_COLORS
 
 
 class ArchitectureVisualizer:
@@ -213,7 +214,7 @@ class ArchitectureVisualizer:
             start = p * patch_size
             end = (p + 1) * patch_size
             ax.plot(t[start:end], signal[start:end], color=colors[p], lw=2)
-            ax.axvline(x=start, color='gray', linestyle='--', alpha=0.5)
+            ax.axvline(x=start, color=VIS_COLORS['reference'], linestyle='--', alpha=0.5)
         ax.set_title(f'2. Patchified ({num_patches} patches)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Value')
@@ -228,19 +229,19 @@ class ArchitectureVisualizer:
             start = p * patch_size
             end = (p + 1) * patch_size
             if p in masked_patches:
-                ax.axvspan(start, end, alpha=0.3, color='red')
+                ax.axvspan(start, end, alpha=0.3, color=VIS_COLORS['masked_region'])
                 ax.plot(t[start:end], signal[start:end], 'r--', lw=1, alpha=0.5)
             else:
                 ax.plot(t[start:end], signal[start:end], 'b-', lw=2)
-            ax.axvline(x=start, color='gray', linestyle='--', alpha=0.5)
+            ax.axvline(x=start, color=VIS_COLORS['reference'], linestyle='--', alpha=0.5)
 
         ax.set_title(f'3. Masked ({mask_ratio*100:.0f}% masking ratio)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Value')
 
         # Legend
-        patches = [mpatches.Patch(color='blue', label='Visible'),
-                   mpatches.Patch(color='red', alpha=0.3, label='Masked')]
+        patches = [mpatches.Patch(color=VIS_COLORS['normal'], label='Visible'),
+                   mpatches.Patch(color=VIS_COLORS['masked_region'], alpha=0.3, label='Masked')]
         ax.legend(handles=patches)
 
         # 4. Reconstruction target
@@ -249,11 +250,11 @@ class ArchitectureVisualizer:
             start = p * patch_size
             end = (p + 1) * patch_size
             if p in masked_patches:
-                ax.axvspan(start, end, alpha=0.3, color='red')
+                ax.axvspan(start, end, alpha=0.3, color=VIS_COLORS['masked_region'])
                 ax.plot(t[start:end], signal[start:end], 'g-', lw=2, label='Target' if p == masked_patches[0] else '')
             else:
                 ax.plot(t[start:end], signal[start:end], 'b-', lw=2, alpha=0.3)
-            ax.axvline(x=start, color='gray', linestyle='--', alpha=0.5)
+            ax.axvline(x=start, color=VIS_COLORS['reference'], linestyle='--', alpha=0.5)
 
         ax.set_title('4. Reconstruction Target (masked regions)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
@@ -282,7 +283,7 @@ class ArchitectureVisualizer:
         ax.plot(t, student_recon, 'r:', lw=2, label='Student', alpha=0.8)
 
         # Highlight small discrepancy
-        ax.fill_between(t, teacher_recon, student_recon, alpha=0.2, color='purple')
+        ax.fill_between(t, teacher_recon, student_recon, alpha=0.2, color=VIS_COLORS['student'])
 
         ax.set_title('Normal Sample\n(Small Teacher-Student Discrepancy)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
@@ -306,8 +307,8 @@ class ArchitectureVisualizer:
         ax.plot(t, student_recon_a, 'r:', lw=2, label='Student', alpha=0.8)
 
         # Highlight large discrepancy
-        ax.fill_between(t, teacher_recon_a, student_recon_a, alpha=0.3, color='purple')
-        ax.axvspan(70, 85, alpha=0.2, color='red')
+        ax.fill_between(t, teacher_recon_a, student_recon_a, alpha=0.3, color=VIS_COLORS['student'])
+        ax.axvspan(70, 85, alpha=0.2, color=VIS_COLORS['anomaly_region'])
 
         ax.set_title('Anomaly Sample\n(Large Teacher-Student Discrepancy)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
@@ -346,7 +347,7 @@ class ArchitectureVisualizer:
         softplus = np.log(1 + np.exp(margin - x))
         ax.plot(x, softplus, 'g-', lw=2)
         ax.axvline(x=margin, color='r', linestyle='--', label=f'margin={margin}')
-        ax.fill_between(x, 0, softplus, alpha=0.2, color='green')
+        ax.fill_between(x, 0, softplus, alpha=0.2, color=VIS_COLORS['threshold'])
         ax.set_title('Softplus Loss\nlog(1 + exp(m - d))', fontsize=12, fontweight='bold')
         ax.set_xlabel('Discrepancy (d)')
         ax.set_ylabel('Loss')

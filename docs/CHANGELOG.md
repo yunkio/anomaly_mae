@@ -1,5 +1,186 @@
 # Changelog
 
+## 2026-01-24 (Update 22): Comprehensive Visualization Style Consistency
+
+### Summary
+
+Extended VIS_COLORS with additional semantic color keys and applied consistent styling across ALL visualization files, eliminating hardcoded color values.
+
+### Changes
+
+#### 1. Extended VIS_COLORS Constants
+
+**Modified Files**:
+- `mae_anomaly/visualization/base.py`
+
+**New Color Keys Added**:
+```python
+VIS_COLORS = {
+    # Primary data types (existing)
+    'normal': '#3498DB',
+    'anomaly': '#E74C3C',
+    'disturbing': '#F39C12',
+    'teacher': '#27AE60',
+    'student': '#9B59B6',
+    'total': '#2ECC71',
+    # Region highlighting (NEW)
+    'anomaly_region': '#E74C3C',
+    'masked_region': '#F1C40F',
+    'normal_region': '#27AE60',
+    # Darker variants (NEW)
+    'normal_dark': '#2980B9',
+    'anomaly_dark': '#C0392B',
+    'student_dark': '#8E44AD',
+    # Detection outcomes (NEW)
+    'true_positive': '#27AE60',
+    'true_negative': '#3498DB',
+    'false_positive': '#F39C12',
+    'false_negative': '#E74C3C',
+    # General purpose (NEW)
+    'baseline': 'black',
+    'reference': 'gray',
+    'threshold': '#27AE60',
+}
+```
+
+---
+
+#### 2. Applied VIS_COLORS Across All Visualizers
+
+**Modified Files**:
+- `mae_anomaly/visualization/best_model_visualizer.py`
+- `mae_anomaly/visualization/experiment_visualizer.py`
+- `mae_anomaly/visualization/stage2_visualizer.py`
+- `mae_anomaly/visualization/training_visualizer.py`
+- `mae_anomaly/visualization/data_visualizer.py`
+- `mae_anomaly/visualization/architecture_visualizer.py`
+
+**Changes**:
+- Replaced ALL hardcoded hex color values (e.g., `'#3498DB'`) with `VIS_COLORS['normal']`
+- Replaced ALL hardcoded color names (e.g., `'red'`, `'yellow'`) with `VIS_COLORS` keys
+- Added VIS_COLORS import to files that were missing it
+- Used semantic color keys (e.g., `'anomaly_region'` for highlighting anomalies)
+
+---
+
+### Documentation Updates
+
+- **VISUALIZATIONS.md**: Updated VIS_COLORS table with all new keys
+- **CHANGELOG.md**: This entry
+
+---
+
+## 2026-01-24 (Update 21): Self-Distillation Training Improvements
+
+### Summary
+
+Added encoder gradient detachment for student decoder, configurable warm-up epochs, detailed learning curve visualization, and consistent color/marker scheme across all visualizations.
+
+### Changes
+
+#### 1. Encoder Gradient Detachment for Student Decoder
+
+**Modified Files**:
+- `mae_anomaly/model.py`
+
+**Changes**:
+- Student decoder now receives `.detach()`ed encoder output
+- Encoder is only updated by teacher reconstruction loss
+- Prevents student's conflicting objectives from corrupting encoder representations
+
+**Implementation**:
+```python
+# In forward():
+if self.config.use_student:
+    student_latent = latent.detach()  # Detach encoder output
+    student_output = self.student_decoder(student_latent)
+```
+
+---
+
+#### 2. Configurable Teacher-Only Warm-up Epochs
+
+**Modified Files**:
+- `mae_anomaly/config.py`
+- `mae_anomaly/trainer.py`
+- `mae_anomaly/loss.py`
+
+**New Parameter**:
+- `teacher_only_warmup_epochs: int = 1` (default)
+
+**Changes**:
+- First N epochs train only teacher model (no discrepancy/student loss)
+- Added `teacher_only` parameter to loss function
+- Allows teacher to learn basic reconstruction before introducing discrepancy
+
+---
+
+#### 3. Detailed Learning Curve Visualization
+
+**Modified Files**:
+- `mae_anomaly/loss.py`
+- `mae_anomaly/trainer.py`
+- `mae_anomaly/visualization/best_model_visualizer.py`
+- `scripts/visualize_all.py`
+
+**New Metrics Tracked**:
+- `train_teacher_recon_normal`: Teacher recon loss on normal samples
+- `train_teacher_recon_anomaly`: Teacher recon loss on anomaly samples
+- `train_student_recon_normal`: Student recon loss on normal samples
+- `train_student_recon_anomaly`: Student recon loss on anomaly samples
+
+**New Visualization**: `learning_curve.png`
+- 2x3 grid showing detailed loss breakdown:
+  - Teacher Reconstruction (Normal vs Anomaly)
+  - Student Reconstruction (Normal vs Anomaly)
+  - Discrepancy Loss (Normal vs Anomaly)
+  - Normal Data: Teacher vs Student
+  - Anomaly Data: Teacher vs Student
+  - All Losses Combined
+
+---
+
+#### 4. Consistent Visualization Color/Marker Scheme
+
+**Modified Files**:
+- `mae_anomaly/visualization/base.py`
+- `mae_anomaly/visualization/__init__.py`
+- `mae_anomaly/visualization/best_model_visualizer.py`
+
+**New Style Constants** (in `base.py`):
+```python
+VIS_COLORS = {
+    'normal': '#3498DB',      # Blue for normal data
+    'anomaly': '#E74C3C',     # Red for anomaly data
+    'disturbing': '#F39C12',  # Orange for disturbing normal
+    'teacher': '#27AE60',     # Green for teacher model
+    'student': '#9B59B6',     # Purple for student model
+    'total': '#2ECC71',       # Green for totals
+}
+
+VIS_MARKERS = {
+    'discrepancy': 's',       # Square for discrepancy loss
+    'teacher_recon': 'o',     # Circle for teacher reconstruction
+    'student_recon': '^',     # Triangle for student reconstruction
+    'total': 'D',             # Diamond for total/combined
+}
+```
+
+**Applied to**:
+- `plot_learning_curve()`: Full color/marker scheme
+- `plot_discrepancy_trend()`: Consistent colors
+- `plot_pure_vs_disturbing_normal()`: Consistent colors for bar charts
+
+---
+
+### Documentation Updates
+
+- **ARCHITECTURE.md**: Added encoder gradient detachment and warm-up epochs documentation
+- **VISUALIZATIONS.md**: Added VIS_COLORS/VIS_MARKERS documentation and learning_curve.png
+- **CHANGELOG.md**: This entry
+
+---
+
 ## 2026-01-23 (Update 20): Quick Search Dataset Configuration
 
 ### Changes

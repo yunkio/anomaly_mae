@@ -27,7 +27,7 @@ from mae_anomaly import (
     SlidingWindowTimeSeriesGenerator, SlidingWindowDataset,
     ANOMALY_TYPE_NAMES, SelfDistillationLoss, Trainer,
 )
-from .base import get_anomaly_colors, SAMPLE_TYPE_COLORS, SAMPLE_TYPE_NAMES
+from .base import get_anomaly_colors, SAMPLE_TYPE_COLORS, SAMPLE_TYPE_NAMES, VIS_COLORS
 
 class TrainingProgressVisualizer:
     """Visualize how the model learns over training epochs
@@ -259,13 +259,13 @@ class TrainingProgressVisualizer:
 
             # Histogram
             ax.hist(data['scores'][normal_mask], bins=30, alpha=0.6,
-                   label=f'Normal (n={normal_mask.sum()})', color='#3498DB', density=True)
+                   label=f'Normal (n={normal_mask.sum()})', color=VIS_COLORS['normal'], density=True)
             ax.hist(data['scores'][anomaly_mask], bins=30, alpha=0.6,
-                   label=f'Anomaly (n={anomaly_mask.sum()})', color='#E74C3C', density=True)
+                   label=f'Anomaly (n={anomaly_mask.sum()})', color=VIS_COLORS['anomaly'], density=True)
 
             # Add vertical lines for means
-            ax.axvline(data['scores'][normal_mask].mean(), color='#3498DB', linestyle='--', lw=2)
-            ax.axvline(data['scores'][anomaly_mask].mean(), color='#E74C3C', linestyle='--', lw=2)
+            ax.axvline(data['scores'][normal_mask].mean(), color=VIS_COLORS['normal'], linestyle='--', lw=2)
+            ax.axvline(data['scores'][anomaly_mask].mean(), color=VIS_COLORS['anomaly'], linestyle='--', lw=2)
 
             ax.set_xlabel('Anomaly Score')
             ax.set_ylabel('Density')
@@ -303,18 +303,18 @@ class TrainingProgressVisualizer:
         ax = axes[0]
         for i in range(n_samples):
             if labels[i] == 0:
-                color = '#3498DB'
+                color = VIS_COLORS['normal']
                 alpha = 0.1
             else:
-                color = '#E74C3C'
+                color = VIS_COLORS['anomaly']
                 alpha = 0.3
             ax.plot(epochs, score_matrix[i, :], color=color, alpha=alpha, lw=0.5)
 
         # Add mean trajectories
         normal_mean = score_matrix[labels == 0].mean(axis=0)
         anomaly_mean = score_matrix[labels == 1].mean(axis=0)
-        ax.plot(epochs, normal_mean, color='#2980B9', lw=3, label='Normal Mean')
-        ax.plot(epochs, anomaly_mean, color='#C0392B', lw=3, label='Anomaly Mean')
+        ax.plot(epochs, normal_mean, color=VIS_COLORS['normal_dark'], lw=3, label='Normal Mean')
+        ax.plot(epochs, anomaly_mean, color=VIS_COLORS['anomaly_dark'], lw=3, label='Anomaly Mean')
 
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Anomaly Score')
@@ -360,7 +360,7 @@ class TrainingProgressVisualizer:
 
         # ROC-AUC
         ax = axes[0, 0]
-        ax.plot(epochs, roc_aucs, 'o-', color='#E74C3C', lw=2, markersize=8)
+        ax.plot(epochs, roc_aucs, 'o-', color=VIS_COLORS['anomaly'], lw=2, markersize=8)
         ax.set_xlabel('Epoch')
         ax.set_ylabel('ROC-AUC')
         ax.set_title('ROC-AUC Evolution', fontweight='bold')
@@ -369,7 +369,7 @@ class TrainingProgressVisualizer:
 
         # F1 Score
         ax = axes[0, 1]
-        ax.plot(epochs, f1_scores, 'o-', color='#27AE60', lw=2, markersize=8)
+        ax.plot(epochs, f1_scores, 'o-', color=VIS_COLORS['teacher'], lw=2, markersize=8)
         ax.set_xlabel('Epoch')
         ax.set_ylabel('F1-Score')
         ax.set_title('F1-Score Evolution', fontweight='bold')
@@ -377,8 +377,8 @@ class TrainingProgressVisualizer:
 
         # Precision and Recall
         ax = axes[1, 0]
-        ax.plot(epochs, precisions, 'o-', color='#3498DB', lw=2, markersize=8, label='Precision')
-        ax.plot(epochs, recalls, 's-', color='#9B59B6', lw=2, markersize=8, label='Recall')
+        ax.plot(epochs, precisions, 'o-', color=VIS_COLORS['normal'], lw=2, markersize=8, label='Precision')
+        ax.plot(epochs, recalls, 's-', color=VIS_COLORS['student'], lw=2, markersize=8, label='Recall')
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Score')
         ax.set_title('Precision & Recall Evolution', fontweight='bold')
@@ -494,7 +494,7 @@ class TrainingProgressVisualizer:
         ax.plot(epochs, thresholds_by_epoch, 'k--', lw=2, alpha=0.7, label='Threshold')
         if len(late_bloomer_normals) > 0:
             for i in late_bloomer_normals[:15]:
-                ax.plot(epochs, score_matrix[i, :], alpha=0.6, lw=1.5, color='#F39C12')
+                ax.plot(epochs, score_matrix[i, :], alpha=0.6, lw=1.5, color=VIS_COLORS['disturbing'])
             ax.set_title(f'Late Bloomer Normals (FP→TN): n={len(late_bloomer_normals)}', fontweight='bold')
         else:
             ax.text(0.5, 0.5, 'No FP→TN transitions found', ha='center', va='center', transform=ax.transAxes, fontsize=12)
@@ -509,7 +509,7 @@ class TrainingProgressVisualizer:
         ax.plot(epochs, thresholds_by_epoch, 'k--', lw=2, alpha=0.7, label='Threshold')
         if len(persistent_fn) > 0:
             for i in persistent_fn[:15]:
-                ax.plot(epochs, score_matrix[i, :], alpha=0.6, lw=1.5, color='#E74C3C')
+                ax.plot(epochs, score_matrix[i, :], alpha=0.6, lw=1.5, color=VIS_COLORS['anomaly'])
             ax.set_title(f'Persistent FN (Always Missed): n={len(persistent_fn)}', fontweight='bold')
         else:
             ax.text(0.5, 0.5, 'No persistent FN found', ha='center', va='center', transform=ax.transAxes, fontsize=12)
@@ -538,8 +538,8 @@ class TrainingProgressVisualizer:
             else:
                 false_alarm_rates.append(0)
 
-        ax.plot(epochs, detection_rates, 'o-', color='#E74C3C', lw=2, markersize=8, label='Detection Rate (TPR)')
-        ax.plot(epochs, false_alarm_rates, 's-', color='#3498DB', lw=2, markersize=8, label='False Alarm Rate (FPR)')
+        ax.plot(epochs, detection_rates, 'o-', color=VIS_COLORS['anomaly'], lw=2, markersize=8, label='Detection Rate (TPR)')
+        ax.plot(epochs, false_alarm_rates, 's-', color=VIS_COLORS['normal'], lw=2, markersize=8, label='False Alarm Rate (FPR)')
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Rate (%)')
         ax.set_title('Detection & False Alarm Rate Over Training', fontweight='bold')
@@ -549,7 +549,7 @@ class TrainingProgressVisualizer:
 
         # 5. Threshold evolution
         ax = axes[1, 1]
-        ax.plot(epochs, thresholds_by_epoch, 'o-', color='#27AE60', lw=2, markersize=8)
+        ax.plot(epochs, thresholds_by_epoch, 'o-', color=VIS_COLORS['teacher'], lw=2, markersize=8)
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Optimal Threshold')
         ax.set_title('Optimal Threshold Evolution', fontweight='bold')
@@ -624,9 +624,9 @@ Performance Improvement:
 
         # 1. Detection rate by anomaly type over epochs
         ax = axes[0]
-        # Generate enough colors for all anomaly types
-        base_colors = ['#3498DB', '#E74C3C', '#F39C12', '#9B59B6', '#1ABC9C', '#E67E22', '#2ECC71', '#E91E63']
-        colors = (base_colors * ((len(anomaly_type_names) // len(base_colors)) + 1))[:len(anomaly_type_names)]
+        # Generate enough colors for all anomaly types from get_anomaly_colors()
+        anomaly_colors = get_anomaly_colors()
+        colors = [anomaly_colors.get(atype, VIS_COLORS['reference']) for atype in anomaly_type_names]
 
         for atype_idx, atype_name in enumerate(anomaly_type_names[1:], start=1):  # Skip normal
             detection_rates = []
@@ -674,9 +674,9 @@ Performance Improvement:
                 normal_scores.append(data['scores'][mask].mean())
             else:
                 normal_scores.append(np.nan)
-        ax.plot(epochs, normal_scores, 'o--', lw=2, markersize=6, label='Normal', color='#3498DB')
+        ax.plot(epochs, normal_scores, 'o--', lw=2, markersize=6, label='Normal', color=VIS_COLORS['normal'])
 
-        ax.axhline(y=threshold, color='green', linestyle='--', lw=2, alpha=0.7, label='Threshold')
+        ax.axhline(y=threshold, color=VIS_COLORS['threshold'], linestyle='--', lw=2, alpha=0.7, label='Threshold')
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Mean Anomaly Score')
         ax.set_title('Mean Score by Anomaly Type Over Training', fontweight='bold')
@@ -747,11 +747,11 @@ Performance Improvement:
                 # Highlight anomaly region
                 anomaly_region = np.where(point_labels == 1)[0]
                 if len(anomaly_region) > 0:
-                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.15, color='red')
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.15, color=VIS_COLORS['anomaly_region'])
 
                 # Highlight last patch (masked region)
                 ax.axvspan(len(original) - self.config.mask_last_n, len(original),
-                          alpha=0.15, color='yellow')
+                          alpha=0.15, color=VIS_COLORS['masked_region'])
 
                 # Compute metrics in masked region
                 masked_region = slice(-self.config.mask_last_n, None)
@@ -769,14 +769,14 @@ Performance Improvement:
 
                 # Point-level discrepancy
                 discrepancy = np.abs(teacher_recon - student_recon)
-                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#9B59B6', label='|T-S| Discrepancy')
-                ax.plot(discrepancy, color='#8E44AD', lw=1)
+                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['student'], label='|T-S| Discrepancy')
+                ax.plot(discrepancy, color=VIS_COLORS['student_dark'], lw=1)
 
                 # Highlight regions
                 if len(anomaly_region) > 0:
-                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.15, color='red')
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.15, color=VIS_COLORS['anomaly_region'])
                 ax.axvspan(len(original) - self.config.mask_last_n, len(original),
-                          alpha=0.15, color='yellow')
+                          alpha=0.15, color=VIS_COLORS['masked_region'])
 
                 # Compute discrepancy in masked region
                 masked_disc = np.mean(discrepancy[masked_region])
@@ -814,7 +814,7 @@ Performance Improvement:
             optimal_idx = np.argmax(tpr - fpr)
             thresholds.append(ths[optimal_idx])
 
-        ax.plot(epochs, thresholds, 'o-', color='#27AE60', lw=2, markersize=8)
+        ax.plot(epochs, thresholds, 'o-', color=VIS_COLORS['teacher'], lw=2, markersize=8)
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Optimal Threshold')
         ax.set_title('Optimal Threshold Evolution', fontweight='bold')
@@ -829,8 +829,8 @@ Performance Improvement:
             anomaly_mean = data['scores'][data['labels'] == 1].mean()
             separations.append(anomaly_mean - normal_mean)
 
-        ax.plot(epochs, separations, 'o-', color='#9B59B6', lw=2, markersize=8)
-        ax.axhline(y=0, color='black', linestyle='-', lw=1)
+        ax.plot(epochs, separations, 'o-', color=VIS_COLORS['student'], lw=2, markersize=8)
+        ax.axhline(y=0, color=VIS_COLORS['baseline'], linestyle='-', lw=1)
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Score Separation (Anomaly Mean - Normal Mean)')
         ax.set_title('Score Separation Evolution', fontweight='bold')
@@ -932,10 +932,10 @@ Performance Improvement:
                 ax.plot(student_recon, 'r:', lw=1.5, alpha=0.7, label='Student')
 
                 if len(anomaly_region) > 0:
-                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
-                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
 
-                pred_color = '#27AE60' if epoch_pred == 'Detected' else '#E74C3C'
+                pred_color = VIS_COLORS['true_positive'] if epoch_pred == 'Detected' else VIS_COLORS['false_negative']
                 ax.set_title(f'Epoch {epoch}: {epoch_pred}\nScore: {epoch_score:.4f} (Thresh: {epoch_thresh:.4f})',
                            fontsize=9, color=pred_color, fontweight='bold')
                 if col == 0:
@@ -946,12 +946,12 @@ Performance Improvement:
                 # Row 2: Discrepancy
                 ax = axes[sample_num * 3 + 1, col]
                 discrepancy = np.abs(teacher_recon - student_recon)
-                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color='#9B59B6')
-                ax.plot(discrepancy, color='#8E44AD', lw=1)
+                ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['student'])
+                ax.plot(discrepancy, color=VIS_COLORS['student_dark'], lw=1)
 
                 if len(anomaly_region) > 0:
-                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
-                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
 
                 masked_disc = np.mean(discrepancy[-self.config.mask_last_n:])
                 ax.set_title(f'Discrepancy (Masked Mean: {masked_disc:.4f})', fontsize=9)
@@ -967,8 +967,8 @@ Performance Improvement:
                 ax.plot(student_err, 'r-', lw=1.2, alpha=0.8, label='Student Error')
 
                 if len(anomaly_region) > 0:
-                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color='red')
-                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color='yellow')
+                    ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
+                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
 
                 if col == 0:
                     ax.set_ylabel(f'Late Bloomer #{sample_num+1}\nRecon Error', fontsize=9)

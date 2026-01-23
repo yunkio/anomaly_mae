@@ -18,6 +18,8 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import seaborn as sns
 
+from .base import VIS_COLORS
+
 
 class Stage2Visualizer:
     """Visualize Stage 2 (Full Training) results"""
@@ -49,7 +51,7 @@ class Stage2Visualizer:
         # Scatter plot
         ax = axes[0]
         ax.scatter(self.full_df['quick_roc_auc'], self.full_df['roc_auc'],
-                  alpha=0.6, s=50, c='#3498DB')
+                  alpha=0.6, s=50, c=VIS_COLORS['normal'])
 
         # Diagonal line
         min_val = min(self.full_df['quick_roc_auc'].min(), self.full_df['roc_auc'].min())
@@ -64,10 +66,10 @@ class Stage2Visualizer:
         # Improvement distribution
         ax = axes[1]
         improvements = self.full_df['roc_auc'] - self.full_df['quick_roc_auc']
-        ax.hist(improvements, bins=30, color='#27AE60', edgecolor='black', alpha=0.7)
-        ax.axvline(improvements.mean(), color='red', linestyle='--', lw=2,
+        ax.hist(improvements, bins=30, color=VIS_COLORS['teacher'], edgecolor=VIS_COLORS['baseline'], alpha=0.7)
+        ax.axvline(improvements.mean(), color=VIS_COLORS['anomaly_region'], linestyle='--', lw=2,
                   label=f'Mean: {improvements.mean():.4f}')
-        ax.axvline(0, color='black', linestyle='-', lw=1)
+        ax.axvline(0, color=VIS_COLORS['baseline'], linestyle='-', lw=1)
         ax.set_xlabel('ROC-AUC Improvement')
         ax.set_ylabel('Count')
         ax.set_title('Improvement Distribution', fontsize=12, fontweight='bold')
@@ -88,9 +90,9 @@ class Stage2Visualizer:
         width = 0.35
 
         ax.bar(x - width/2, top_10_full['roc_auc'].values, width,
-              label='Top by Final ROC-AUC', color='#3498DB')
+              label='Top by Final ROC-AUC', color=VIS_COLORS['normal'])
         ax.bar(x + width/2, top_10_improve['roc_auc'].values, width,
-              label='Top by Improvement', color='#E74C3C')
+              label='Top by Improvement', color=VIS_COLORS['anomaly'])
 
         ax.set_xlabel('Rank')
         ax.set_ylabel('Final ROC-AUC')
@@ -138,13 +140,13 @@ class Stage2Visualizer:
 
         ax2 = ax.twinx()
 
-        bars1 = ax.bar(x - width/2, means, width, label='Mean ROC-AUC', color='#3498DB')
-        bars2 = ax2.bar(x + width/2, counts, width, label='Count', color='#E74C3C', alpha=0.7)
+        bars1 = ax.bar(x - width/2, means, width, label='Mean ROC-AUC', color=VIS_COLORS['normal'])
+        bars2 = ax2.bar(x + width/2, counts, width, label='Count', color=VIS_COLORS['anomaly'], alpha=0.7)
 
         ax.set_xticks(x)
         ax.set_xticklabels(means.index, rotation=45, ha='right')
-        ax.set_ylabel('Mean ROC-AUC', color='#3498DB')
-        ax2.set_ylabel('Count', color='#E74C3C')
+        ax.set_ylabel('Mean ROC-AUC', color=VIS_COLORS['normal'])
+        ax2.set_ylabel('Count', color=VIS_COLORS['anomaly'])
         ax.set_title('Selection Criteria Statistics', fontsize=12, fontweight='bold')
 
         # Combine legends
@@ -218,7 +220,7 @@ class Stage2Visualizer:
         # 1. Quick vs Full scatter
         ax = fig.add_subplot(gs[0, 0])
         ax.scatter(self.full_df['quick_roc_auc'], self.full_df['roc_auc'],
-                  alpha=0.6, s=50, c='#3498DB')
+                  alpha=0.6, s=50, c=VIS_COLORS['normal'])
         min_val = min(self.full_df['quick_roc_auc'].min(), self.full_df['roc_auc'].min())
         max_val = max(self.full_df['quick_roc_auc'].max(), self.full_df['roc_auc'].max())
         ax.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.5)
@@ -229,9 +231,9 @@ class Stage2Visualizer:
         # 2. Improvement histogram
         ax = fig.add_subplot(gs[0, 1])
         improvements = self.full_df['roc_auc'] - self.full_df['quick_roc_auc']
-        ax.hist(improvements, bins=20, color='#27AE60', edgecolor='black', alpha=0.7)
-        ax.axvline(improvements.mean(), color='red', linestyle='--', lw=2)
-        ax.axvline(0, color='black', linestyle='-', lw=1)
+        ax.hist(improvements, bins=20, color=VIS_COLORS['teacher'], edgecolor=VIS_COLORS['baseline'], alpha=0.7)
+        ax.axvline(improvements.mean(), color=VIS_COLORS['anomaly_region'], linestyle='--', lw=2)
+        ax.axvline(0, color=VIS_COLORS['baseline'], linestyle='-', lw=1)
         ax.set_xlabel('ROC-AUC Improvement')
         ax.set_ylabel('Count')
         ax.set_title(f'Improvement (mean={improvements.mean():.4f})', fontweight='bold')
@@ -320,7 +322,7 @@ class Stage2Visualizer:
         means = groups[metric].mean()
         stds = groups[metric].std()
         x = np.arange(len(means))
-        bars = ax.bar(x, means, yerr=stds, capsize=5, color=colors, alpha=0.8, edgecolor='black')
+        bars = ax.bar(x, means, yerr=stds, capsize=5, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
         ax.set_xticks(x)
         ax.set_xticklabels([str(k) for k in means.index], rotation=45, ha='right')
         ax.set_xlabel(param)
@@ -337,11 +339,11 @@ class Stage2Visualizer:
         improvements = self.full_df.groupby(param).apply(
             lambda x: (x['roc_auc'] - x['quick_roc_auc']).mean()
         )
-        colors_imp = ['#27AE60' if imp > 0 else '#E74C3C' for imp in improvements]
-        bars = ax.bar(range(len(improvements)), improvements, color=colors_imp, alpha=0.8, edgecolor='black')
+        colors_imp = [VIS_COLORS['true_positive'] if imp > 0 else VIS_COLORS['false_negative'] for imp in improvements]
+        bars = ax.bar(range(len(improvements)), improvements, color=colors_imp, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
         ax.set_xticks(range(len(improvements)))
         ax.set_xticklabels([str(k) for k in improvements.index], rotation=45, ha='right')
-        ax.axhline(y=0, color='black', linestyle='-', lw=1)
+        ax.axhline(y=0, color=VIS_COLORS['baseline'], linestyle='-', lw=1)
         ax.set_xlabel(param)
         ax.set_ylabel('Mean Improvement')
         ax.set_title(f'{param} Mean Improvement (Quick -> Full)', fontweight='bold')

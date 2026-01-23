@@ -81,6 +81,57 @@ SAMPLE_TYPE_COLORS = {0: '#3498DB', 1: '#F39C12', 2: '#E74C3C'}
 
 
 # =============================================================================
+# Consistent Visualization Style (Learning Curves & Comparisons)
+# =============================================================================
+# Color scheme: Normal=blue tones, Anomaly=red tones
+# Marker scheme: Grouped by loss type for cross-plot consistency
+
+# Colors for data types (Normal vs Anomaly)
+VIS_COLORS = {
+    # Primary data types
+    'normal': '#3498DB',      # Blue for normal data
+    'anomaly': '#E74C3C',     # Red for anomaly data
+    'disturbing': '#F39C12',  # Orange for disturbing normal
+    # Model components
+    'teacher': '#27AE60',     # Green for teacher model
+    'student': '#9B59B6',     # Purple for student model
+    'total': '#2ECC71',       # Green for totals/combined
+    # Region highlighting
+    'anomaly_region': '#E74C3C',  # Red for anomaly region highlight
+    'masked_region': '#F1C40F',   # Yellow for masked region highlight
+    'normal_region': '#27AE60',   # Green for normal region highlight
+    # Darker variants (for emphasis/mean lines)
+    'normal_dark': '#2980B9',     # Dark blue
+    'anomaly_dark': '#C0392B',    # Dark red
+    'student_dark': '#8E44AD',    # Dark purple
+    # Detection outcomes (TP/TN/FP/FN)
+    'true_positive': '#27AE60',   # Green - correct detection
+    'true_negative': '#3498DB',   # Blue - correct normal
+    'false_positive': '#F39C12',  # Orange - false alarm
+    'false_negative': '#E74C3C',  # Red - missed detection
+    # General purpose
+    'baseline': 'black',
+    'reference': 'gray',
+    'threshold': '#27AE60',       # Green for threshold lines
+}
+
+# Markers for loss types (consistent across all plots)
+VIS_MARKERS = {
+    'discrepancy': 's',       # Square for discrepancy loss
+    'teacher_recon': 'o',     # Circle for teacher reconstruction
+    'student_recon': '^',     # Triangle for student reconstruction
+    'total': 'D',             # Diamond for total/combined
+}
+
+# Line styles
+VIS_LINESTYLES = {
+    'solid': '-',
+    'dashed': '--',
+    'dotted': ':',
+}
+
+
+# =============================================================================
 # Style Setup
 # =============================================================================
 

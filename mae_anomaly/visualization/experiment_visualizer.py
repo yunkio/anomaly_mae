@@ -19,6 +19,8 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import seaborn as sns
 
+from .base import VIS_COLORS
+
 
 class ExperimentVisualizer:
     """Visualize Stage 1 (Quick Search) results"""
@@ -120,7 +122,7 @@ class ExperimentVisualizer:
         top_10_idx = df.nlargest(10, 'roc_auc').index
         for idx in top_10_idx:
             values = [df_norm.loc[idx, col] for col in numeric_cols]
-            ax.plot(range(len(numeric_cols)), values, color='red', alpha=0.8, lw=2)
+            ax.plot(range(len(numeric_cols)), values, color=VIS_COLORS['anomaly_region'], alpha=0.8, lw=2)
 
         ax.set_xticks(range(len(numeric_cols)))
         ax.set_xticklabels(numeric_cols, rotation=45, ha='right')
@@ -185,8 +187,8 @@ class ExperimentVisualizer:
         x = np.arange(actual_k)
         width = 0.35
 
-        bars1 = ax.bar(x - width/2, top_k['roc_auc'], width, label='ROC-AUC', color='#3498DB')
-        bars2 = ax.bar(x + width/2, top_k['f1_score'], width, label='F1-Score', color='#E74C3C')
+        bars1 = ax.bar(x - width/2, top_k['roc_auc'], width, label='ROC-AUC', color=VIS_COLORS['normal'])
+        bars2 = ax.bar(x + width/2, top_k['f1_score'], width, label='F1-Score', color=VIS_COLORS['anomaly'])
 
         ax.set_xlabel('Configuration Rank')
         ax.set_ylabel('Score')
@@ -242,9 +244,9 @@ class ExperimentVisualizer:
 
         for ax, metric in zip(axes, available_metrics):
             data = self.results_df[metric].dropna()
-            ax.hist(data, bins=30, color='#3498DB', edgecolor='black', alpha=0.7)
-            ax.axvline(data.mean(), color='red', linestyle='--', lw=2, label=f'Mean: {data.mean():.4f}')
-            ax.axvline(data.median(), color='green', linestyle='--', lw=2, label=f'Median: {data.median():.4f}')
+            ax.hist(data, bins=30, color=VIS_COLORS['normal'], edgecolor='black', alpha=0.7)
+            ax.axvline(data.mean(), color=VIS_COLORS['anomaly_region'], linestyle='--', lw=2, label=f'Mean: {data.mean():.4f}')
+            ax.axvline(data.median(), color=VIS_COLORS['threshold'], linestyle='--', lw=2, label=f'Median: {data.median():.4f}')
             ax.set_title(metric.upper(), fontsize=11, fontweight='bold')
             ax.set_xlabel('Score')
             ax.set_ylabel('Count')
@@ -327,8 +329,8 @@ class ExperimentVisualizer:
 
         # 1. ROC-AUC distribution
         ax = fig.add_subplot(gs[0, 0])
-        ax.hist(self.results_df['roc_auc'], bins=30, color='#3498DB', edgecolor='black', alpha=0.7)
-        ax.axvline(self.results_df['roc_auc'].mean(), color='red', linestyle='--', lw=2)
+        ax.hist(self.results_df['roc_auc'], bins=30, color=VIS_COLORS['normal'], edgecolor='black', alpha=0.7)
+        ax.axvline(self.results_df['roc_auc'].mean(), color=VIS_COLORS['anomaly_region'], linestyle='--', lw=2)
         ax.set_title('ROC-AUC Distribution', fontweight='bold')
         ax.set_xlabel('ROC-AUC')
         ax.set_ylabel('Count')
@@ -337,7 +339,7 @@ class ExperimentVisualizer:
         ax = fig.add_subplot(gs[0, 1])
         top_n = min(10, len(self.results_df))
         top_10 = self.results_df.nlargest(top_n, 'roc_auc')
-        ax.barh(range(top_n), top_10['roc_auc'].values[::-1], color='#27AE60')
+        ax.barh(range(top_n), top_10['roc_auc'].values[::-1], color=VIS_COLORS['teacher'])
         ax.set_yticks(range(top_n))
         ax.set_yticklabels([f'#{i+1}' for i in range(top_n-1, -1, -1)])
         ax.set_xlabel('ROC-AUC')
@@ -370,7 +372,7 @@ class ExperimentVisualizer:
             groups = self.results_df.groupby(param)['roc_auc'].apply(list).to_dict()
             bp = ax.boxplot(list(groups.values()), labels=[str(k) for k in groups.keys()], patch_artist=True)
             for patch in bp['boxes']:
-                patch.set_facecolor('#3498DB')
+                patch.set_facecolor(VIS_COLORS['normal'])
             ax.set_title(f'{param}', fontweight='bold')
             ax.set_ylabel('ROC-AUC')
 

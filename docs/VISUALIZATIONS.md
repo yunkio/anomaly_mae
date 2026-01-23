@@ -44,10 +44,47 @@ from mae_anomaly.visualization import (
     get_feature_colors,       # Returns dict mapping feature names to colors
     SAMPLE_TYPE_COLORS,       # {0: '#3498DB', 1: '#F39C12', 2: '#E74C3C'}
     SAMPLE_TYPE_NAMES,        # {0: 'Pure Normal', 1: 'Disturbing Normal', 2: 'Anomaly'}
+    VIS_COLORS,               # Consistent colors for data types
+    VIS_MARKERS,              # Consistent markers for loss types
 )
 ```
 
 This ensures consistency when anomaly types or features change.
+
+### Consistent Visualization Style (Learning Curves)
+
+For learning curve and comparison visualizations, use these consistent conventions:
+
+**Colors** (`VIS_COLORS`):
+| Key | Color | Usage |
+|-----|-------|-------|
+| `normal` | Blue (#3498DB) | Normal data/samples |
+| `anomaly` | Red (#E74C3C) | Anomaly data/samples |
+| `disturbing` | Orange (#F39C12) | Disturbing normal |
+| `teacher` | Green (#27AE60) | Teacher model metrics |
+| `student` | Purple (#9B59B6) | Student model metrics |
+| `total` | Green (#2ECC71) | Combined/total values |
+| `anomaly_region` | Red (#E74C3C) | Anomaly region highlights |
+| `masked_region` | Yellow (#F1C40F) | Masked region highlights |
+| `normal_region` | Green (#27AE60) | Normal region highlights |
+| `normal_dark` | Dark Blue (#2980B9) | Darker normal (emphasis/mean) |
+| `anomaly_dark` | Dark Red (#C0392B) | Darker anomaly (emphasis/mean) |
+| `student_dark` | Dark Purple (#8E44AD) | Darker student (emphasis/mean) |
+| `true_positive` | Green (#27AE60) | Correct detection |
+| `true_negative` | Blue (#3498DB) | Correct normal |
+| `false_positive` | Orange (#F39C12) | False alarm |
+| `false_negative` | Red (#E74C3C) | Missed detection |
+| `baseline` | Black | Baseline/zero lines |
+| `reference` | Gray | Reference lines |
+| `threshold` | Green (#27AE60) | Threshold markers |
+
+**Markers** (`VIS_MARKERS`):
+| Key | Marker | Usage |
+|-----|--------|-------|
+| `discrepancy` | Square (s) | Discrepancy loss |
+| `teacher_recon` | Circle (o) | Teacher reconstruction |
+| `student_recon` | Triangle (^) | Student reconstruction |
+| `total` | Diamond (D) | Total/combined loss |
 
 ---
 
@@ -196,6 +233,7 @@ Detailed analysis of the single best performing model, including qualitative cas
 | `best_model_reconstruction.png` | Original vs Teacher vs Student reconstruction |
 | `best_model_detection_examples.png` | TP, TN, FP, FN example time series |
 | `best_model_summary.png` | Summary statistics and configuration |
+| `learning_curve.png` | **NEW**: 2x3 detailed training progress (normal/anomaly breakdown) |
 | `pure_vs_disturbing_normal.png` | Detailed comparison of pure normal vs disturbing normal |
 | `discrepancy_trend.png` | Discrepancy trend with std bands, zoomed last-patch view, and box plots by sample type |
 | `hypothesis_verification.png` | **NEW**: Verification of hypotheses about disturbing normal performance |

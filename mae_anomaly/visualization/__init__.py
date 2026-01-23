@@ -31,6 +31,9 @@ from .base import (
     get_anomaly_type_info,
     SAMPLE_TYPE_NAMES,
     SAMPLE_TYPE_COLORS,
+    VIS_COLORS,
+    VIS_MARKERS,
+    VIS_LINESTYLES,
 )
 
 from .data_visualizer import DataVisualizer
@@ -53,6 +56,9 @@ __all__ = [
     'get_anomaly_type_info',
     'SAMPLE_TYPE_NAMES',
     'SAMPLE_TYPE_COLORS',
+    'VIS_COLORS',
+    'VIS_MARKERS',
+    'VIS_LINESTYLES',
     # Visualizers
     'DataVisualizer',
     'ArchitectureVisualizer',

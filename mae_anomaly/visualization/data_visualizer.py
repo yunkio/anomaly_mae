@@ -23,7 +23,7 @@ from mae_anomaly.dataset_sliding import ANOMALY_TYPE_CONFIGS
 
 from .base import (
     get_anomaly_colors, get_anomaly_type_info,
-    SAMPLE_TYPE_NAMES, SAMPLE_TYPE_COLORS,
+    SAMPLE_TYPE_NAMES, SAMPLE_TYPE_COLORS, VIS_COLORS,
 )
 
 
@@ -58,7 +58,7 @@ class DataVisualizer:
         point_anomaly[70:75] = 2.5
         ax = axes[0, 1]
         ax.plot(t, point_anomaly, 'b-', lw=1.5)
-        ax.axvspan(t[70], t[74], alpha=0.3, color='red')
+        ax.axvspan(t[70], t[74], alpha=0.3, color=VIS_COLORS['anomaly_region'])
         ax.scatter(t[70:75], point_anomaly[70:75], c='red', s=50, zorder=5)
         ax.set_title('Point Anomaly (Spike)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time')
@@ -70,7 +70,7 @@ class DataVisualizer:
         contextual[60:] += 1.0
         ax = axes[0, 2]
         ax.plot(t, contextual, 'b-', lw=1.5)
-        ax.axvspan(t[60], t[-1], alpha=0.3, color='red')
+        ax.axvspan(t[60], t[-1], alpha=0.3, color=VIS_COLORS['anomaly_region'])
         ax.set_title('Contextual Anomaly (Level Shift)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time')
         ax.set_ylabel('Value')
@@ -81,7 +81,7 @@ class DataVisualizer:
         collective[50:80] = 0.5 * np.sin(3*t[50:80]) + np.sin(10*t[50:80]) * 0.3
         ax = axes[1, 0]
         ax.plot(t, collective, 'b-', lw=1.5)
-        ax.axvspan(t[50], t[79], alpha=0.3, color='red')
+        ax.axvspan(t[50], t[79], alpha=0.3, color=VIS_COLORS['anomaly_region'])
         ax.set_title('Collective Anomaly (Unusual Pattern)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time')
         ax.set_ylabel('Value')
@@ -92,7 +92,7 @@ class DataVisualizer:
         freq_anomaly[40:70] = np.sin(4*t[40:70]) + 0.1 * np.random.randn(30)
         ax = axes[1, 1]
         ax.plot(t, freq_anomaly, 'b-', lw=1.5)
-        ax.axvspan(t[40], t[69], alpha=0.3, color='red')
+        ax.axvspan(t[40], t[69], alpha=0.3, color=VIS_COLORS['anomaly_region'])
         ax.set_title('Frequency Anomaly', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time')
         ax.set_ylabel('Value')
@@ -103,7 +103,7 @@ class DataVisualizer:
         trend_anomaly[50:] += np.linspace(0, 1.5, 50)
         ax = axes[1, 2]
         ax.plot(t, trend_anomaly, 'b-', lw=1.5)
-        ax.axvspan(t[50], t[-1], alpha=0.3, color='red')
+        ax.axvspan(t[50], t[-1], alpha=0.3, color=VIS_COLORS['anomaly_region'])
         ax.set_title('Trend Anomaly (Drift)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time')
         ax.set_ylabel('Value')
@@ -131,7 +131,7 @@ class DataVisualizer:
             point_labels=point_labels,
             anomaly_regions=anomaly_regions,
             window_size=self.config.seq_length,
-            stride=10,
+            stride=11,
             mask_last_n=10,
             split='test',
             train_ratio=0.5,
@@ -180,7 +180,7 @@ class DataVisualizer:
         ax.set_title('Pure Normal Samples', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Value')
-        ax.axvspan(x[-10], x[-1], alpha=0.2, color='yellow', label='Last Patch')
+        ax.axvspan(x[-10], x[-1], alpha=0.2, color=VIS_COLORS['masked_region'], label='Last Patch')
         ax.legend(fontsize=8)
 
         # Disturbing normal samples - show anomaly regions
@@ -200,7 +200,7 @@ class DataVisualizer:
                      fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Value')
-        ax.axvspan(x[-10], x[-1], alpha=0.2, color='green', label='Normal Last Patch')
+        ax.axvspan(x[-10], x[-1], alpha=0.2, color=VIS_COLORS['normal_region'], label='Normal Last Patch')
         ax.legend(fontsize=8)
 
         # Anomaly samples
@@ -210,7 +210,7 @@ class DataVisualizer:
         ax.set_title('Anomaly Samples\n(Anomaly in last patch)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Value')
-        ax.axvspan(x[-10], x[-1], alpha=0.2, color='red', label='Anomaly Last Patch')
+        ax.axvspan(x[-10], x[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'], label='Anomaly Last Patch')
         ax.legend(fontsize=8)
 
         plt.suptitle('Sample Types in Dataset', fontsize=14, fontweight='bold', y=1.05)
@@ -234,7 +234,7 @@ class DataVisualizer:
             point_labels=point_labels,
             anomaly_regions=anomaly_regions,
             window_size=self.config.seq_length,
-            stride=10,
+            stride=11,
             mask_last_n=10,
             split='test',
             train_ratio=0.5,
@@ -263,7 +263,7 @@ class DataVisualizer:
         ax = axes[0]
         for f in range(self.config.num_features):
             ax.plot(x, normal_seq[:, f], alpha=0.8, label=feature_names[f])
-        ax.axvspan(x[-10], x[-1], alpha=0.2, color='yellow')
+        ax.axvspan(x[-10], x[-1], alpha=0.2, color=VIS_COLORS['masked_region'])
         ax.set_title('Normal Sample - All Features', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Value')
@@ -273,7 +273,7 @@ class DataVisualizer:
         ax = axes[1]
         for f in range(self.config.num_features):
             ax.plot(x, anomaly_seq[:, f], alpha=0.8, label=feature_names[f])
-        ax.axvspan(x[-10], x[-1], alpha=0.2, color='red')
+        ax.axvspan(x[-10], x[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
         ax.set_title('Anomaly Sample - All Features', fontsize=12, fontweight='bold')
         ax.set_xlabel('Time Step')
         ax.set_ylabel('Value')
@@ -299,7 +299,7 @@ class DataVisualizer:
             point_labels=point_labels,
             anomaly_regions=anomaly_regions,
             window_size=self.config.seq_length,
-            stride=10,
+            stride=11,
             mask_last_n=10,
             split='test',
             train_ratio=0.5,
@@ -323,7 +323,7 @@ class DataVisualizer:
         # Label distribution
         ax = axes[0]
         label_counts = [np.sum(labels == 0), np.sum(labels == 1)]
-        bars = ax.bar(['Normal', 'Anomaly'], label_counts, color=['#3498DB', '#E74C3C'])
+        bars = ax.bar(['Normal', 'Anomaly'], label_counts, color=[VIS_COLORS['normal'], VIS_COLORS['anomaly']])
         ax.set_title('Label Distribution', fontsize=12, fontweight='bold')
         ax.set_ylabel('Count')
         for bar, count in zip(bars, label_counts):
@@ -387,7 +387,7 @@ class DataVisualizer:
             point_labels=point_labels,
             anomaly_regions=anomaly_regions,
             window_size=self.config.seq_length,
-            stride=10,
+            stride=11,
             mask_last_n=self.config.mask_last_n,
             split='test',
             train_ratio=0.5,
@@ -447,7 +447,7 @@ class DataVisualizer:
                             starts = np.where(diff == 1)[0]
                             ends = np.where(diff == -1)[0]
                             for start, end in zip(starts, ends):
-                                ax.axvspan(start, end, alpha=0.3, color='red')
+                                ax.axvspan(start, end, alpha=0.3, color=VIS_COLORS['anomaly_region'])
             else:
                 # Fallback: show synthetic example
                 np.random.seed(42 + idx)
@@ -456,7 +456,7 @@ class DataVisualizer:
 
             # Highlight last patch
             ax.axvspan(self.config.seq_length - self.config.mask_last_n, self.config.seq_length,
-                      alpha=0.2, color='yellow', label=f'Last Patch (n={self.config.mask_last_n})')
+                      alpha=0.2, color=VIS_COLORS['masked_region'], label=f'Last Patch (n={self.config.mask_last_n})')
 
             # Title and labels
             ax.set_title(f'{description}\n({atype})', fontsize=11, fontweight='bold')
@@ -502,7 +502,7 @@ class DataVisualizer:
             point_labels=point_labels,
             anomaly_regions=anomaly_regions,
             window_size=self.config.seq_length,
-            stride=10,
+            stride=11,
             mask_last_n=10,
             split='test',
             train_ratio=0.5,
@@ -892,7 +892,7 @@ Random Seeds:
         start = 8000
         length = 4000
         ax.plot(x[start:start+length], signals[start:start+length, 0], 'C0', lw=1)
-        ax.fill_between(x[start:start+length], 0, 1, alpha=0.1, color='green')
+        ax.fill_between(x[start:start+length], 0, 1, alpha=0.1, color=VIS_COLORS['normal_region'])
         ax.set_title('Normal: Regime Transition\n(Smooth, 1500+ ts)', fontsize=11, fontweight='bold')
         ax.set_xlabel('Timestep')
         ax.set_ylabel('Value')
@@ -923,7 +923,7 @@ Random Seeds:
         start = 2000
         length = 800
         ax.plot(x[start:start+length], signals_bump[start:start+length, 0], 'C0', lw=1)
-        ax.fill_between(x[start:start+length], 0, 1, alpha=0.1, color='green')
+        ax.fill_between(x[start:start+length], 0, 1, alpha=0.1, color=VIS_COLORS['normal_region'])
         ax.set_title('Normal: Small Bump\n(Gaussian, 100-300 ts, mag<0.10)', fontsize=11, fontweight='bold')
         ax.set_xlabel('Timestep')
         ax.set_ylabel('Value')
@@ -953,7 +953,7 @@ Random Seeds:
         start = 0
         length = 5000
         ax.plot(x[start:start+length], signals_drift[start:start+length, 0], 'C0', lw=1)
-        ax.fill_between(x[start:start+length], 0, 1, alpha=0.1, color='green')
+        ax.fill_between(x[start:start+length], 0, 1, alpha=0.1, color=VIS_COLORS['normal_region'])
         ax.set_title('Normal: O-U Drift\n(Mean-reverting, ±0.08 max)', fontsize=11, fontweight='bold')
         ax.set_xlabel('Timestep')
         ax.set_ylabel('Value')
@@ -980,7 +980,7 @@ Random Seeds:
             start = max(0, spike_region.start - 50)
             end = min(demo_length, spike_region.end + 50)
             ax.plot(x[start:end], signals[start:end, 0], 'C3', lw=1)
-            ax.axvspan(spike_region.start, spike_region.end, alpha=0.3, color='red')
+            ax.axvspan(spike_region.start, spike_region.end, alpha=0.3, color=VIS_COLORS['anomaly_region'])
         else:
             ax.text(0.5, 0.5, 'No spike anomaly found\nin this dataset',
                    transform=ax.transAxes, ha='center', va='center', fontsize=12)
@@ -999,7 +999,7 @@ Random Seeds:
             end = min(demo_length, leak_region.end + 20)
             # Show Memory feature (index 1) for leak
             ax.plot(x[start:end], signals[start:end, 1], 'C3', lw=1)
-            ax.axvspan(leak_region.start, leak_region.end, alpha=0.3, color='red')
+            ax.axvspan(leak_region.start, leak_region.end, alpha=0.3, color=VIS_COLORS['anomaly_region'])
         else:
             ax.text(0.5, 0.5, 'No memory leak anomaly found\nin this dataset',
                    transform=ax.transAxes, ha='center', va='center', fontsize=12)
