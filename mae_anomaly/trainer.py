@@ -44,6 +44,14 @@ class Trainer:
             'train_loss': [],
             'train_rec_loss': [],
             'train_disc_loss': [],
+            'train_student_recon_loss': [],
+            'train_normal_loss': [],
+            'train_anomaly_loss': [],
+            # Detailed metrics by sample type
+            'train_teacher_recon_normal': [],
+            'train_teacher_recon_anomaly': [],
+            'train_student_recon_normal': [],
+            'train_student_recon_anomaly': [],
             'epoch': []
         }
 
@@ -52,15 +60,21 @@ class Trainer:
             return epoch / self.config.warmup_epochs
         return 1.0
 
-    def train_epoch(self, epoch: int) -> Dict[str, float]:
+    def train_epoch(self, epoch: int, teacher_only: bool = False) -> Dict[str, float]:
         self.model.train()
         epoch_losses = {
             'total_loss': 0.0,
             'reconstruction_loss': 0.0,
             'discrepancy_loss': 0.0,
+            'student_recon_loss': 0.0,
             'normal_loss': 0.0,
             'anomaly_loss': 0.0,
-            'mean_discrepancy': 0.0
+            'mean_discrepancy': 0.0,
+            # Detailed metrics by sample type
+            'teacher_recon_normal': 0.0,
+            'teacher_recon_anomaly': 0.0,
+            'student_recon_normal': 0.0,
+            'student_recon_anomaly': 0.0,
         }
 
         warmup_factor = self._compute_warmup_factor(epoch)
@@ -83,7 +97,8 @@ class Trainer:
             teacher_output, student_output, mask = self.model(sequences, point_labels=point_labels)
 
             loss, loss_dict = self.criterion(
-                teacher_output, student_output, sequences, mask, point_labels, warmup_factor
+                teacher_output, student_output, sequences, mask, point_labels, warmup_factor,
+                teacher_only=teacher_only
             )
 
             self.optimizer.zero_grad()
@@ -100,13 +115,24 @@ class Trainer:
         return epoch_losses
 
     def train(self) -> Dict:
+        teacher_warmup = getattr(self.config, 'teacher_only_warmup_epochs', 1)
         for epoch in range(self.config.num_epochs):
-            epoch_losses = self.train_epoch(epoch)
+            # First N epochs are warm-up: train teacher only (no discrepancy/student loss)
+            teacher_only = (epoch < teacher_warmup)
+            epoch_losses = self.train_epoch(epoch, teacher_only=teacher_only)
             self.scheduler.step()
 
             self.history['epoch'].append(epoch + 1)
             self.history['train_loss'].append(epoch_losses['total_loss'])
             self.history['train_rec_loss'].append(epoch_losses['reconstruction_loss'])
             self.history['train_disc_loss'].append(epoch_losses['discrepancy_loss'])
+            self.history['train_student_recon_loss'].append(epoch_losses['student_recon_loss'])
+            self.history['train_normal_loss'].append(epoch_losses['normal_loss'])
+            self.history['train_anomaly_loss'].append(epoch_losses['anomaly_loss'])
+            # Detailed metrics by sample type
+            self.history['train_teacher_recon_normal'].append(epoch_losses['teacher_recon_normal'])
+            self.history['train_teacher_recon_anomaly'].append(epoch_losses['teacher_recon_anomaly'])
+            self.history['train_student_recon_normal'].append(epoch_losses['student_recon_normal'])
+            self.history['train_student_recon_anomaly'].append(epoch_losses['student_recon_anomaly'])
 
         return self.history

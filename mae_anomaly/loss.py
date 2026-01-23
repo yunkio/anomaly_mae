@@ -35,6 +35,10 @@ class SelfDistillationLoss(nn.Module):
         self.num_patches = config.num_patches
         self.patch_level_loss = getattr(config, 'patch_level_loss', True)
 
+        # New parameters for student loss and anomaly weight
+        self.use_student_reconstruction_loss = getattr(config, 'use_student_reconstruction_loss', False)
+        self.anomaly_loss_weight = getattr(config, 'anomaly_loss_weight', 1.0)
+
     def _compute_anomaly_loss(
         self,
         discrepancy: torch.Tensor,
@@ -103,7 +107,8 @@ class SelfDistillationLoss(nn.Module):
         original_input: torch.Tensor,
         mask: torch.Tensor,
         point_labels: torch.Tensor,
-        warmup_factor: float = 1.0
+        warmup_factor: float = 1.0,
+        teacher_only: bool = False
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
         Args:
@@ -113,18 +118,55 @@ class SelfDistillationLoss(nn.Module):
             mask: (batch, seq_length) - 1=keep, 0=masked
             point_labels: (batch, seq_length) - 1=anomaly, 0=normal
             warmup_factor: factor for anomaly loss warmup
+            teacher_only: if True, only compute teacher reconstruction loss (for warm-up epochs)
         """
         batch_size = teacher_output.size(0)
         mask_expanded = mask.unsqueeze(-1)
 
-        # Reconstruction loss
-        reconstruction_loss = F.mse_loss(
+        # Determine which samples have anomaly in masked region (used for multiple loss computations)
+        masked_point_labels = point_labels * (1 - mask)
+        has_anomaly_sample = (masked_point_labels.sum(dim=1) > 0).float()  # (batch,)
+        is_normal_sample = 1 - has_anomaly_sample
+
+        # Teacher reconstruction loss (total)
+        teacher_recon_full = F.mse_loss(
             teacher_output * (1 - mask_expanded),
             original_input * (1 - mask_expanded),
-            reduction='sum'
-        ) / ((1 - mask_expanded).sum() + 1e-8)
+            reduction='none'
+        )
+        teacher_recon_per_sample = teacher_recon_full.sum(dim=(1, 2)) / ((1 - mask_expanded).sum(dim=(1, 2)) + 1e-8)
+        reconstruction_loss = teacher_recon_per_sample.mean()
 
-        if self.use_discrepancy:
+        # Teacher reconstruction loss by sample type
+        teacher_recon_normal = (is_normal_sample * teacher_recon_per_sample).sum() / (is_normal_sample.sum() + 1e-8)
+        teacher_recon_anomaly = (has_anomaly_sample * teacher_recon_per_sample).sum() / (has_anomaly_sample.sum() + 1e-8)
+
+        # Student reconstruction loss (for tracking, always computed)
+        student_recon_full = F.mse_loss(
+            student_output * (1 - mask_expanded),
+            original_input * (1 - mask_expanded),
+            reduction='none'
+        )
+        student_recon_per_sample = student_recon_full.sum(dim=(1, 2)) / ((1 - mask_expanded).sum(dim=(1, 2)) + 1e-8)
+        student_recon_normal_metric = (is_normal_sample * student_recon_per_sample).sum() / (is_normal_sample.sum() + 1e-8)
+        student_recon_anomaly_metric = (has_anomaly_sample * student_recon_per_sample).sum() / (has_anomaly_sample.sum() + 1e-8)
+
+        # Student reconstruction loss (optional, skipped in teacher_only mode)
+        student_recon_loss = torch.tensor(0.0, device=teacher_output.device)
+        if self.use_student_reconstruction_loss and not teacher_only:
+            # For normal samples: student should reconstruct well (minimize loss)
+            # For anomaly samples: student should NOT reconstruct well (maximize loss, i.e., negative direction)
+
+            # Normal: minimize reconstruction loss
+            student_recon_normal = (is_normal_sample * student_recon_per_sample).sum() / (is_normal_sample.sum() + 1e-8)
+
+            # Anomaly: maximize reconstruction loss (use negative gradient via negative loss)
+            # We want student to fail on anomaly, so we use -student_recon for anomaly samples
+            student_recon_anomaly = -(has_anomaly_sample * student_recon_per_sample).sum() / (has_anomaly_sample.sum() + 1e-8)
+
+            student_recon_loss = student_recon_normal + student_recon_anomaly
+
+        if self.use_discrepancy and not teacher_only:
             # Compute per-position discrepancy: (batch, seq_length, num_features)
             discrepancy_full = (teacher_output.detach() - student_output) ** 2
 
@@ -157,13 +199,13 @@ class SelfDistillationLoss(nn.Module):
                 normal_patch_mask = patch_is_normal * patch_has_masked
                 normal_loss = (normal_patch_mask * patch_discrepancy).sum() / (normal_patch_mask.sum() + 1e-8)
 
-                # Anomaly patch loss
+                # Anomaly patch loss (with weight multiplier)
                 anomaly_patch_mask = patch_has_anomaly * patch_has_masked
                 per_patch_anomaly_loss = self._compute_patch_anomaly_loss(
                     patch_discrepancy, anomaly_patch_mask, normal_patch_mask, self.margin
                 )
                 anomaly_loss = (anomaly_patch_mask * per_patch_anomaly_loss).sum() / (anomaly_patch_mask.sum() + 1e-8)
-                anomaly_loss = warmup_factor * anomaly_loss
+                anomaly_loss = warmup_factor * anomaly_loss * self.anomaly_loss_weight
 
                 sample_discrepancy = (patch_discrepancy * patch_has_masked).sum(dim=1) / (patch_has_masked.sum(dim=1) + 1e-8)
 
@@ -184,29 +226,35 @@ class SelfDistillationLoss(nn.Module):
                 # Normal loss: minimize discrepancy for normal samples
                 normal_loss = (normal_mask * sample_discrepancy).sum() / (normal_mask.sum() + 1e-8)
 
-                # Anomaly loss: encourage discrepancy to be large
+                # Anomaly loss: encourage discrepancy to be large (with weight multiplier)
                 per_sample_anomaly_loss = self._compute_anomaly_loss(
                     sample_discrepancy, anomaly_mask, normal_mask, self.margin
                 )
                 anomaly_loss = (anomaly_mask * per_sample_anomaly_loss).sum() / (anomaly_mask.sum() + 1e-8)
-                anomaly_loss = warmup_factor * anomaly_loss
+                anomaly_loss = warmup_factor * anomaly_loss * self.anomaly_loss_weight
 
             discrepancy_loss = normal_loss + anomaly_loss
-            total_loss = reconstruction_loss + discrepancy_loss
+            total_loss = reconstruction_loss + discrepancy_loss + student_recon_loss
         else:
             discrepancy_loss = torch.tensor(0.0, device=teacher_output.device)
             normal_loss = torch.tensor(0.0, device=teacher_output.device)
             anomaly_loss = torch.tensor(0.0, device=teacher_output.device)
             sample_discrepancy = torch.zeros(batch_size, device=teacher_output.device)
-            total_loss = reconstruction_loss
+            total_loss = reconstruction_loss + student_recon_loss
 
         loss_dict = {
             'total_loss': total_loss.item(),
             'reconstruction_loss': reconstruction_loss.item(),
+            'student_recon_loss': student_recon_loss.item() if isinstance(student_recon_loss, torch.Tensor) else student_recon_loss,
             'discrepancy_loss': discrepancy_loss.item() if isinstance(discrepancy_loss, torch.Tensor) else discrepancy_loss,
             'normal_loss': normal_loss.item() if isinstance(normal_loss, torch.Tensor) else normal_loss,
             'anomaly_loss': anomaly_loss.item() if isinstance(anomaly_loss, torch.Tensor) else anomaly_loss,
-            'mean_discrepancy': sample_discrepancy.mean().item()
+            'mean_discrepancy': sample_discrepancy.mean().item(),
+            # Detailed metrics for visualization
+            'teacher_recon_normal': teacher_recon_normal.item(),
+            'teacher_recon_anomaly': teacher_recon_anomaly.item(),
+            'student_recon_normal': student_recon_normal_metric.item(),
+            'student_recon_anomaly': student_recon_anomaly_metric.item(),
         }
 
         return total_loss, loss_dict

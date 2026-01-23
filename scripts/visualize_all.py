@@ -154,7 +154,23 @@ def main():
         best_dir = os.path.join(vis_dir, 'best_model')
         model, config, test_loader, _ = load_best_model(exp_data['model_path'], args.num_test)
         best_vis = BestModelVisualizer(model, config, test_loader, best_dir)
-        best_vis.generate_all(experiment_dir=experiment_dir)
+
+        # Get training history (if available)
+        history = None
+        if exp_data['histories']:
+            # histories is a dict like {'0': {...}, '1': {...}, ...}
+            # Get the first (or only) history
+            first_key = list(exp_data['histories'].keys())[0]
+            history = exp_data['histories'][first_key]
+
+        # Check if student reconstruction loss is enabled
+        use_student_recon = getattr(config, 'use_student_reconstruction_loss', False)
+
+        best_vis.generate_all(
+            experiment_dir=experiment_dir,
+            history=history,
+            use_student_recon=use_student_recon
+        )
 
     # 6. Training Progress Visualizations (requires re-training)
     if args.retrain and exp_data['best_config']:

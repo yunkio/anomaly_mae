@@ -398,6 +398,42 @@ self.student_mask_token = nn.Parameter(...)  # For student decoder
 
 ## Self-Distillation Mechanism
 
+### Encoder Gradient Detachment
+
+**Student decoder does NOT update encoder**:
+- Student decoder receives `.detach()`ed encoder output
+- Only the teacher reconstruction loss updates the encoder
+- This ensures the encoder learns to represent normal patterns (via teacher) without being corrupted by the student's conflicting objectives
+
+**Implementation**:
+```python
+# In model.py forward():
+if self.config.use_student and self.student_decoder is not None:
+    if self.mask_after_encoder:
+        student_latent = self._insert_mask_tokens_and_unshuffle(
+            latent_visible.detach(), ids_restore, seq_len, student_mask_token
+        )
+    else:
+        student_latent = latent.detach()  # Detach encoder output
+    student_output = self.student_decoder(student_latent)
+```
+
+### Warm-up Epochs
+
+**Teacher-only warm-up period**:
+- First N epochs train only the teacher model (no discrepancy/student loss)
+- Controlled by `teacher_only_warmup_epochs` (default=1)
+- Allows teacher to learn basic reconstruction before introducing discrepancy
+
+**Implementation**:
+```python
+# In trainer.py train():
+teacher_warmup = getattr(self.config, 'teacher_only_warmup_epochs', 1)
+for epoch in range(self.config.num_epochs):
+    teacher_only = (epoch < teacher_warmup)  # True during warm-up
+    epoch_losses = self.train_epoch(epoch, teacher_only=teacher_only)
+```
+
 ### Training Loss
 
 **Reconstruction Loss**:
@@ -532,6 +568,7 @@ anomaly_score = MSE(student_out - original)
 | lambda_disc | 0.5 | Discrepancy loss weight (fixed) |
 | margin_type | hinge | Margin loss type |
 | patch_level_loss | True | Loss computation level |
+| teacher_only_warmup_epochs | 1 | Epochs for teacher-only training |
 
 ---
 

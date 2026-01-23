@@ -70,6 +70,22 @@ class SelfDistilledMAEMultivariate(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.num_encoder_layers)
 
+        # Shared decoder (optional, trained with teacher)
+        self.num_shared_decoder_layers = getattr(config, 'num_shared_decoder_layers', 0)
+        self.shared_decoder = None
+        if self.num_shared_decoder_layers > 0:
+            shared_decoder_layer = nn.TransformerDecoderLayer(
+                d_model=config.d_model,
+                nhead=config.nhead,
+                dim_feedforward=config.dim_feedforward,
+                dropout=config.dropout,
+                batch_first=False
+            )
+            self.shared_decoder = nn.TransformerDecoder(
+                shared_decoder_layer,
+                num_layers=self.num_shared_decoder_layers
+            )
+
         # Teacher decoder
         self.teacher_decoder = None
         if config.use_teacher:
@@ -131,14 +147,29 @@ class SelfDistilledMAEMultivariate(nn.Module):
             # Patchify first, then CNN per patch
             # Each patch: (batch * num_patches, num_features, patch_size)
             # CNN processes each patch independently
+
+            # Get CNN channels from config (default: d_model//2, d_model)
+            cnn_channels = getattr(config, 'cnn_channels', None)
+            if cnn_channels is None:
+                mid_channels = config.d_model // 2
+                out_channels = config.d_model
+            else:
+                mid_channels, out_channels = cnn_channels
+
             self.patch_cnn = nn.Sequential(
-                nn.Conv1d(config.num_features, config.d_model // 2, kernel_size=3, padding=1),
-                nn.BatchNorm1d(config.d_model // 2),
+                nn.Conv1d(config.num_features, mid_channels, kernel_size=3, padding=1),
+                nn.BatchNorm1d(mid_channels),
                 nn.ReLU(),
-                nn.Conv1d(config.d_model // 2, config.d_model, kernel_size=3, padding=1),
-                nn.BatchNorm1d(config.d_model),
+                nn.Conv1d(mid_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm1d(out_channels),
                 nn.ReLU()
             )
+
+            # If out_channels != d_model, need projection
+            if out_channels != config.d_model:
+                self.cnn_projection = nn.Linear(out_channels, config.d_model)
+            else:
+                self.cnn_projection = None
             # Pool/flatten CNN output to get d_model embedding
             # CNN output: (batch * num_patches, d_model, patch_size)
             # After mean pooling: (batch * num_patches, d_model)
@@ -174,10 +205,14 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 x_patches = x_patches.transpose(1, 2)  # (batch * num_patches, features, patch_size)
 
                 # Apply CNN per patch
-                x_cnn = self.patch_cnn(x_patches)  # (batch * num_patches, d_model, patch_size)
+                x_cnn = self.patch_cnn(x_patches)  # (batch * num_patches, out_channels, patch_size)
 
                 # Mean pooling over patch_size dimension
-                x_embed = x_cnn.mean(dim=2)  # (batch * num_patches, d_model)
+                x_embed = x_cnn.mean(dim=2)  # (batch * num_patches, out_channels)
+
+                # Apply projection if needed (when out_channels != d_model)
+                if self.cnn_projection is not None:
+                    x_embed = self.cnn_projection(x_embed)  # (batch * num_patches, d_model)
 
                 # Reshape back: (batch * num_patches, d_model) -> (batch, num_patches, d_model)
                 x_embed = x_embed.reshape(batch_size, self.num_patches, -1)
@@ -543,6 +578,10 @@ class SelfDistilledMAEMultivariate(nn.Module):
             else:
                 teacher_latent = latent
 
+            # Apply shared decoder first if exists (trained with teacher)
+            if self.shared_decoder is not None:
+                teacher_latent = self.shared_decoder(tgt, teacher_latent)
+
             teacher_hidden = self.teacher_decoder(tgt, teacher_latent)
             teacher_output = self.teacher_output_projection(teacher_hidden)
             teacher_output = teacher_output.transpose(0, 1)
@@ -553,13 +592,16 @@ class SelfDistilledMAEMultivariate(nn.Module):
         if self.config.use_student and self.student_decoder is not None:
             if self.mask_after_encoder:
                 # Insert mask tokens before student decoder
+                # Detach encoder output to prevent encoder updates from student loss
                 student_mask_token = self._get_mask_token('student')
                 student_latent = self._insert_mask_tokens_and_unshuffle(
-                    latent_visible, ids_restore, seq_len, student_mask_token
+                    latent_visible.detach(), ids_restore, seq_len, student_mask_token
                 )
             else:
-                student_latent = latent
+                # Detach encoder output to prevent encoder updates from student loss
+                student_latent = latent.detach()
 
+            # Student uses its own decoder directly (no shared decoder)
             student_hidden = self.student_decoder(tgt, student_latent)
             student_output = self.student_output_projection(student_hidden)
             student_output = student_output.transpose(0, 1)

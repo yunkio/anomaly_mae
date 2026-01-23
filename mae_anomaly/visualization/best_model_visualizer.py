@@ -1117,8 +1117,9 @@ Separation Analysis:
         dist_fp = (dist_total > threshold).sum() / len(dist_total) * 100  # False Positive Rate (should be low)
         anom_tp = (anom_total > threshold).sum() / len(anom_total) * 100  # True Positive Rate
 
+        sample_colors = [VIS_COLORS['normal'], VIS_COLORS['disturbing'], VIS_COLORS['anomaly']]
         bars = ax.bar(['Pure Normal\n(FP Rate)', 'Disturbing Normal\n(FP Rate)', 'Anomaly\n(TP Rate)'],
-                      [pure_fp, dist_fp, anom_tp], color=colors)
+                      [pure_fp, dist_fp, anom_tp], color=sample_colors)
         ax.set_ylabel('Rate (%)')
         ax.set_title('Classification Rates with Global Threshold', fontweight='bold')
 
