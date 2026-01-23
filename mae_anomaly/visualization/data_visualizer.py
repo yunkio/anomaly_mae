@@ -606,9 +606,9 @@ Sliding Window Dataset:
   - Anomaly Interval Scale: {self.config.anomaly_interval_scale}
 
 Test Set Target Composition:
-  - Pure Normal: {self.config.test_target_pure_normal}
-  - Disturbing Normal: {self.config.test_target_disturbing_normal}
-  - Anomaly: {self.config.test_target_anomaly}
+  - Pure Normal: {int(self.config.num_test_samples * self.config.test_ratio_pure_normal)}
+  - Disturbing Normal: {int(self.config.num_test_samples * self.config.test_ratio_disturbing_normal)}
+  - Anomaly: {int(self.config.num_test_samples * self.config.test_ratio_anomaly)}
 
 Model Configuration:
   - Batch Size: {self.config.batch_size}

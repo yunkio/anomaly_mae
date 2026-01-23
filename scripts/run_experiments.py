@@ -964,6 +964,14 @@ class ExperimentRunner:
         print("\nGenerating detailed results for best model...")
 
         # Create test dataset with same parameters used for final evaluation (full search)
+        # Calculate target counts from ratios
+        total_test = self.best_config.num_test_samples
+        target_counts = {
+            'pure_normal': int(total_test * self.best_config.test_ratio_pure_normal),
+            'disturbing_normal': int(total_test * self.best_config.test_ratio_disturbing_normal),
+            'anomaly': int(total_test * self.best_config.test_ratio_anomaly)
+        }
+
         test_dataset = SlidingWindowDataset(
             signals=self.signals,
             point_labels=self.point_labels,
@@ -973,11 +981,7 @@ class ExperimentRunner:
             mask_last_n=self.best_config.mask_last_n,
             split='test',
             train_ratio=self.full_train_ratio,  # Use full search train_ratio
-            target_counts={
-                'pure_normal': self.best_config.test_target_pure_normal,
-                'disturbing_normal': self.best_config.test_target_disturbing_normal,
-                'anomaly': self.best_config.test_target_anomaly
-            },
+            target_counts=target_counts,
             seed=self.best_config.random_seed
         )
         test_loader = DataLoader(test_dataset, batch_size=self.best_config.batch_size, shuffle=False)

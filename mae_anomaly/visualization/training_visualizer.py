@@ -122,9 +122,9 @@ class TrainingProgressVisualizer:
             split='test',
             train_ratio=0.5,
             target_counts={
-                'pure_normal': self.config.test_target_pure_normal,
-                'disturbing_normal': self.config.test_target_disturbing_normal,
-                'anomaly': self.config.test_target_anomaly
+                'pure_normal': int(self.config.num_test_samples * self.config.test_ratio_pure_normal),
+                'disturbing_normal': int(self.config.num_test_samples * self.config.test_ratio_disturbing_normal),
+                'anomaly': int(self.config.num_test_samples * self.config.test_ratio_anomaly)
             },
             seed=self.config.random_seed
         )

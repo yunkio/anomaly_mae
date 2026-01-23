@@ -245,9 +245,9 @@ def load_best_model(model_path: str, num_test: int = 2000) -> Tuple:
         split='test',
         train_ratio=0.5,
         target_counts={
-            'pure_normal': config.test_target_pure_normal,
-            'disturbing_normal': config.test_target_disturbing_normal,
-            'anomaly': config.test_target_anomaly
+            'pure_normal': int(config.num_test_samples * config.test_ratio_pure_normal),
+            'disturbing_normal': int(config.num_test_samples * config.test_ratio_disturbing_normal),
+            'anomaly': int(config.num_test_samples * config.test_ratio_anomaly)
         },
         seed=config.random_seed
     )
