@@ -25,7 +25,8 @@ class ExperimentVisualizer:
 
     def __init__(self, results_df: pd.DataFrame, param_keys: List[str], output_dir: str):
         self.results_df = results_df
-        self.param_keys = param_keys
+        # Filter param_keys to only include columns that exist in the DataFrame
+        self.param_keys = [p for p in param_keys if p in results_df.columns]
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
 
