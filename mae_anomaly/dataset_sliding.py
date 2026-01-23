@@ -765,37 +765,43 @@ class SlidingWindowTimeSeriesGenerator:
 
         return non_overlapping
 
-    def generate(self) -> Tuple[np.ndarray, np.ndarray, List[AnomalyRegion]]:
+    def generate(self, inject_anomalies: bool = True) -> Tuple[np.ndarray, np.ndarray, List[AnomalyRegion]]:
         """
-        Generate the complete time series with anomalies.
+        Generate the complete time series with optional anomalies.
+
+        Args:
+            inject_anomalies: If True (default), inject anomalies into the data.
+                              If False, return pure normal data without anomalies.
 
         Returns:
             signals: (total_length, num_features) normalized time series
             point_labels: (total_length,) binary labels (1 = anomaly point)
-            anomaly_regions: List of AnomalyRegion objects
+            anomaly_regions: List of AnomalyRegion objects (empty if inject_anomalies=False)
         """
         # Generate normal base series
         signals = self._generate_normal_series()
 
         # Initialize point labels
         point_labels = np.zeros(self.total_length, dtype=np.int64)
+        anomaly_regions = []
 
-        # Distribute and inject anomalies
-        anomaly_regions = self._distribute_anomalies()
+        if inject_anomalies:
+            # Distribute and inject anomalies
+            anomaly_regions = self._distribute_anomalies()
 
-        inject_funcs = {
-            1: self._inject_spike,
-            2: self._inject_memory_leak,
-            3: self._inject_cpu_saturation,
-            4: self._inject_network_congestion,
-            5: self._inject_cascading_failure,
-            6: self._inject_resource_contention,
-            7: self._inject_point_spike,
-        }
+            inject_funcs = {
+                1: self._inject_spike,
+                2: self._inject_memory_leak,
+                3: self._inject_cpu_saturation,
+                4: self._inject_network_congestion,
+                5: self._inject_cascading_failure,
+                6: self._inject_resource_contention,
+                7: self._inject_point_spike,
+            }
 
-        for region in anomaly_regions:
-            inject_funcs[region.anomaly_type](signals, region.start, region.end)
-            point_labels[region.start:region.end] = 1
+            for region in anomaly_regions:
+                inject_funcs[region.anomaly_type](signals, region.start, region.end)
+                point_labels[region.start:region.end] = 1
 
         # Clip to [0, 1]
         signals = np.clip(signals, 0, 1).astype(np.float32)

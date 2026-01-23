@@ -88,11 +88,18 @@ class ExperimentVisualizer:
         print(f"  - heatmaps_{metric}.png")
 
     def plot_parallel_coordinates(self):
-        """Generate parallel coordinates plot"""
+        """Generate parallel coordinates plot with interpretation guide.
+
+        Parallel coordinates show each experiment as a polyline connecting
+        parameter values across multiple axes. This helps visualize:
+        - Which parameter combinations lead to high/low performance
+        - Parameter interactions and correlations
+        - Clusters of successful configurations
+        """
         df = self.results_df.copy()
 
         # Select numeric columns for parallel coordinates
-        numeric_cols = [c for c in self.param_keys if df[c].dtype in ['float64', 'int64']]
+        numeric_cols = [c for c in self.param_keys if c in df.columns and df[c].dtype in ['float64', 'int64']]
         if len(numeric_cols) < 2:
             print("  - Skipping parallel coordinates (insufficient numeric parameters)")
             return
@@ -107,7 +114,11 @@ class ExperimentVisualizer:
             else:
                 df_norm[col] = 0.5
 
-        fig, ax = plt.subplots(figsize=(12, 6))
+        # Create figure with space for interpretation guide
+        fig = plt.figure(figsize=(14, 8))
+        gs = fig.add_gridspec(1, 2, width_ratios=[3, 1], wspace=0.05)
+        ax = fig.add_subplot(gs[0])
+        ax_guide = fig.add_subplot(gs[1])
 
         # Color by ROC-AUC
         cmap = plt.cm.RdYlGn
@@ -126,14 +137,54 @@ class ExperimentVisualizer:
 
         ax.set_xticks(range(len(numeric_cols)))
         ax.set_xticklabels(numeric_cols, rotation=45, ha='right')
-        ax.set_ylabel('Normalized Value')
-        ax.set_title('Parallel Coordinates (colored by ROC-AUC, red=top 10)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Normalized Value (0=min, 1=max)')
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_title('Parallel Coordinates Plot', fontsize=12, fontweight='bold')
 
         # Colorbar
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
-        plt.colorbar(sm, ax=ax, label='ROC-AUC')
+        cbar = plt.colorbar(sm, ax=ax, label='ROC-AUC', shrink=0.8)
 
+        # Interpretation guide
+        ax_guide.axis('off')
+        guide_text = """
+HOW TO READ THIS PLOT
+
+Each LINE = one experiment
+Each AXIS = one parameter
+
+LINE COLOR:
+  Green = High ROC-AUC (good)
+  Red = Low ROC-AUC (bad)
+  Bold red = Top 10 experiments
+
+INTERPRETATION:
+1. Look for GREEN clusters
+   → These show parameter ranges
+     that work well together
+
+2. Find CROSSING patterns
+   → Where green lines converge
+     indicates optimal values
+
+3. Check SPREAD at each axis
+   → Narrow spread = parameter
+     has strong effect
+   → Wide spread = parameter
+     matters less
+
+4. TOP 10 (bold red lines)
+   → Follow these to see which
+     parameter combinations
+     achieve best results
+"""
+        ax_guide.text(0.05, 0.98, guide_text, transform=ax_guide.transAxes,
+                     fontsize=9, verticalalignment='top', fontfamily='monospace',
+                     bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
+
+        plt.suptitle(f'Parameter Analysis ({len(df)} experiments, {len(numeric_cols)} parameters)',
+                    fontsize=14, fontweight='bold', y=0.98)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'parallel_coordinates.png'), dpi=150, bbox_inches='tight')
         plt.close()
@@ -257,25 +308,6 @@ class ExperimentVisualizer:
         plt.savefig(os.path.join(self.output_dir, 'metric_distributions.png'), dpi=150, bbox_inches='tight')
         plt.close()
         print("  - metric_distributions.png")
-
-    def plot_metric_correlations(self):
-        """Plot metric correlations"""
-        metrics = ['roc_auc', 'f1_score', 'precision', 'recall']
-        if 'disturbing_roc_auc' in self.results_df.columns:
-            metrics.append('disturbing_roc_auc')
-
-        available_metrics = [m for m in metrics if m in self.results_df.columns]
-        corr = self.results_df[available_metrics].corr()
-
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(corr, annot=True, fmt='.3f', cmap='RdYlGn', ax=ax,
-                   vmin=-1, vmax=1, center=0)
-        ax.set_title('Metric Correlations', fontsize=12, fontweight='bold')
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'metric_correlations.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-        print("  - metric_correlations.png")
 
     def plot_categorical_comparison(self, param: str, metric: str = 'roc_auc'):
         """Plot comparison for a categorical parameter"""
@@ -406,7 +438,6 @@ class ExperimentVisualizer:
         self.plot_parameter_importance()
         self.plot_top_k_comparison()
         self.plot_metric_distributions()
-        self.plot_metric_correlations()
 
         # Categorical comparisons (dynamically detected from param_keys)
         cat_params = self._get_categorical_params()

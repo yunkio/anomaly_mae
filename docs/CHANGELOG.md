@@ -1,5 +1,75 @@
 # Changelog
 
+## 2026-01-24 (Update 23): Dataset Visualization Improvements
+
+### Summary
+
+Improved dataset visualization quality by using dedicated datasets for plotting (without anomaly contamination), added before/after comparisons at same window positions, and cleaned up redundant/misleading visualizations.
+
+### Changes
+
+#### 1. Added `inject_anomalies` Parameter to Generator
+
+**Modified Files**:
+- `mae_anomaly/dataset_sliding.py`
+
+**New Parameter**:
+```python
+def generate(self, inject_anomalies: bool = True) -> Tuple[...]:
+    """
+    Args:
+        inject_anomalies: If True (default), inject anomalies.
+                          If False, return pure normal data.
+    """
+```
+
+This allows visualization code to generate clean normal data for complexity feature demonstrations.
+
+---
+
+#### 2. Improved Dataset Visualizations
+
+**Modified Files**:
+- `mae_anomaly/visualization/data_visualizer.py`
+
+**Changes**:
+
+| Function | Change |
+|----------|--------|
+| `plot_anomaly_generation_rules()` | Show only 1 example per anomaly type (was 2) |
+| `plot_normal_complexity_features()` | Uses `inject_anomalies=False` for clean comparison |
+| `plot_complexity_comparison()` | Uses `inject_anomalies=False` for clean comparison |
+| `plot_complexity_vs_anomaly()` | **Completely redesigned**: Before/after comparison at same window position |
+| `plot_dataset_statistics()` | **Removed** (hardcoded values were misleading) |
+
+**New `plot_complexity_vs_anomaly()` Design**:
+- Row 1: Complexity features (gray=before, blue=after) at same window position
+- Row 2: Anomaly injection (gray=before, red=after) at same window position
+- Allows clear visualization of what each feature/anomaly actually changes
+
+---
+
+#### 3. Stage 1 Visualization Cleanup
+
+**Modified Files**:
+- `mae_anomaly/visualization/experiment_visualizer.py`
+
+**Changes**:
+
+| Function | Change |
+|----------|--------|
+| `plot_metric_correlations()` | **Removed** (not useful for hyperparameter analysis) |
+| `plot_parallel_coordinates()` | **Added interpretation guide** panel explaining how to read the plot |
+
+---
+
+### Documentation Updates
+
+- **VISUALIZATIONS.md**: Updated tables and usage examples
+- **CHANGELOG.md**: This entry
+
+---
+
 ## 2026-01-24 (Update 22): Comprehensive Visualization Style Consistency
 
 ### Summary

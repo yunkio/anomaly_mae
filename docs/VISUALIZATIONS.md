@@ -163,12 +163,14 @@ Understanding the dataset, anomaly types, and experiment settings.
 |------|-------------|
 | `sample_types.png` | Comparison of pure normal, disturbing normal, and anomaly samples (diverse sampling for variety) |
 | `feature_examples.png` | All 8 features with actual FEATURE_NAMES (CPU, Memory, DiskIO, etc.) for normal and anomaly samples |
-| `dataset_statistics.png` | Label and sample type distributions |
-| `anomaly_generation_rules.png` | Detailed rules for each anomaly type with actual dataset examples |
+| `anomaly_generation_rules.png` | Detailed rules for each anomaly type with actual dataset examples (1 example per type) |
 | `feature_correlations.png` | Feature correlation matrix and generation rules explanation |
+| `normal_complexity_features.png` | 6 normal complexity features (before/after comparison without anomalies) |
+| `complexity_comparison.png` | Simple vs complex normal data comparison (without anomalies) |
+| `complexity_vs_anomaly.png` | **Before/after comparison**: complexity features vs anomaly injection at same window position |
 | `experiment_settings.png` | Experiment settings summary (Stage 1/2 epochs, data counts, seeds) |
 
-**Note**: `anomaly_types.png` was removed (redundant with `anomaly_generation_rules.png`).
+**Note**: `anomaly_types.png` and `dataset_statistics.png` were removed (redundant/misleading).
 
 ### 2. Architecture Visualizations (`architecture/`)
 
@@ -190,14 +192,15 @@ Quick search results analysis (hyperparameter screening).
 | File | Description |
 |------|-------------|
 | `heatmaps_roc_auc.png` | Parameter pair heatmaps showing mean ROC-AUC |
-| `parallel_coordinates.png` | Parallel coordinates plot for all combinations |
+| `parallel_coordinates.png` | Parallel coordinates plot with interpretation guide |
 | `parameter_importance.png` | Box plots showing each parameter's impact on ROC-AUC |
 | `top_k_comparison.png` | Bar chart and table comparing top 10 configurations |
 | `metric_distributions.png` | Histograms of ROC-AUC, F1, Precision, Recall |
-| `metric_correlations.png` | Correlation matrix between all metrics |
 | `patchify_mode_comparison_roc_auc.png` | Detailed comparison of patchify modes |
 | `margin_type_comparison_roc_auc.png` | Detailed comparison of margin types |
 | `stage1_summary_dashboard.png` | Comprehensive dashboard with all key insights |
+
+**Note**: `metric_correlations.png` was removed (not useful for hyperparameter analysis).
 
 ### 4. Stage 2 Visualizations (`stage2/`)
 
@@ -296,13 +299,15 @@ from mae_anomaly.visualization import (
 from mae_anomaly.visualization import DataVisualizer
 
 data_vis = DataVisualizer(output_dir='output/data', config=config)
-data_vis.plot_sample_types()           # Diverse sampling for variety
-data_vis.plot_feature_examples()       # All 8 features with FEATURE_NAMES
-data_vis.plot_dataset_statistics()
-data_vis.plot_anomaly_generation_rules()  # Dynamic: uses ANOMALY_TYPE_NAMES
+data_vis.plot_sample_types()               # Diverse sampling for variety
+data_vis.plot_feature_examples()           # All 8 features with FEATURE_NAMES
+data_vis.plot_anomaly_generation_rules()   # Dynamic: 1 example per anomaly type
 data_vis.plot_feature_correlations()
+data_vis.plot_normal_complexity_features() # Complexity before/after (no anomalies)
+data_vis.plot_complexity_comparison()      # Simple vs complex normal (no anomalies)
+data_vis.plot_complexity_vs_anomaly()      # Before/after comparison at same window
 data_vis.plot_experiment_settings()
-data_vis.generate_all()  # Generate all (excludes redundant anomaly_types)
+data_vis.generate_all()  # Generate all
 ```
 
 ### ArchitectureVisualizer
@@ -332,11 +337,10 @@ param_keys = ['masking_ratio', 'masking_strategy', 'num_patches',
 
 stage1_vis = ExperimentVisualizer(results_df, param_keys, output_dir='output/stage1')
 stage1_vis.plot_heatmaps()
-stage1_vis.plot_parallel_coordinates()
+stage1_vis.plot_parallel_coordinates()  # Includes interpretation guide
 stage1_vis.plot_parameter_importance()
 stage1_vis.plot_top_k_comparison(k=10)
 stage1_vis.plot_metric_distributions()
-stage1_vis.plot_metric_correlations()
 stage1_vis.plot_categorical_comparison('patchify_mode')
 stage1_vis.plot_summary_dashboard()
 stage1_vis.generate_all()  # Generate all

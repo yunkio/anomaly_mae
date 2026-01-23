@@ -284,76 +284,6 @@ class DataVisualizer:
         plt.close()
         print("  - feature_examples.png")
 
-    def plot_dataset_statistics(self):
-        """Visualize dataset statistics"""
-        set_seed(42)
-        generator = SlidingWindowTimeSeriesGenerator(
-            total_length=200000,  # Larger for better statistics
-            num_features=self.config.num_features,
-            interval_scale=1.5,
-            seed=42
-        )
-        signals, point_labels, anomaly_regions = generator.generate()
-        dataset = SlidingWindowDataset(
-            signals=signals,
-            point_labels=point_labels,
-            anomaly_regions=anomaly_regions,
-            window_size=self.config.seq_length,
-            stride=11,
-            mask_last_n=10,
-            split='test',
-            train_ratio=0.5,
-            target_counts={'pure_normal': 600, 'disturbing_normal': 150, 'anomaly': 250},
-            seed=42
-        )
-
-        labels = []
-        sample_types = []
-
-        for i in range(len(dataset)):
-            _, label, _, st, _ = dataset[i]
-            labels.append(label)
-            sample_types.append(st)
-
-        labels = np.array(labels)
-        sample_types = np.array(sample_types)
-
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-
-        # Label distribution
-        ax = axes[0]
-        label_counts = [np.sum(labels == 0), np.sum(labels == 1)]
-        bars = ax.bar(['Normal', 'Anomaly'], label_counts, color=[VIS_COLORS['normal'], VIS_COLORS['anomaly']])
-        ax.set_title('Label Distribution', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Count')
-        for bar, count in zip(bars, label_counts):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 10,
-                   f'{count}\n({count/len(labels)*100:.1f}%)', ha='center', va='bottom')
-
-        # Sample type distribution
-        ax = axes[1]
-        type_counts = [np.sum(sample_types == 0), np.sum(sample_types == 1), np.sum(sample_types == 2)]
-        type_labels = [SAMPLE_TYPE_NAMES[i] for i in range(3)]
-        colors = [SAMPLE_TYPE_COLORS[i] for i in range(3)]
-        bars = ax.bar(type_labels, type_counts, color=colors)
-        ax.set_title('Sample Type Distribution', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Count')
-        ax.tick_params(axis='x', rotation=15)
-        for bar, count in zip(bars, type_counts):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 10,
-                   f'{count}', ha='center', va='bottom')
-
-        # Pie chart
-        ax = axes[2]
-        ax.pie(type_counts, labels=type_labels, colors=colors, autopct='%1.1f%%',
-               startangle=90, explode=[0, 0.05, 0])
-        ax.set_title('Sample Type Proportions', fontsize=12, fontweight='bold')
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'dataset_statistics.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-        print("  - dataset_statistics.png")
-
     def plot_anomaly_generation_rules(self):
         """Visualize the rules for generating each anomaly type
 
@@ -427,27 +357,25 @@ class DataVisualizer:
             characteristics = info.get('characteristics', '')
             affected = info.get('affected_features', [])
 
-            # Plot examples if available
+            # Plot example if available (show only 1 example)
             examples = type_examples.get(atype, [])
             if examples:
-                for ex_idx, ex in enumerate(examples[:2]):  # Show up to 2 examples
-                    seq = ex['seq']
-                    pt_labels = ex['point_labels']
+                ex = examples[0]
+                seq = ex['seq']
+                pt_labels = ex['point_labels']
 
-                    # Plot first feature
-                    alpha = 0.8 if ex_idx == 0 else 0.4
-                    ax.plot(x, seq[:, 0], alpha=alpha, lw=1.5,
-                           color=colors[atype], label=f'Example {ex_idx+1}' if ex_idx == 0 else None)
+                # Plot first feature
+                ax.plot(x, seq[:, 0], alpha=0.8, lw=1.5,
+                       color=colors[atype], label='Example')
 
-                    # Highlight anomaly region
-                    if ex_idx == 0:
-                        anomaly_mask = pt_labels > 0
-                        if anomaly_mask.any():
-                            diff = np.diff(np.concatenate([[0], anomaly_mask.astype(int), [0]]))
-                            starts = np.where(diff == 1)[0]
-                            ends = np.where(diff == -1)[0]
-                            for start, end in zip(starts, ends):
-                                ax.axvspan(start, end, alpha=0.3, color=VIS_COLORS['anomaly_region'])
+                # Highlight anomaly region
+                anomaly_mask = pt_labels > 0
+                if anomaly_mask.any():
+                    diff = np.diff(np.concatenate([[0], anomaly_mask.astype(int), [0]]))
+                    starts = np.where(diff == 1)[0]
+                    ends = np.where(diff == -1)[0]
+                    for start, end in zip(starts, ends):
+                        ax.axvspan(start, end, alpha=0.3, color=VIS_COLORS['anomaly_region'])
             else:
                 # Fallback: show synthetic example
                 np.random.seed(42 + idx)
@@ -746,8 +674,8 @@ Random Seeds:
                 seed=42
             )
 
-            signals_enabled, _, _ = gen_enabled.generate()
-            signals_disabled, _, _ = gen_disabled.generate()
+            signals_enabled, _, _ = gen_enabled.generate(inject_anomalies=False)
+            signals_disabled, _, _ = gen_disabled.generate(inject_anomalies=False)
 
             # Plot comparison (show first 5000 timesteps for visibility)
             show_length = min(5000, demo_length)
@@ -811,8 +739,8 @@ Random Seeds:
             seed=42
         )
 
-        signals_complex, _, _ = gen_complex.generate()
-        signals_simple, _, _ = gen_simple.generate()
+        signals_complex, _, _ = gen_complex.generate(inject_anomalies=False)
+        signals_simple, _, _ = gen_simple.generate(inject_anomalies=False)
 
         x = np.arange(show_length)
         feature_names = FEATURE_NAMES[:self.config.num_features]
@@ -866,181 +794,148 @@ Random Seeds:
         print("  - complexity_comparison.png")
 
     def plot_complexity_vs_anomaly(self):
-        """Show why complexity features don't get confused with anomalies"""
+        """Show before/after comparison for complexity features and anomalies.
+
+        Row 1: Complexity features - compare same window with/without each feature
+        Row 2: Anomaly injection - compare same window before/after anomaly injection
+        """
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
-        demo_length = 20000
+        demo_length = 30000
+        window_length = 300  # Window size for comparison plots
 
-        # Generate complex normal data
-        complexity = NormalDataComplexity(enable_complexity=True)
-        gen = SlidingWindowTimeSeriesGenerator(
+        # =========================================================================
+        # Row 1: Complexity Features - Before/After Comparison
+        # =========================================================================
+
+        complexity_features = [
+            ('Normal Bumps', 'enable_normal_bumps', 1500, 'Small gradual load increases'),
+            ('O-U Drift', 'enable_drift', 3000, 'Mean-reverting baseline drift'),
+            ('Multi-Scale Periodicity', 'enable_multi_scale_periodicity', 500, 'Overlapping cycles'),
+        ]
+
+        for col, (name, enable_key, start_pos, description) in enumerate(complexity_features):
+            ax = axes[0, col]
+
+            # Generate baseline (no complexity)
+            complexity_off = NormalDataComplexity(enable_complexity=False)
+            gen_off = SlidingWindowTimeSeriesGenerator(
+                total_length=demo_length,
+                num_features=self.config.num_features,
+                complexity=complexity_off,
+                seed=42
+            )
+            signals_off, _, _ = gen_off.generate(inject_anomalies=False)
+
+            # Generate with only this complexity feature enabled
+            complexity_on = NormalDataComplexity(
+                enable_complexity=True,
+                enable_regime_switching=False,
+                enable_multi_scale_periodicity=(enable_key == 'enable_multi_scale_periodicity'),
+                enable_heteroscedastic_noise=False,
+                enable_varying_correlations=False,
+                enable_drift=(enable_key == 'enable_drift'),
+                enable_normal_bumps=(enable_key == 'enable_normal_bumps'),
+            )
+            gen_on = SlidingWindowTimeSeriesGenerator(
+                total_length=demo_length,
+                num_features=self.config.num_features,
+                complexity=complexity_on,
+                seed=42
+            )
+            signals_on, _, _ = gen_on.generate(inject_anomalies=False)
+
+            # Plot same window position for before/after comparison
+            end_pos = start_pos + window_length
+            x = np.arange(window_length)
+
+            ax.plot(x, signals_off[start_pos:end_pos, 0], color=VIS_COLORS['reference'],
+                   lw=1.5, alpha=0.7, label='Before (simple)')
+            ax.plot(x, signals_on[start_pos:end_pos, 0], color=VIS_COLORS['normal'],
+                   lw=1.5, alpha=0.9, label=f'After ({name})')
+
+            ax.set_title(f'Complexity: {name}', fontsize=11, fontweight='bold')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('CPU Value')
+            ax.set_ylim(0, 1)
+            ax.legend(loc='upper right', fontsize=8)
+            ax.text(0.02, 0.98, description, transform=ax.transAxes, fontsize=9,
+                   verticalalignment='top', bbox=dict(facecolor='lightgreen', alpha=0.7))
+
+        # =========================================================================
+        # Row 2: Anomaly Injection - Before/After Comparison
+        # =========================================================================
+
+        # Generate data with all complexity features (no anomalies)
+        complexity_full = NormalDataComplexity(enable_complexity=True)
+        gen_normal = SlidingWindowTimeSeriesGenerator(
             total_length=demo_length,
             num_features=self.config.num_features,
-            complexity=complexity,
+            complexity=complexity_full,
             interval_scale=1.5,
             seed=42
         )
-        signals, point_labels, anomaly_regions = gen.generate()
+        signals_normal, _, _ = gen_normal.generate(inject_anomalies=False)
 
-        # Find regions with specific characteristics
-        x = np.arange(demo_length)
-
-        # Row 1: Normal complexity features
-        # 1. Regime transition (normal)
-        ax = axes[0, 0]
-        # Show a smooth transition region
-        start = 8000
-        length = 4000
-        ax.plot(x[start:start+length], signals[start:start+length, 0], 'C0', lw=1)
-        ax.fill_between(x[start:start+length], 0, 1, alpha=0.1, color=VIS_COLORS['normal_region'])
-        ax.set_title('Normal: Regime Transition\n(Smooth, 1500+ ts)', fontsize=11, fontweight='bold')
-        ax.set_xlabel('Timestep')
-        ax.set_ylabel('Value')
-        ax.set_ylim(0, 1)
-        ax.text(0.5, 0.95, 'Gradual change over thousands of timesteps',
-               transform=ax.transAxes, ha='center', va='top', fontsize=9,
-               bbox=dict(facecolor='lightgreen', alpha=0.7))
-
-        # 2. Normal bump (normal)
-        ax = axes[0, 1]
-        # Generate data with just bumps to find one
-        bump_complexity = NormalDataComplexity(
-            enable_complexity=True,
-            enable_regime_switching=False,
-            enable_multi_scale_periodicity=False,
-            enable_heteroscedastic_noise=False,
-            enable_varying_correlations=False,
-            enable_drift=False,
-            enable_normal_bumps=True,
-        )
-        gen_bump = SlidingWindowTimeSeriesGenerator(
+        # Generate data with all complexity features + anomalies
+        gen_anomaly = SlidingWindowTimeSeriesGenerator(
             total_length=demo_length,
             num_features=self.config.num_features,
-            complexity=bump_complexity,
+            complexity=complexity_full,
+            interval_scale=1.5,
             seed=42
         )
-        signals_bump, _, _ = gen_bump.generate()
-        start = 2000
-        length = 800
-        ax.plot(x[start:start+length], signals_bump[start:start+length, 0], 'C0', lw=1)
-        ax.fill_between(x[start:start+length], 0, 1, alpha=0.1, color=VIS_COLORS['normal_region'])
-        ax.set_title('Normal: Small Bump\n(Gaussian, 100-300 ts, mag<0.10)', fontsize=11, fontweight='bold')
-        ax.set_xlabel('Timestep')
-        ax.set_ylabel('Value')
-        ax.set_ylim(0, 1)
-        ax.text(0.5, 0.95, 'Smooth Gaussian shape, affects 1-2 features',
-               transform=ax.transAxes, ha='center', va='top', fontsize=9,
-               bbox=dict(facecolor='lightgreen', alpha=0.7))
+        signals_anomaly, _, anomaly_regions = gen_anomaly.generate(inject_anomalies=True)
 
-        # 3. O-U drift (normal)
-        ax = axes[0, 2]
-        drift_complexity = NormalDataComplexity(
-            enable_complexity=True,
-            enable_regime_switching=False,
-            enable_multi_scale_periodicity=False,
-            enable_heteroscedastic_noise=False,
-            enable_varying_correlations=False,
-            enable_drift=True,
-            enable_normal_bumps=False,
-        )
-        gen_drift = SlidingWindowTimeSeriesGenerator(
-            total_length=demo_length,
-            num_features=self.config.num_features,
-            complexity=drift_complexity,
-            seed=42
-        )
-        signals_drift, _, _ = gen_drift.generate()
-        start = 0
-        length = 5000
-        ax.plot(x[start:start+length], signals_drift[start:start+length, 0], 'C0', lw=1)
-        ax.fill_between(x[start:start+length], 0, 1, alpha=0.1, color=VIS_COLORS['normal_region'])
-        ax.set_title('Normal: O-U Drift\n(Mean-reverting, ±0.08 max)', fontsize=11, fontweight='bold')
-        ax.set_xlabel('Timestep')
-        ax.set_ylabel('Value')
-        ax.set_ylim(0, 1)
-        ax.text(0.5, 0.95, 'Bidirectional, always returns to baseline',
-               transform=ax.transAxes, ha='center', va='top', fontsize=9,
-               bbox=dict(facecolor='lightgreen', alpha=0.7))
+        # Find specific anomaly types for comparison
+        anomaly_examples = [
+            (1, 0, 'Spike', 'Sudden jump in multiple features'),
+            (2, 1, 'Memory Leak', 'Monotonic increase in memory'),
+            (3, 0, 'CPU Saturation', 'CPU stuck at high level'),
+        ]
 
-        # Row 2: Anomaly patterns (for comparison)
-        # Find anomaly regions
-        spike_region = None
-        leak_region = None
-        for region in anomaly_regions:
-            if region.anomaly_type == 1 and spike_region is None:  # spike
-                spike_region = region
-            elif region.anomaly_type == 2 and leak_region is None:  # memory_leak
-                leak_region = region
-            if spike_region is not None and leak_region is not None:
-                break
+        for col, (atype, feature_idx, name, description) in enumerate(anomaly_examples):
+            ax = axes[1, col]
 
-        # 4. Spike anomaly
-        ax = axes[1, 0]
-        if spike_region is not None:
-            start = max(0, spike_region.start - 50)
-            end = min(demo_length, spike_region.end + 50)
-            ax.plot(x[start:end], signals[start:end, 0], 'C3', lw=1)
-            ax.axvspan(spike_region.start, spike_region.end, alpha=0.3, color=VIS_COLORS['anomaly_region'])
-        else:
-            ax.text(0.5, 0.5, 'No spike anomaly found\nin this dataset',
-                   transform=ax.transAxes, ha='center', va='center', fontsize=12)
-        ax.set_title('ANOMALY: Spike\n(Sudden, 10-25 ts, mag 0.3-0.6)', fontsize=11, fontweight='bold')
-        ax.set_xlabel('Timestep')
-        ax.set_ylabel('Value')
-        ax.set_ylim(0, 1)
-        ax.text(0.5, 0.95, 'Sudden jump, affects 5+ features + error rate',
-               transform=ax.transAxes, ha='center', va='top', fontsize=9,
-               bbox=dict(facecolor='lightcoral', alpha=0.7))
+            # Find a region with this anomaly type
+            target_region = None
+            for region in anomaly_regions:
+                if region.anomaly_type == atype:
+                    target_region = region
+                    break
 
-        # 5. Memory leak anomaly
-        ax = axes[1, 1]
-        if leak_region is not None:
-            start = max(0, leak_region.start - 20)
-            end = min(demo_length, leak_region.end + 20)
-            # Show Memory feature (index 1) for leak
-            ax.plot(x[start:end], signals[start:end, 1], 'C3', lw=1)
-            ax.axvspan(leak_region.start, leak_region.end, alpha=0.3, color=VIS_COLORS['anomaly_region'])
-        else:
-            ax.text(0.5, 0.5, 'No memory leak anomaly found\nin this dataset',
-                   transform=ax.transAxes, ha='center', va='center', fontsize=12)
-        ax.set_title('ANOMALY: Memory Leak\n(Monotonic increase, 80-150 ts)', fontsize=11, fontweight='bold')
-        ax.set_xlabel('Timestep')
-        ax.set_ylabel('Memory Value')
-        ax.set_ylim(0, 1)
-        ax.text(0.5, 0.95, 'Only goes UP (never down), mag 0.3-0.5',
-               transform=ax.transAxes, ha='center', va='top', fontsize=9,
-               bbox=dict(facecolor='lightcoral', alpha=0.7))
+            if target_region is not None:
+                # Calculate window around the anomaly
+                padding = 50
+                start = max(0, target_region.start - padding)
+                end = min(demo_length, target_region.end + padding)
+                length = end - start
+                x = np.arange(length)
 
-        # 6. Summary comparison table
-        ax = axes[1, 2]
-        ax.axis('off')
+                # Plot before (normal) and after (with anomaly)
+                ax.plot(x, signals_normal[start:end, feature_idx], color=VIS_COLORS['reference'],
+                       lw=1.5, alpha=0.7, label='Before (normal)')
+                ax.plot(x, signals_anomaly[start:end, feature_idx], color=VIS_COLORS['anomaly'],
+                       lw=1.5, alpha=0.9, label='After (anomaly)')
 
-        table_text = """
-╔══════════════════════════════════════════════════════════════╗
-║           COMPLEXITY vs ANOMALY COMPARISON                   ║
-╠══════════════════════════════════════════════════════════════╣
-║  Aspect          │  Normal Complexity  │  Anomaly            ║
-╠══════════════════════════════════════════════════════════════╣
-║  Duration        │  1000+ timesteps    │  3-150 timesteps    ║
-║  Value range     │  [0.05, 0.70]       │  [0.70, 1.00]       ║
-║  Direction       │  Bidirectional      │  Usually upward     ║
-║  Transition      │  Smooth/gradual     │  Sudden             ║
-║  Features        │  1-2 (bumps)        │  5+ simultaneous    ║
-║  Error rate      │  NOT affected       │  Increases          ║
-║  Mean-reverting  │  Yes (O-U drift)    │  No (leaks grow)    ║
-╚══════════════════════════════════════════════════════════════╝
+                # Highlight anomaly region
+                region_start = target_region.start - start
+                region_end = target_region.end - start
+                ax.axvspan(region_start, region_end, alpha=0.2, color=VIS_COLORS['anomaly_region'])
+            else:
+                ax.text(0.5, 0.5, f'No {name} anomaly found\nin this dataset',
+                       transform=ax.transAxes, ha='center', va='center', fontsize=12)
 
-KEY INSIGHT: All complexity features are designed with
-safety constraints that make them fundamentally different
-from anomaly patterns.
-"""
-        ax.text(0.5, 0.5, table_text, transform=ax.transAxes, fontsize=10,
-               verticalalignment='center', horizontalalignment='center',
-               fontfamily='monospace',
-               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
+            ax.set_title(f'Anomaly: {name}', fontsize=11, fontweight='bold')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel(FEATURE_NAMES[feature_idx] if feature_idx < len(FEATURE_NAMES) else 'Value')
+            ax.set_ylim(0, 1)
+            ax.legend(loc='upper right', fontsize=8)
+            ax.text(0.02, 0.98, description, transform=ax.transAxes, fontsize=9,
+                   verticalalignment='top', bbox=dict(facecolor='lightcoral', alpha=0.7))
 
-        plt.suptitle('Normal Complexity Features vs Anomaly Patterns\n'
-                    'Green = Normal (complexity), Red = Anomaly',
+        plt.suptitle('Before/After Comparison: Complexity Features vs Anomaly Injection\n'
+                    'Top row: Normal complexity (green) | Bottom row: Anomaly injection (red)',
                     fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'complexity_vs_anomaly.png'),
@@ -1052,9 +947,9 @@ from anomaly patterns.
         """Generate all data visualizations"""
         print("\n  Generating Data Visualizations...")
         # Note: plot_anomaly_types() removed - redundant with plot_anomaly_generation_rules()
+        # Note: plot_dataset_statistics() removed - hardcoded values were misleading
         self.plot_sample_types()
         self.plot_feature_examples()
-        self.plot_dataset_statistics()
         self.plot_anomaly_generation_rules()
         self.plot_feature_correlations()
         self.plot_normal_complexity_features()
