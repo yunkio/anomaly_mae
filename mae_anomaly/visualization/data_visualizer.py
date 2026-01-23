@@ -964,17 +964,26 @@ Random Seeds:
 
         # Row 2: Anomaly patterns (for comparison)
         # Find anomaly regions
+        spike_region = None
+        leak_region = None
         for region in anomaly_regions:
-            if region.anomaly_type == 1:  # spike
+            if region.anomaly_type == 1 and spike_region is None:  # spike
                 spike_region = region
+            elif region.anomaly_type == 2 and leak_region is None:  # memory_leak
+                leak_region = region
+            if spike_region is not None and leak_region is not None:
                 break
 
         # 4. Spike anomaly
         ax = axes[1, 0]
-        start = max(0, spike_region.start - 50)
-        end = min(demo_length, spike_region.end + 50)
-        ax.plot(x[start:end], signals[start:end, 0], 'C3', lw=1)
-        ax.axvspan(spike_region.start, spike_region.end, alpha=0.3, color='red')
+        if spike_region is not None:
+            start = max(0, spike_region.start - 50)
+            end = min(demo_length, spike_region.end + 50)
+            ax.plot(x[start:end], signals[start:end, 0], 'C3', lw=1)
+            ax.axvspan(spike_region.start, spike_region.end, alpha=0.3, color='red')
+        else:
+            ax.text(0.5, 0.5, 'No spike anomaly found\nin this dataset',
+                   transform=ax.transAxes, ha='center', va='center', fontsize=12)
         ax.set_title('ANOMALY: Spike\n(Sudden, 10-25 ts, mag 0.3-0.6)', fontsize=11, fontweight='bold')
         ax.set_xlabel('Timestep')
         ax.set_ylabel('Value')
@@ -984,17 +993,16 @@ Random Seeds:
                bbox=dict(facecolor='lightcoral', alpha=0.7))
 
         # 5. Memory leak anomaly
-        for region in anomaly_regions:
-            if region.anomaly_type == 2:  # memory_leak
-                leak_region = region
-                break
-
         ax = axes[1, 1]
-        start = max(0, leak_region.start - 20)
-        end = min(demo_length, leak_region.end + 20)
-        # Show Memory feature (index 1) for leak
-        ax.plot(x[start:end], signals[start:end, 1], 'C3', lw=1)
-        ax.axvspan(leak_region.start, leak_region.end, alpha=0.3, color='red')
+        if leak_region is not None:
+            start = max(0, leak_region.start - 20)
+            end = min(demo_length, leak_region.end + 20)
+            # Show Memory feature (index 1) for leak
+            ax.plot(x[start:end], signals[start:end, 1], 'C3', lw=1)
+            ax.axvspan(leak_region.start, leak_region.end, alpha=0.3, color='red')
+        else:
+            ax.text(0.5, 0.5, 'No memory leak anomaly found\nin this dataset',
+                   transform=ax.transAxes, ha='center', va='center', fontsize=12)
         ax.set_title('ANOMALY: Memory Leak\n(Monotonic increase, 80-150 ts)', fontsize=11, fontweight='bold')
         ax.set_xlabel('Timestep')
         ax.set_ylabel('Memory Value')
