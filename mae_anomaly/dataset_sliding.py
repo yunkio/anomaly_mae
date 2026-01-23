@@ -63,6 +63,31 @@ ANOMALY_TYPE_CONFIGS = {
 }
 
 
+def _normalize_per_feature(signals: np.ndarray) -> np.ndarray:
+    """Per-feature min-max normalization to [0, 1] range.
+
+    This is preferred over clipping because:
+    1. Preserves relative magnitude of anomalies (spikes won't be capped)
+    2. No artificial saturation at boundaries
+    3. More realistic simulation of real-world data preprocessing
+
+    Args:
+        signals: (total_length, num_features) array
+
+    Returns:
+        Normalized signals with each feature scaled to [0, 1]
+    """
+    signals = signals.copy()  # Don't modify original
+    for f in range(signals.shape[1]):
+        min_val = signals[:, f].min()
+        max_val = signals[:, f].max()
+        if max_val - min_val > 1e-8:  # Avoid division by zero
+            signals[:, f] = (signals[:, f] - min_val) / (max_val - min_val)
+        else:
+            signals[:, f] = 0.5  # Constant signal -> set to middle
+    return signals.astype(np.float32)
+
+
 @dataclass
 class AnomalyRegion:
     """Represents an anomaly region in the time series"""
@@ -271,7 +296,7 @@ class SlidingWindowTimeSeriesGenerator:
         if self.num_features > 7:
             signals[:, 7] = 0.2 + 0.2 * signals[:, 0] + 0.15 * signals[:, 5] + np.random.normal(0, 0.03, self.total_length)
 
-        return np.clip(signals, 0, 1).astype(np.float32)
+        return _normalize_per_feature(signals)
 
     def _random_regime_params(self) -> Dict:
         """Generate random parameters for a single regime.
@@ -803,8 +828,8 @@ class SlidingWindowTimeSeriesGenerator:
                 inject_funcs[region.anomaly_type](signals, region.start, region.end)
                 point_labels[region.start:region.end] = 1
 
-        # Clip to [0, 1]
-        signals = np.clip(signals, 0, 1).astype(np.float32)
+        # Normalize each feature to [0, 1] range
+        signals = _normalize_per_feature(signals)
 
         return signals, point_labels, anomaly_regions
 

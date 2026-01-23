@@ -1,6 +1,6 @@
 # Dataset Documentation
 
-**Last Updated**: 2026-01-23
+**Last Updated**: 2026-01-24
 
 ---
 
@@ -115,6 +115,32 @@ ErrorRate = base + 0.1 * max(0, ResponseTime - 0.3) + exponential
 # QueueLength (CPU + ThreadCount)
 QueueLength = base + 0.2 * CPU + 0.15 * ThreadCount + noise
 ```
+
+### Data Normalization
+
+After signal generation (including anomaly injection), each feature is **independently normalized** to the [0, 1] range using **per-feature min-max normalization**:
+
+```python
+def _normalize_per_feature(signals: np.ndarray) -> np.ndarray:
+    """Per-feature min-max normalization to [0, 1] range."""
+    for f in range(signals.shape[1]):
+        min_val = signals[:, f].min()
+        max_val = signals[:, f].max()
+        if max_val - min_val > 1e-8:
+            signals[:, f] = (signals[:, f] - min_val) / (max_val - min_val)
+        else:
+            signals[:, f] = 0.5  # Constant signal -> set to middle
+    return signals
+```
+
+**Why normalization instead of clipping?**
+
+| Aspect | Clipping (`np.clip(signals, 0, 1)`) | Min-Max Normalization |
+|--------|-------------------------------------|----------------------|
+| Anomaly spikes | Capped at 1.0 (info loss) | Preserved proportionally |
+| Boundary artifacts | Flat regions at 0 or 1 | No artificial saturation |
+| Relative magnitudes | Distorted near boundaries | Preserved exactly |
+| Real-world similarity | Less realistic | Matches standard preprocessing |
 
 ---
 
@@ -333,7 +359,7 @@ x = clip(x + dx, -drift_max, drift_max)
 | Constraint | Value | Reason |
 |------------|-------|--------|
 | Transition time | >= 1000 ts | Anomalies are much shorter |
-| Value range | Natural (no clipping) | Anomalies push to higher ranges |
+| Value range | Per-feature [0,1] normalized | Relative magnitudes preserved |
 | Drift magnitude | max ±0.08 | Memory leak grows 0.3-0.5 |
 | Bump magnitude | max 0.10 | Spike adds 0.3-0.6 |
 | Bump duration | 100-300 ts | Spike is 10-25 ts |

@@ -1,5 +1,70 @@
 # Changelog
 
+## 2026-01-24 (Update 24): Per-Feature Min-Max Normalization
+
+### Summary
+
+Replaced data clipping (`np.clip(signals, 0, 1)`) with per-feature min-max normalization. This preserves relative anomaly magnitudes and eliminates boundary artifacts.
+
+### Changes
+
+#### 1. Added Normalization Function
+
+**Modified Files**:
+- `mae_anomaly/dataset_sliding.py`
+
+**New Function**:
+```python
+def _normalize_per_feature(signals: np.ndarray) -> np.ndarray:
+    """Per-feature min-max normalization to [0, 1] range.
+
+    This is preferred over clipping because:
+    1. Preserves relative magnitude of anomalies (spikes won't be capped)
+    2. No artificial saturation at boundaries
+    3. More realistic simulation of real-world data preprocessing
+    """
+    signals = signals.copy()
+    for f in range(signals.shape[1]):
+        min_val = signals[:, f].min()
+        max_val = signals[:, f].max()
+        if max_val - min_val > 1e-8:
+            signals[:, f] = (signals[:, f] - min_val) / (max_val - min_val)
+        else:
+            signals[:, f] = 0.5
+    return signals.astype(np.float32)
+```
+
+---
+
+#### 2. Replaced Clipping with Normalization
+
+**Locations Changed**:
+
+| Method | Before | After |
+|--------|--------|-------|
+| `_generate_simple_normal_series()` | `np.clip(signals, 0, 1)` | `_normalize_per_feature(signals)` |
+| `generate()` | `np.clip(signals, 0, 1)` | `_normalize_per_feature(signals)` |
+
+---
+
+#### 3. Why This Change?
+
+| Aspect | Clipping | Min-Max Normalization |
+|--------|----------|----------------------|
+| Spike anomalies | Capped at 1.0 (info loss) | Full magnitude preserved |
+| Boundary behavior | Flat saturation | Natural distribution |
+| Relative magnitudes | Distorted | Preserved exactly |
+| Real-world similarity | Artificial | Matches preprocessing |
+
+---
+
+### Documentation Updates
+
+- **DATASET.md**: Added "Data Normalization" section, updated Safety Constraints table
+- **CHANGELOG.md**: This entry
+
+---
+
 ## 2026-01-24 (Update 23): Dataset Visualization Improvements
 
 ### Summary
