@@ -494,7 +494,7 @@ class ExperimentRunner:
         trainer = Trainer(model, config, train_loader, test_loader, verbose=False)
         trainer.train()
 
-        evaluator = Evaluator(model, config, test_loader)
+        evaluator = Evaluator(model, config, test_loader, test_dataset=test_dataset)
         metrics = evaluator.evaluate()
 
         if save_history:
@@ -658,6 +658,15 @@ class ExperimentRunner:
                     'f1_score': metrics['f1_score'],
                     'precision': metrics['precision'],
                     'recall': metrics['recall'],
+                    # PA%K metrics - F1 and ROC-AUC for K=10,20,50,80 (8 metrics total)
+                    'pa_10_f1': metrics.get('pa_10_f1', None),
+                    'pa_10_roc_auc': metrics.get('pa_10_roc_auc', None),
+                    'pa_20_f1': metrics.get('pa_20_f1', None),
+                    'pa_20_roc_auc': metrics.get('pa_20_roc_auc', None),
+                    'pa_50_f1': metrics.get('pa_50_f1', None),
+                    'pa_50_roc_auc': metrics.get('pa_50_roc_auc', None),
+                    'pa_80_f1': metrics.get('pa_80_f1', None),
+                    'pa_80_roc_auc': metrics.get('pa_80_roc_auc', None),
                     # Disturbing normal metrics (if available)
                     'disturbing_roc_auc': metrics.get('disturbing_roc_auc', None),
                     'disturbing_f1': metrics.get('disturbing_f1', None),
@@ -986,8 +995,8 @@ class ExperimentRunner:
         )
         test_loader = DataLoader(test_dataset, batch_size=self.best_config.batch_size, shuffle=False)
 
-        # Create evaluator
-        evaluator = Evaluator(self.best_model, self.best_config, test_loader)
+        # Create evaluator with test_dataset for point-level PA%K
+        evaluator = Evaluator(self.best_model, self.best_config, test_loader, test_dataset=test_dataset)
 
         # Get detailed losses
         detailed_losses = evaluator.compute_detailed_losses()

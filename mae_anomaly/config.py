@@ -47,8 +47,8 @@ class Config:
     masking_strategy: str = 'patch'  # 'patch' or 'feature_wise'
     # - 'patch': Mask entire patches (all features at same time points)
     # - 'feature_wise': Mask each feature independently (different time points per feature)
-    num_patches: int = 25  # 25 patches per sequence
-    patch_size: int = 4  # seq_length / num_patches = 100 / 25 = 4
+    num_patches: int = 10  # 10 patches per sequence
+    patch_size: int = 10  # seq_length / num_patches = 100 / 10 = 10
     patchify_mode: str = 'linear'  # 'patch_cnn', 'linear'
     # - 'patch_cnn': Patchify first, then CNN per patch (no cross-patch leakage)
     # - 'linear': Patchify then linear embedding (MAE original style, no CNN)
@@ -80,6 +80,13 @@ class Config:
     # - 1.0: Default (equal weight)
     # - 2.0/3.0/5.0: Stronger interference on anomaly samples
 
+    # Anomaly score computation mode
+    anomaly_score_mode: str = 'default'
+    # - 'default': recon + lambda_disc * disc (original)
+    # - 'normalized': Z-score normalization (recon_z + disc_z)
+    # - 'adaptive': Auto-scaled lambda (recon + (mean_recon/mean_disc) * disc)
+    # - 'ratio_weighted': Ratio-based (recon * (1 + disc/median_disc))
+
     # Training parameters
     batch_size: int = 32
     num_epochs: int = 50
@@ -89,7 +96,13 @@ class Config:
     teacher_only_warmup_epochs: int = 1  # First N epochs train teacher only (no discrepancy/student loss)
 
     # Inference parameters
-    mask_last_n: int = 4  # Last 1 patch (patch_size)
+    mask_last_n: int = 10  # Last 1 patch (= patch_size)
+
+    # Point-level PA%K aggregation method
+    point_aggregation_method: str = 'voting'  # 'mean', 'median', 'voting'
+    # - 'mean': Average of window scores for each timestep
+    # - 'median': Median of window scores for each timestep
+    # - 'voting': Majority vote of binary predictions (default)
 
     # Ablation flags
     use_discrepancy_loss: bool = True

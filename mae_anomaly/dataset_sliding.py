@@ -28,24 +28,39 @@ FEATURE_NAMES = [
     'QueueLength',   # 7: Request queue (correlated with CPU, ThreadCount)
 ]
 
-# Anomaly type constants (7 types + normal)
+# Anomaly type constants (9 types + normal)
+# Types 1-6: Value-based anomalies (values deviate from normal range)
+# Types 7-9: Pattern-based anomalies (values within normal range, patterns differ)
 ANOMALY_TYPE_NAMES = [
     'normal',              # 0
+    # Value-based anomalies (type 1-6)
     'spike',               # 1: Traffic spike / DDoS
     'memory_leak',         # 2: Gradual memory increase
     'cpu_saturation',      # 3: CPU stuck at high level
     'network_congestion',  # 4: Network bottleneck
     'cascading_failure',   # 5: Error propagation
     'resource_contention', # 6: Thread/queue competition
-    'point_spike',         # 7: Point anomaly (3-5 timesteps, 2+ features)
+    # Pattern-based anomalies (type 7-9) - values in normal range, patterns differ
+    'correlation_inversion',  # 7: CPU-Memory correlation breaks (inverse)
+    'temporal_flatline',      # 8: Values freeze (stuck sensor)
+    'frequency_shift',        # 9: Unusual periodicity in values
 ]
 ANOMALY_TYPES = {name: idx for idx, name in enumerate(ANOMALY_TYPE_NAMES)}
 NUM_FEATURES = len(FEATURE_NAMES)
 NUM_ANOMALY_TYPES = len(ANOMALY_TYPE_NAMES) - 1  # Exclude 'normal'
 
+# Anomaly category: 'value' (value range differs) or 'pattern' (only pattern differs)
+# This allows comparing model's ability to detect value vs pattern anomalies
+ANOMALY_CATEGORY = {
+    1: 'value', 2: 'value', 3: 'value', 4: 'value',
+    5: 'value', 6: 'value',
+    7: 'pattern', 8: 'pattern', 9: 'pattern'
+}
+
 # Per-anomaly-type configuration: (length_min, length_max, interval_mean)
 # Designed based on realistic characteristics of each anomaly type
 ANOMALY_TYPE_CONFIGS = {
+    # === Value-based anomalies (types 1-6) ===
     # spike: Short and sudden (DDoS, traffic burst)
     1: {'length_range': (10, 25), 'interval_mean': 3500},
     # memory_leak: Long and gradual (slow accumulation)
@@ -58,8 +73,13 @@ ANOMALY_TYPE_CONFIGS = {
     5: {'length_range': (60, 120), 'interval_mean': 6500},
     # resource_contention: Medium with oscillation
     6: {'length_range': (35, 65), 'interval_mean': 4500},
-    # point_spike: Very short point anomaly (3-5 timesteps)
-    7: {'length_range': (3, 5), 'interval_mean': 4000},
+    # === Pattern-based anomalies (types 7-9) ===
+    # correlation_inversion: Medium duration to show pattern change
+    7: {'length_range': (50, 100), 'interval_mean': 5000},
+    # temporal_flatline: Sudden freeze, medium duration
+    8: {'length_range': (30, 60), 'interval_mean': 4500},
+    # frequency_shift: Needs enough length to show frequency change
+    9: {'length_range': (60, 100), 'interval_mean': 5500},
 }
 
 
@@ -725,24 +745,82 @@ class SlidingWindowTimeSeriesGenerator:
         if self.num_features > 1:
             signals[start:end, 1] += np.random.uniform(0.15, 0.3)
 
-    def _inject_point_spike(self, signals: np.ndarray, start: int, end: int) -> None:
-        """Inject point spike anomaly (3-5 timesteps, 2+ random features)
+    # =========================================================================
+    # Pattern-based anomalies (types 7-9)
+    # These maintain normal value ranges but break temporal/correlation patterns
+    # =========================================================================
 
-        This is a true point anomaly - very short duration with random features spiking.
-        Unlike other anomalies, which features spike is random (but at least 2).
+    def _inject_correlation_inversion(self, signals: np.ndarray, start: int, end: int) -> None:
+        """Inject correlation inversion anomaly (CPU-Memory correlation breaks)
+
+        Real-world scenario: Cache misconfiguration, where Memory decreases when CPU increases
+        (opposite of normal positive correlation).
+
+        Values stay within normal range, but cross-feature correlation is inverted.
         """
-        # Select 2 or more random features to spike
-        num_features_to_spike = np.random.randint(2, self.num_features + 1)
-        features_to_spike = np.random.choice(
+        # Get local statistics for CPU (feature 0) and Memory (feature 1)
+        cpu_local_mean = signals[start:end, 0].mean()
+        mem_local_mean = signals[start:end, 1].mean() if self.num_features > 1 else 0.5
+
+        if self.num_features > 1:
+            # Invert CPU-Memory correlation
+            # When CPU deviates from mean, Memory deviates in opposite direction
+            cpu_deviation = signals[start:end, 0] - cpu_local_mean
+            new_memory = mem_local_mean - cpu_deviation * np.random.uniform(0.6, 0.9)
+            # Clip to stay within reasonable range (not too extreme)
+            signals[start:end, 1] = np.clip(new_memory, 0.15, 0.85)
+
+        # Also invert ThreadCount-CPU correlation (normally positive)
+        if self.num_features > 5:
+            thread_local_mean = signals[start:end, 5].mean()
+            cpu_deviation = signals[start:end, 0] - cpu_local_mean
+            new_thread = thread_local_mean - cpu_deviation * np.random.uniform(0.5, 0.8)
+            signals[start:end, 5] = np.clip(new_thread, 0.15, 0.85)
+
+    def _inject_temporal_flatline(self, signals: np.ndarray, start: int, end: int) -> None:
+        """Inject temporal flatline anomaly (values freeze / stuck sensor)
+
+        Real-world scenario: Metric collection failure, sensor stuck at last reading.
+        Values stay within normal range but temporal variation disappears.
+        """
+        # Select 3-5 features to freeze (not all, to be realistic)
+        num_features_to_freeze = min(np.random.randint(3, 6), self.num_features)
+        features_to_freeze = np.random.choice(
             self.num_features,
-            size=num_features_to_spike,
+            size=num_features_to_freeze,
             replace=False
         )
 
-        # Apply spike to selected features
-        for feat_idx in features_to_spike:
-            spike_magnitude = np.random.uniform(0.3, 0.6)
-            signals[start:end, feat_idx] += spike_magnitude
+        # Freeze each selected feature at its value just before the anomaly
+        for feat in features_to_freeze:
+            frozen_value = signals[start, feat]
+            signals[start:end, feat] = frozen_value
+
+    def _inject_frequency_shift(self, signals: np.ndarray, start: int, end: int) -> None:
+        """Inject frequency shift anomaly (unusual periodicity)
+
+        Real-world scenario: Wrong cron interval, abnormal scheduling pattern.
+        Values stay in normal range but oscillate at different frequency.
+        """
+        length = end - start
+
+        # Apply to first 3-4 features
+        features_to_shift = min(np.random.randint(3, 5), self.num_features)
+
+        for feat in range(features_to_shift):
+            # Get local statistics to maintain normal value range
+            local_mean = signals[start:end, feat].mean()
+            local_std = signals[start:end, feat].std()
+            local_std = max(local_std, 0.05)  # Ensure some variation
+
+            # Create higher frequency oscillation (2-4x normal)
+            freq_multiplier = np.random.uniform(2.5, 4.0)
+            phase = np.random.uniform(0, 2 * np.pi)
+            t = np.linspace(0, freq_multiplier * np.pi, length)
+
+            # Replace with frequency-shifted signal (same amplitude, different frequency)
+            new_signal = local_mean + local_std * np.sin(t + phase)
+            signals[start:end, feat] = np.clip(new_signal, 0.15, 0.85)
 
     def _distribute_anomalies(self) -> List[AnomalyRegion]:
         """
@@ -815,13 +893,17 @@ class SlidingWindowTimeSeriesGenerator:
             anomaly_regions = self._distribute_anomalies()
 
             inject_funcs = {
+                # Value-based anomalies (types 1-6)
                 1: self._inject_spike,
                 2: self._inject_memory_leak,
                 3: self._inject_cpu_saturation,
                 4: self._inject_network_congestion,
                 5: self._inject_cascading_failure,
                 6: self._inject_resource_contention,
-                7: self._inject_point_spike,
+                # Pattern-based anomalies (types 7-9)
+                7: self._inject_correlation_inversion,
+                8: self._inject_temporal_flatline,
+                9: self._inject_frequency_shift,
             }
 
             for region in anomaly_regions:
@@ -842,6 +924,10 @@ class SlidingWindowDataset(Dataset):
         0: pure_normal - no anomaly in the window
         1: disturbing_normal - anomaly exists but NOT in last mask_last_n (label=0)
         2: anomaly - anomaly exists in last mask_last_n (label=1)
+
+    Note:
+        For test split, stride is always forced to 1 for proper point-level PA%K evaluation.
+        Downsampling is disabled by default for test set to preserve full sliding window coverage.
     """
 
     def __init__(
@@ -854,15 +940,24 @@ class SlidingWindowDataset(Dataset):
         mask_last_n: int,
         split: str,  # 'train' or 'test'
         train_ratio: float = 0.5,
-        target_anomaly_ratio: Optional[float] = None,  # For test set downsampling (legacy)
-        target_counts: Optional[Dict[str, int]] = None,  # Explicit counts per sample type
-        seed: Optional[int] = None
+        target_anomaly_ratio: Optional[float] = None,  # For test set downsampling (legacy, disabled by default)
+        target_counts: Optional[Dict[str, int]] = None,  # Explicit counts per sample type (disabled by default)
+        seed: Optional[int] = None,
+        force_stride_1_for_test: bool = True  # Force stride=1 for test split (for point-level PA%K)
     ):
         self.window_size = window_size
-        self.stride = stride
         self.mask_last_n = mask_last_n
         self.split = split
         self.target_counts = target_counts
+
+        # For test split, force stride=1 for proper point-level PA%K evaluation
+        if split == 'test' and force_stride_1_for_test:
+            if stride != 1:
+                import warnings
+                warnings.warn(f"Test split: stride forced to 1 (was {stride}) for point-level PA%K evaluation")
+            self.stride = 1
+        else:
+            self.stride = stride
 
         if seed is not None:
             np.random.seed(seed)
@@ -914,6 +1009,7 @@ class SlidingWindowDataset(Dataset):
         self.window_point_labels = []
         self.sample_types = []  # 0: pure_normal, 1: disturbing_normal, 2: anomaly
         self.anomaly_type_labels = []  # Which anomaly type (0 for normal)
+        self.window_start_indices = []  # Start index of each window (for point-level aggregation)
 
         series_length = len(self.signals)
 
@@ -955,12 +1051,14 @@ class SlidingWindowDataset(Dataset):
             self.window_point_labels.append(window_pl)
             self.sample_types.append(sample_type)
             self.anomaly_type_labels.append(anomaly_type)
+            self.window_start_indices.append(start)
 
         self.windows = np.array(self.windows, dtype=np.float32)
         self.seq_labels = np.array(self.seq_labels, dtype=np.int64)
         self.window_point_labels = np.array(self.window_point_labels, dtype=np.int64)
         self.sample_types = np.array(self.sample_types, dtype=np.int64)
         self.anomaly_type_labels = np.array(self.anomaly_type_labels, dtype=np.int64)
+        self.window_start_indices = np.array(self.window_start_indices, dtype=np.int64)
 
     def _downsample_for_ratio(
         self,
@@ -1024,6 +1122,7 @@ class SlidingWindowDataset(Dataset):
         self.window_point_labels = self.window_point_labels[keep_indices]
         self.sample_types = self.sample_types[keep_indices]
         self.anomaly_type_labels = self.anomaly_type_labels[keep_indices]
+        self.window_start_indices = self.window_start_indices[keep_indices]
 
     def __len__(self) -> int:
         return len(self.windows)

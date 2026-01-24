@@ -48,11 +48,11 @@ The model supports 3 different patchify modes, controlled by `config.patchify_mo
 ```
 Input: (batch, 100, 8)
 ↓
-Patchify: (batch, 25, 4*8=32)
+Patchify: (batch, 10, 10*8=80)
 ↓
 Linear(32 → 64)
 ↓
-Patches: (batch, 25, 64)
+Patches: (batch, 10, 64)
 ```
 
 **Characteristics**:
@@ -69,14 +69,14 @@ Patches: (batch, 25, 64)
 ```
 Input: (batch, 100, 8)
 ↓
-Patchify: (batch, 25, 4, 8) → (batch*25, 8, 4)
+Patchify: (batch, 10, 10, 8) → (batch*10, 8, 10)
 ↓
 Conv1d(8 → 32, kernel=3, padding=1) + BatchNorm + ReLU
 Conv1d(32 → 64, kernel=3, padding=1) + BatchNorm + ReLU
 ↓
-(batch*25, 64, 4)
+(batch*10, 64, 10)
 ↓
-Flatten + Linear: (batch*25, 256) → (batch, 25, 64)
+Flatten + Linear: (batch*10, 640) → (batch, 10, 64)
 ```
 
 **Characteristics**:
@@ -101,8 +101,8 @@ Flatten + Linear: (batch*25, 256) → (batch, 25, 64)
 **Note**: In `patch_cnn` mode, CNN output is projected to patch embeddings. In `linear` mode, raw patches are directly projected.
 
 **Details**:
-- 25 patches per sequence (default)
-- Each patch covers 4 time steps (patch_size = seq_length / num_patches)
+- 10 patches per sequence (default)
+- Each patch covers 10 time steps (patch_size = seq_length / num_patches = 100 / 10)
 - Patch size balances context and granularity
 
 ---
@@ -188,9 +188,9 @@ PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 
 **Structure**:
 ```
-Decoder output: (batch, 25, 64)
+Decoder output: (batch, 10, 64)
 ↓
-Linear(64 → 32) per patch (patch_size * num_features = 4 * 8)
+Linear(64 → 80) per patch (patch_size * num_features = 10 * 8)
 ↓
 Unpatchify: (batch, 100, 8)
 ```
@@ -210,9 +210,9 @@ The pipeline varies based on `patchify_mode`:
 Input: (batch, 100, 8)
     ↓
 [Patchify]
-    ↓ (batch, 25, 32)
+    ↓ (batch, 10, 80)
 [Linear Embedding]
-    ↓ (batch, 25, 64)
+    ↓ (batch, 10, 64)
 [Random Patch Masking (40%)]
     ↓
 [Positional Encoding]
@@ -240,9 +240,9 @@ Input: (batch, 100, 8)
 [1D-CNN Layers (full sequence)]
     ↓ (batch, 64, 100)
 [Patchify CNN Features]
-    ↓ (batch, 25, 256)
+    ↓ (batch, 10, 640)
 [Linear Projection]
-    ↓ (batch, 25, 64)
+    ↓ (batch, 10, 64)
 [Random Patch Masking → Encoder → Decoders → Output]
 ```
 
@@ -251,9 +251,9 @@ Input: (batch, 100, 8)
 Input: (batch, 100, 8)
     ↓
 [Patchify]
-    ↓ (batch, 25, 4, 8)
+    ↓ (batch, 10, 10, 8)
 [1D-CNN per patch (independent)]
-    ↓ (batch, 25, 64)
+    ↓ (batch, 10, 64)
 [Random Patch Masking → Encoder → Decoders → Output]
 ```
 
@@ -298,7 +298,7 @@ Each feature independently selects which patches to mask.
 ### Inference Time
 
 **Last Patch Masking**:
-- Mask only the last patch (time steps 96-100 for patch_size=4)
+- Mask only the last patch (time steps 90-99 for patch_size=10)
 - Model predicts missing values
 - Anomaly score based on reconstruction/discrepancy
 
@@ -523,8 +523,8 @@ anomaly_score = MSE(student_out - original)
 
 ### Why Patch-based Processing?
 
-1. **Computational efficiency**: 25 patches vs 100 tokens
-2. **Context preservation**: Each patch contains 4 time steps
+1. **Computational efficiency**: 10 patches vs 100 tokens
+2. **Context preservation**: Each patch contains 10 time steps
 3. **Masking granularity**: Coarse enough for reconstruction task
 4. **MAE-inspired**: Follows successful MAE design
 
@@ -554,8 +554,8 @@ anomaly_score = MSE(student_out - original)
 | seq_length | 100 | Input sequence length |
 | num_features | 8 | Multivariate features (server metrics) |
 | d_model | 64 | Model dimension |
-| num_patches | 25 | Number of patches |
-| patch_size | 4 | Time steps per patch |
+| num_patches | 10 | Number of patches |
+| patch_size | 10 | Time steps per patch |
 | patchify_mode | linear | Patchify mode (linear/patch_cnn) |
 | masking_strategy | patch | Masking strategy (patch/feature_wise) |
 | masking_ratio | 0.4 | Training masking ratio |

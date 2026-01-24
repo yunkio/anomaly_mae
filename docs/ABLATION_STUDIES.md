@@ -200,9 +200,9 @@ Test whether independent mask representations help differentiate teacher/student
 
 | Configuration | Num Patches | Patch Size | Purpose |
 |--------------|-------------|------------|---------|
-| **10 patches** | 10 | 10 | Coarse granularity, large context |
-| **25 patches (Default)** | 25 | 4 | Balanced granularity |
-| **50 patches** | 50 | 2 | Fine granularity, precise localization |
+| **10 patches (Default)** | 10 | 10 | Balanced granularity (seq_length=100) |
+| **25 patches** | 25 | 4 | Fine granularity, precise localization |
+| **50 patches** | 50 | 2 | Very fine granularity |
 
 ---
 
@@ -211,7 +211,7 @@ Test whether independent mask representations help differentiate teacher/student
 **All ablations use the same evaluation protocol**:
 
 1. **Data**: Same test dataset with 25% anomaly ratio
-2. **Last Patch Masking**: Mask only the last patch (time steps 96-100 for patch_size=4)
+2. **Last Patch Masking**: Mask only the last patch (time steps 90-99 for patch_size=10)
 3. **Anomaly Score**: Compute error metric on the masked last patch
 4. **Label**: Binary label based on whether last patch contains anomaly
 5. **Metrics**: ROC-AUC, Precision, Recall, F1-Score

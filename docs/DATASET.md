@@ -23,12 +23,13 @@ This project uses a **Sliding Window Time Series Dataset** that simulates server
 
 2. Sliding Window Extraction
    ├── Window size: 100 timesteps
-   ├── Stride: 10 (90% overlap)
-   └── Total windows: ~220,000
+   ├── Train stride: Configurable (default 10)
+   ├── Test stride: Always 1 (for point-level PA%K)
+   └── Total windows: ~220,000 (train), ~110,000 (test)
 
 3. Train/Test Split
    ├── Train: First 50% (no downsampling, ~5% anomaly)
-   └── Test: Last 50% (downsampled to 65:15:25 ratio)
+   └── Test: Last 50% (stride=1, no downsampling by default)
 
 4. Labeling
    ├── Check last 10 timesteps (mask_last_n)
@@ -64,7 +65,18 @@ This represents a challenging case where:
 | Disturbing Normal | ~7% |
 | Anomaly | ~5% |
 
-### Test Set (Downsampled)
+### Test Set (Full, Stride=1)
+
+> **Note**: As of the latest update, test set uses stride=1 and no downsampling by default.
+> This ensures proper point-level PA%K evaluation with overlapping windows.
+
+| Aspect | Value |
+|--------|-------|
+| Stride | 1 (forced) |
+| Downsampling | Disabled by default |
+| Total windows | ~110,000 (half of time series) |
+
+**Legacy mode** (downsampled, for backwards compatibility):
 
 | Sample Type | Count | Ratio |
 |-------------|-------|-------|
@@ -72,6 +84,46 @@ This represents a challenging case where:
 | Disturbing Normal | 300 | 15% |
 | Anomaly | 500 | 25% |
 | **Total** | **2,000** | 100% |
+
+---
+
+## Point-Level PA%K Evaluation
+
+With stride=1 sliding windows, each timestep is covered by multiple windows' last patches.
+The evaluation aggregates window-level scores to point-level using one of three methods:
+
+### Aggregation Methods
+
+| Method | Description | Formula |
+|--------|-------------|---------|
+| **Voting** (default) | Majority vote of binary predictions | `1 if votes > n/2 else 0` |
+| **Mean** | Average of window scores | `mean(scores)` |
+| **Median** | Median of window scores | `median(scores)` |
+
+### Window Coverage
+
+For `seq_length=100` and `patch_size=10`:
+
+```
+Window w's last patch: timesteps [w+90, w+99]
+
+Timestep t is covered by windows where:
+  w+90 ≤ t ≤ w+99
+  → w ∈ [t-99, t-90]
+  → Up to 10 windows per timestep
+
+Coverage by position:
+  - Timesteps 0-89: Not covered (not in any last patch)
+  - Timesteps 90-99: 1-10 windows
+  - Timesteps 100+: 10 windows (full coverage)
+```
+
+### Sample-Level vs Point-Level Metrics
+
+| Metric Type | Level | Description |
+|-------------|-------|-------------|
+| ROC-AUC, F1, Precision, Recall | Sample (window) | Each window = one sample |
+| PA%K F1, PA%K ROC-AUC | Point (timestep) | Aggregated to timestep level |
 
 ---
 
@@ -387,20 +439,27 @@ complexity = NormalDataComplexity(
 
 ## Anomaly Types
 
-The dataset includes **7 distinct anomaly types** commonly observed in server monitoring systems.
+The dataset includes **9 distinct anomaly types** divided into two categories:
+
+- **Value-based anomalies (Types 1-6)**: Values deviate from normal range (ADDITIVE injection)
+- **Pattern-based anomalies (Types 7-9)**: Values stay within normal range, patterns differ
+
+This distinction allows evaluating whether the model detects anomalies based on unusual VALUES (trivial) or unusual PATTERNS (meaningful).
 
 ### Anomaly Type Summary
 
-| ID | Name | Duration | Interval | Description |
-|----|------|----------|----------|-------------|
-| 0 | Normal | - | - | No anomaly (baseline) |
-| 1 | Spike | Short (10-25) | 3500 | Traffic spike / DDoS attack |
-| 2 | Memory Leak | Long (80-150) | 7000 | Gradual memory accumulation |
-| 3 | CPU Saturation | Medium (40-80) | 4500 | Sustained high CPU load |
-| 4 | Network Congestion | Medium (30-60) | 4000 | Network bottleneck |
-| 5 | Cascading Failure | Long (60-120) | 6500 | Error propagation chain |
-| 6 | Resource Contention | Medium (35-65) | 4500 | Thread/queue competition |
-| 7 | **Point Spike** | **Very Short (3-5)** | 4000 | **True point anomaly** |
+| ID | Name | Category | Duration | Interval | Description |
+|----|------|----------|----------|----------|-------------|
+| 0 | Normal | - | - | - | No anomaly (baseline) |
+| 1 | Spike | **Value** | Short (10-25) | 3500 | Traffic spike / DDoS attack |
+| 2 | Memory Leak | **Value** | Long (80-150) | 7000 | Gradual memory accumulation |
+| 3 | CPU Saturation | **Value** | Medium (40-80) | 4500 | Sustained high CPU load |
+| 4 | Network Congestion | **Value** | Medium (30-60) | 4000 | Network bottleneck |
+| 5 | Cascading Failure | **Value** | Long (60-120) | 6500 | Error propagation chain |
+| 6 | Resource Contention | **Value** | Medium (35-65) | 4500 | Thread/queue competition |
+| 7 | Correlation Inversion | **Pattern** | Medium (50-100) | 5000 | CPU-Memory correlation breaks |
+| 8 | Temporal Flatline | **Pattern** | Medium (30-60) | 4500 | Values freeze (stuck sensor) |
+| 9 | Frequency Shift | **Pattern** | Medium (60-100) | 5500 | Unusual oscillation frequency |
 
 > **Note**: Duration is in timesteps. Interval is the mean number of timesteps between occurrences (before applying `interval_scale`).
 
@@ -526,41 +585,121 @@ The dataset includes **7 distinct anomaly types** commonly observed in server mo
 
 ---
 
-### 7. Point Spike (True Point Anomaly)
+## Pattern-Based Anomalies (Types 7-9)
 
-**Real-world scenario**: A brief sensor glitch, momentary hardware fault, or single-event upset.
+These anomalies **maintain normal value ranges** (0.15-0.85) but break temporal or correlation patterns. They help evaluate if the model is detecting based on unusual PATTERNS rather than just unusual VALUES.
+
+### 7. Correlation Inversion
+
+**Real-world scenario**: Database query cache misconfiguration causing Memory to decrease when CPU increases (opposite of normal positive correlation).
 
 **Characteristics**:
-- **Duration**: Very short (3-5 timesteps)
-- **Onset**: Instantaneous
-- **Recovery**: Immediate
-- **Unique**: 2+ random features spike simultaneously
+- **Duration**: Medium (50-100 timesteps)
+- **Onset**: Gradual correlation shift
+- **Recovery**: When configuration is fixed
+- **Value Range**: Stays within 0.15-0.85
 
-**Affected Features**:
+**Pattern Break**:
 
-| Feature | Effect | Selection |
-|---------|--------|-----------|
-| 2+ Random Features | Spike | Random selection from all 8 features |
-| Spike magnitude | +0.3 to +0.6 per feature | Same magnitude for all selected |
+| Feature Pair | Normal Correlation | Anomaly Correlation |
+|--------------|-------------------|---------------------|
+| CPU ↔ Memory | Positive (+) | Inverted (-) |
+| CPU ↔ ThreadCount | Positive (+) | Inverted (-) |
 
-> **Note**: Unlike other anomaly types where specific features are always affected, Point Spike randomly selects 2 or more features to spike. This makes it harder to detect using simple threshold methods on individual features.
+**Implementation**:
+```python
+# Invert CPU-Memory correlation
+cpu_deviation = signals[start:end, 0] - local_mean
+signals[start:end, 1] = local_mean - cpu_deviation * 0.8
+```
+
+---
+
+### 8. Temporal Flatline
+
+**Real-world scenario**: Metric collection failure or stuck sensor where values freeze at last reading.
+
+**Characteristics**:
+- **Duration**: Medium (30-60 timesteps)
+- **Onset**: Instantaneous freeze
+- **Recovery**: When sensor/collection is fixed
+- **Value Range**: Stays within normal range (frozen at pre-anomaly value)
+
+**Pattern Break**:
+
+| Aspect | Normal | Anomaly |
+|--------|--------|---------|
+| Temporal variance | Present | Zero (flat) |
+| Features affected | - | 3-5 random features |
+
+**Implementation**:
+```python
+# Freeze selected features at their start values
+for feat in features_to_freeze:
+    signals[start:end, feat] = signals[start, feat]
+```
+
+---
+
+### 9. Frequency Shift
+
+**Real-world scenario**: Wrong cron interval or abnormal scheduling causing unusual periodicity in values.
+
+**Characteristics**:
+- **Duration**: Medium (60-100 timesteps)
+- **Onset**: Gradual transition
+- **Recovery**: When scheduling is corrected
+- **Value Range**: Stays within normal range
+
+**Pattern Break**:
+
+| Aspect | Normal | Anomaly |
+|--------|--------|---------|
+| Oscillation frequency | Normal (low) | 2.5-4x higher |
+| Amplitude | Normal | Same |
+| Phase | Consistent | Random shift |
+
+**Implementation**:
+```python
+# Replace with higher frequency oscillation
+freq_multiplier = random.uniform(2.5, 4.0)
+t = np.linspace(0, freq_multiplier * np.pi, length)
+signals[start:end, feat] = local_mean + local_std * np.sin(t + phase)
+```
 
 ---
 
 ### Feature Impact Matrix
 
-| Feature | Spike | MemLeak | CPUSat | NetCong | Cascade | Contention | PointSpike |
-|---------|:-----:|:-------:|:------:|:-------:|:-------:|:----------:|:----------:|
-| CPU | +++ | - | ++++ | - | ++ | ++ | ? |
-| Memory | - | ++++ | - | - | - | ++ | ? |
-| DiskIO | - | +++ | - | - | - | - | ? |
-| Network | ++++ | - | - | ++++ | - | - | ? |
-| ResponseTime | +++ | - | ++ | +++ | +++ | - | ? |
-| ThreadCount | - | ++ | +++ | - | - | +++ | ? |
-| ErrorRate | ++ | - | - | ++ | ++++ | - | ? |
-| QueueLength | +++ | - | +++ | ++ | +++ | +++ | ? |
+#### Value-Based Anomalies (Types 1-6)
 
-Legend: `-` = not affected, `+` = slight, `++` = moderate, `+++` = strong, `++++` = severe, `?` = random (2+ features)
+| Feature | Spike | MemLeak | CPUSat | NetCong | Cascade | Contention |
+|---------|:-----:|:-------:|:------:|:-------:|:-------:|:----------:|
+| CPU | +++ | - | ++++ | - | ++ | ++ |
+| Memory | - | ++++ | - | - | - | ++ |
+| DiskIO | - | +++ | - | - | - | - |
+| Network | ++++ | - | - | ++++ | - | - |
+| ResponseTime | +++ | - | ++ | +++ | +++ | - |
+| ThreadCount | - | ++ | +++ | - | - | +++ |
+| ErrorRate | ++ | - | - | ++ | ++++ | - |
+| QueueLength | +++ | - | +++ | ++ | +++ | +++ |
+
+Legend: `-` = not affected, `+` = slight, `++` = moderate, `+++` = strong, `++++` = severe
+
+#### Pattern-Based Anomalies (Types 7-9)
+
+| Feature | CorrInversion | Flatline | FreqShift |
+|---------|:-------------:|:--------:|:---------:|
+| CPU | ◇ | ○ | ∿ |
+| Memory | ◇ | ○ | ∿ |
+| DiskIO | - | ○ | ∿ |
+| Network | - | ○ | ∿ |
+| ResponseTime | - | ○ | - |
+| ThreadCount | ◇ | ○ | - |
+| ErrorRate | - | ○ | - |
+| QueueLength | - | ○ | - |
+
+Legend: `-` = not affected, `◇` = correlation inverted, `○` = frozen (3-5 random), `∿` = frequency shifted
 
 ---
 
@@ -607,8 +746,15 @@ ANOMALY_TYPE_CONFIGS = {
     # resource_contention: Medium with oscillation
     6: {'length_range': (35, 65), 'interval_mean': 4500},
 
-    # point_spike: Very short point anomaly (3-5 timesteps, 2+ random features)
-    7: {'length_range': (3, 5), 'interval_mean': 4000},
+    # === Pattern-based anomalies (types 7-9) ===
+    # correlation_inversion: Medium duration to show pattern change
+    7: {'length_range': (50, 100), 'interval_mean': 5000},
+
+    # temporal_flatline: Sudden freeze, medium duration
+    8: {'length_range': (30, 60), 'interval_mean': 4500},
+
+    # frequency_shift: Needs enough length to show frequency change
+    9: {'length_range': (60, 100), 'interval_mean': 5500},
 }
 ```
 
@@ -712,7 +858,8 @@ print(f"Anomaly: {ratios['anomaly']:.1%}")
 mae_anomaly/
 ├── dataset_sliding.py   # Sliding window dataset
 │   ├── FEATURE_NAMES           # 8 feature names
-│   ├── ANOMALY_TYPE_NAMES      # 7 anomaly type names (including 'normal')
+│   ├── ANOMALY_TYPE_NAMES      # 11 anomaly type names (0=normal, 1-7=value, 8-10=pattern)
+│   ├── ANOMALY_CATEGORY        # Category mapping: 'value' or 'pattern'
 │   ├── ANOMALY_TYPE_CONFIGS    # Per-type length/interval configs
 │   ├── SlidingWindowTimeSeriesGenerator  # Long series generator
 │   └── SlidingWindowDataset    # Window extraction + labeling

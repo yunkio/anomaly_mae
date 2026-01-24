@@ -1,5 +1,278 @@
 # Changelog
 
+## 2026-01-25 (Update 29): Point-Level PA%K with Stride=1 Sliding Window
+
+### Summary
+
+Major update to evaluation methodology: Test set now uses stride=1 sliding windows without downsampling, enabling proper point-level PA%K evaluation with window score aggregation.
+
+### Key Changes
+
+1. **Model Parameters Updated**
+   - `patch_size`: 4 → **10** (larger patches for better context)
+   - `num_patches`: 25 → **10** (seq_length / patch_size = 100/10)
+   - `mask_last_n`: 4 → **10** (matches patch_size)
+
+2. **Test Set Evaluation**
+   - Stride forced to 1 for test split (each timestep covered by multiple windows)
+   - Downsampling disabled by default (full sliding window coverage)
+   - Window scores aggregated to point-level for PA%K
+
+3. **Point-Level Aggregation Methods**
+   - **Voting** (default): Majority vote of binary predictions
+   - **Mean**: Average of window scores per timestep
+   - **Median**: Median of window scores per timestep
+
+### Window Coverage with Stride=1
+
+```
+Window w's last patch: [w+90, w+99] (10 timesteps)
+Each timestep covered by up to 10 windows
+```
+
+### Metrics Separation
+
+| Metric Type | Level | Notes |
+|-------------|-------|-------|
+| ROC-AUC, F1, Precision, Recall | Sample (window) | Unchanged |
+| PA%K F1, PA%K ROC-AUC | **Point (timestep)** | Aggregated via voting |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `mae_anomaly/config.py` | `patch_size=10`, `num_patches=10`, `mask_last_n=10`, `point_aggregation_method` |
+| `mae_anomaly/dataset_sliding.py` | Stride=1 forced for test, `window_start_indices` added |
+| `mae_anomaly/evaluator.py` | `aggregate_scores_to_point_level()`, `compute_point_level_pa_k()` |
+| `scripts/run_experiments.py` | Pass `test_dataset` to Evaluator |
+| `scripts/run_temp_experiments.py` | Pass `test_dataset` to Evaluator |
+| `docs/ARCHITECTURE.md` | Updated patch dimensions |
+| `docs/DATASET.md` | Added Point-Level PA%K section |
+
+### Configuration
+
+```python
+# New config parameter
+config.point_aggregation_method = 'voting'  # 'mean', 'median', 'voting'
+```
+
+### Backwards Compatibility
+
+- Evaluator accepts optional `test_dataset` parameter
+- Without `test_dataset`, falls back to sample-level PA%K
+- Train set behavior unchanged (configurable stride)
+
+---
+
+## 2026-01-25 (Update 28): Comprehensive PA%K Metrics (K=10,20,50,80)
+
+### Summary
+
+Extended PA%K evaluation to compute both F1-score and ROC-AUC for K=10%, 20%, 50%, 80% (total 8 metrics). Added PA%K ROC-AUC computation that applies segment adjustment at each threshold level.
+
+### Key Features
+
+1. **PA%K ROC-AUC Algorithm**: For each threshold, binarize → apply PA%K adjustment → compute TPR/FPR → build ROC curve
+2. **8 PA%K Metrics**: F1 + ROC-AUC for each K value (10, 20, 50, 80)
+3. **9-Subplot Visualization**: Compare Point-wise, PA%10 (lenient), PA%80 (strict)
+
+### New Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `pa_10_f1`, `pa_10_roc_auc` | PA%10 (very lenient, 10% segment detection) |
+| `pa_20_f1`, `pa_20_roc_auc` | PA%20 (lenient) |
+| `pa_50_f1`, `pa_50_roc_auc` | PA%50 (moderate) |
+| `pa_80_f1`, `pa_80_roc_auc` | PA%80 (strict, 80% segment detection) |
+
+### Changes
+
+#### 1. Core Implementation (evaluator.py)
+- Added `compute_pa_k_roc_auc()` function for threshold-aware PA%K ROC-AUC
+- `evaluate()` returns 8 PA%K metrics (F1 + ROC-AUC × 4 K values)
+- `get_performance_by_anomaly_type()` includes all 4 K values for detection rates
+
+#### 2. Experiment Scripts
+- `run_experiments.py` - Saves all 8 PA%K metrics to results
+- `run_temp_experiments.py` - Displays PA%K table in console output
+
+#### 3. Visualization (best_model_visualizer.py)
+- New 3×3 grid (9 subplots) showing:
+  - Row 1: Point-wise, PA%10, PA%80 detection rates
+  - Row 2: All PA%K comparison, PA%10 vs PA%80, Mean scores
+  - Row 3: Consistency gap, Sample distribution, Summary statistics
+
+---
+
+## 2026-01-25 (Update 27): PA%K (Point-Adjust with K%) Evaluation Metric
+
+### Summary
+
+Added PA%K evaluation metric (default K=20%) for more realistic time series anomaly detection evaluation. PA%K is a segment-level adjustment that considers an anomaly segment as "detected" if at least K% of its points are flagged.
+
+### Motivation
+
+Point-wise F1 score can be overly harsh for time series anomaly detection because:
+- If a model detects 9 out of 10 anomaly points but misses 1, point-wise F1 penalizes heavily
+- In practice, detecting ANY point within an anomaly segment is often sufficient for alerting
+- PA%K provides a more realistic evaluation by giving credit for partial segment detection
+
+### PA%K Algorithm
+
+```
+For each contiguous anomaly segment:
+    if (detected_points / total_points) >= K%:
+        All points in segment count as DETECTED (TP)
+    else:
+        All points in segment count as NOT DETECTED (FN)
+```
+
+With K=20% (PA%20):
+- A segment of 100 points needs only 20 detected points to count as fully detected
+- Balanced between leniency and rigor for real-world alerting scenarios
+
+### Changes
+
+#### 1. Core Implementation (evaluator.py)
+
+- Added `compute_pa_k_adjusted_predictions()` function
+- Added `compute_pa_k_metrics()` function returning precision, recall, F1
+- Updated `evaluate()` to include `pa_k_f1`, `pa_k_precision`, `pa_k_recall`
+- Updated `get_performance_by_anomaly_type()` to include `pa_k_detection_rate` per type
+
+#### 2. Experiment Scripts
+
+- `run_experiments.py` - Added PA%K columns to Stage 2 results
+- `run_temp_experiments.py` - Added PA%K to summary display and console output
+
+#### 3. Visualization (best_model_visualizer.py)
+
+- Updated `plot_performance_by_anomaly_type()` to show side-by-side comparison:
+  - Point-wise detection rate (lighter bars)
+  - PA%20 detection rate (darker bars)
+
+### New Metrics in Experiment Results
+
+| Metric | Description |
+|--------|-------------|
+| `pa_k_f1` | PA%K F1 score (K=20%) |
+| `pa_k_precision` | PA%K precision |
+| `pa_k_recall` | PA%K recall |
+| `pa_k_detection_rate` | Per-anomaly-type PA%K detection rate |
+
+### Files Modified
+
+- `mae_anomaly/evaluator.py` - Core PA%K implementation
+- `mae_anomaly/visualization/best_model_visualizer.py` - Visualization update
+- `scripts/run_experiments.py` - Result column additions
+- `scripts/run_temp_experiments.py` - Display and column updates
+
+---
+
+## 2026-01-25 (Update 26): Remove point_spike Anomaly Type
+
+### Summary
+
+Removed `point_spike` (formerly type 7) from anomaly types. Pattern-based anomalies are renumbered from 8-10 to 7-9.
+
+### Rationale
+
+Point spike anomalies were:
+1. Too similar to the existing `spike` anomaly type
+2. Very short duration (3-5 timesteps) made them unrealistic for most real-world monitoring scenarios
+3. Random feature selection made them inconsistent for systematic evaluation
+
+### Changes
+
+#### Before → After
+
+| Category | Before | After |
+|----------|--------|-------|
+| Value-based | Types 1-7 | Types 1-6 |
+| Pattern-based | Types 8-10 | Types 7-9 |
+| Total | 10 types | 9 types |
+
+#### Anomaly Type Renumbering
+
+| Old ID | New ID | Name |
+|--------|--------|------|
+| 7 | (removed) | point_spike |
+| 8 | 7 | correlation_inversion |
+| 9 | 8 | temporal_flatline |
+| 10 | 9 | frequency_shift |
+
+### Files Modified
+
+- `mae_anomaly/dataset_sliding.py` - Removed point_spike, renumbered types
+- `mae_anomaly/visualization/base.py` - Updated anomaly info
+- `mae_anomaly/visualization/data_visualizer.py` - Removed point_spike comment
+- `docs/DATASET.md` - Updated all references
+
+---
+
+## 2026-01-25 (Update 25): Pattern-Only Anomalies for Meaningful Detection Validation
+
+### Summary
+
+Added 3 new pattern-based anomaly types that maintain normal value ranges but break temporal/correlation patterns. This allows distinguishing between trivial value-based detection (detecting unusual VALUES) and meaningful pattern-based detection (detecting unusual PATTERNS).
+
+### Problem Statement
+
+Previously, ALL anomaly types were ADDITIVE (values increase beyond normal range). This made it impossible to determine if the model was:
+- Detecting anomalies because of unusual **VALUES** (trivial statistical detection)
+- Detecting anomalies because of unusual **PATTERNS** (meaningful anomaly detection)
+
+### Changes
+
+#### 1. Added 3 Pattern-Only Anomaly Types (dataset_sliding.py)
+
+| Type ID | Name | Description | Pattern Break |
+|---------|------|-------------|---------------|
+| 7 | correlation_inversion | CPU-Memory correlation breaks | Cross-feature correlation |
+| 8 | temporal_flatline | Values freeze (stuck sensor) | Temporal continuity |
+| 9 | frequency_shift | Unusual oscillation frequency | Normal periodicity |
+
+All pattern-based anomalies use `np.clip(value, 0.15, 0.85)` to ensure values stay within normal range.
+
+#### 2. Added ANOMALY_CATEGORY Metadata
+
+```python
+ANOMALY_CATEGORY = {
+    1: 'value', 2: 'value', 3: 'value', 4: 'value',
+    5: 'value', 6: 'value',
+    7: 'pattern', 8: 'pattern', 9: 'pattern'
+}
+```
+
+#### 3. Fixed Y-axis Unification in loss_by_anomaly_type (best_model_visualizer.py)
+
+Applied unified y-axis limits across all subplots for fair visual comparison.
+
+#### 4. Added Value vs Pattern Comparison Visualization
+
+New `plot_value_vs_pattern_comparison()` method showing:
+- Score distribution comparison (Normal vs Value-based vs Pattern-based)
+- Box plot comparison
+- Detection rate comparison
+- Loss components comparison
+
+#### 5. Distinct Colors for Pattern-Based Anomalies (base.py)
+
+Pattern-based anomalies use cool colors (blue/purple) to visually distinguish from warm-colored value-based anomalies.
+
+### Files Modified
+
+- `mae_anomaly/dataset_sliding.py` - Added anomaly types, category, injection methods
+- `mae_anomaly/__init__.py` - Exported ANOMALY_CATEGORY
+- `mae_anomaly/visualization/base.py` - Updated get_anomaly_colors()
+- `mae_anomaly/visualization/best_model_visualizer.py` - Added visualization, fixed y-axis
+
+### Documentation Updates
+
+- CHANGELOG.md - This entry
+
+---
+
 ## 2026-01-24 (Update 24): Per-Feature Min-Max Normalization
 
 ### Summary
