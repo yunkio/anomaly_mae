@@ -651,28 +651,18 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
                 # Create combined mask (all positions were masked at some point)
                 combined_mask = torch.zeros(batch_size, seq_length, device=device)
 
-                # Compute patch-level labels for 'all_patches' mode
-                patch_labels = torch.zeros(batch_size, num_patches, dtype=torch.long)
-                for p_idx in range(num_patches):
-                    start_pos = p_idx * patch_size
-                    end_pos = min(start_pos + patch_size, seq_length)
-                    patch_has_anomaly = point_labels[:, start_pos:end_pos].any(dim=1)
-                    patch_labels[:, p_idx] = patch_has_anomaly.long()
-                # Use flattened patch labels
-                labels_to_use = patch_labels.flatten()
-
+                # For collect_detailed_data, keep window-level labels since errors/recons are window-level
+                # (unlike collect_predictions which uses patch-level labels with patch-level scores)
                 all_teacher_errors.append(teacher_error_final.cpu().numpy())
                 all_student_errors.append(student_error_final.cpu().numpy())
                 all_discrepancies.append(discrepancy_final.cpu().numpy())
                 all_masks.append(combined_mask.cpu().numpy())
-                all_labels.append(labels_to_use.numpy())
+                all_labels.append(last_patch_labels.numpy())  # Window-level labels
                 all_point_labels.append(point_labels.numpy())
                 all_originals.append(sequences.cpu().numpy())
                 all_teacher_recons.append(teacher_recon_final.cpu().numpy())
                 all_student_recons.append(student_recon_final.cpu().numpy())
-                # Expand sample_types for each patch
-                sample_types_expanded = sample_types.unsqueeze(1).expand(-1, num_patches).flatten()
-                all_sample_types.append(sample_types_expanded.numpy())
+                all_sample_types.append(sample_types.numpy())  # Window-level sample types
 
             else:
                 # Last patch mode (original behavior)
@@ -698,8 +688,8 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
                 all_student_recons.append(student_output.cpu().numpy())
                 all_sample_types.append(sample_types.numpy())
 
-    # For 'all_patches' mode, labels have different shape (flattened patch labels)
-    # so we need to handle concatenation carefully
+    # All outputs are window-level regardless of inference_mode
+    # (collect_predictions handles patch-level labels/scores for metrics)
     return {
         'teacher_errors': np.concatenate(all_teacher_errors),
         'student_errors': np.concatenate(all_student_errors),

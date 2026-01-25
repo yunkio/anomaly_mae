@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-01-25 (Update 31): Fix Dimension Mismatch in collect_detailed_data for all_patches Mode
+
+### Summary
+
+Bug fix: `collect_detailed_data()` now returns consistent window-level shapes for both inference modes.
+
+### Problem
+
+In `all_patches` mode, `collect_detailed_data()` returned mismatched shapes:
+- `teacher_errors`, `student_errors`: (n_windows, seq_length) = (2625, 100)
+- `labels`, `sample_types`: flattened to (n_windows × num_patches,) = (26250,)
+
+This caused `IndexError` in visualization functions like `plot_teacher_student_comparison()` when using labels as boolean masks on errors.
+
+### Solution
+
+Changed `collect_detailed_data()` to keep window-level labels for `all_patches` mode:
+- Use `last_patch_labels` instead of flattened `patch_labels`
+- Keep `sample_types` at window level instead of expanding
+
+Note: `collect_predictions()` correctly uses patch-level labels since it also returns patch-level scores for metrics.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `mae_anomaly/visualization/base.py` | `collect_detailed_data()` uses window-level labels for all_patches mode |
+
+### Impact
+
+- All 18 visualization files now generate correctly for `all_patches` mode
+- Previously only 5 files were generated before the error occurred
+
+---
+
 ## 2026-01-25 (Update 30): Fix Visualization Functions to Respect inference_mode
 
 ### Summary
