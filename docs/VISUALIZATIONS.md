@@ -240,26 +240,24 @@ Detailed analysis of the single best performing model, including qualitative cas
 | File | Description |
 |------|-------------|
 | `best_model_roc_curve.png` | ROC curve with AUC and optimal threshold |
-| `best_model_score_distribution.png` | Anomaly score distributions by label |
 | `best_model_confusion_matrix.png` | Confusion matrix with accuracy metrics |
-| `best_model_score_components.png` | Reconstruction error vs discrepancy scatter |
-| `best_model_score_contribution.png` | **IMPROVED**: 3x3 score contribution analysis: (A-F) Stacked bar, ratio %, scatter, violin, KDEs; (G-I) Per-sample-type contribution ratio trends over epochs for Normal, Disturbing Normal, and Anomaly (shared Y-axis 0-100%) |
-| `best_model_teacher_student_comparison.png` | Teacher vs Student error analysis |
+| `best_model_score_contribution.png` | 4x3 score contribution analysis: (A-F) Stacked bar, ratio %, scatter, violin, KDEs; (G-I) Per-sample-type contribution ratio trends; (J-L) Absolute score trends over epochs |
 | `best_model_reconstruction.png` | Original vs Teacher vs Student reconstruction |
 | `best_model_detection_examples.png` | TP, TN, FP, FN example time series |
 | `best_model_summary.png` | Summary statistics and configuration |
-| `learning_curve.png` | **NEW**: 2x3 detailed training progress (normal/anomaly breakdown) |
+| `learning_curve.png` | 2x3 detailed training progress (normal/anomaly breakdown) |
 | `pure_vs_disturbing_normal.png` | Detailed comparison of pure normal vs disturbing normal |
 | `discrepancy_trend.png` | Discrepancy trend with std bands, zoomed last-patch view, and box plots by sample type |
-| `hypothesis_verification.png` | **NEW**: Verification of hypotheses about disturbing normal performance |
 | `case_study_gallery.png` | Representative TP/TN/FP/FN case studies with detailed analysis |
-| `anomaly_type_case_studies.png` | **NEW**: Per-anomaly-type case studies (TP vs FN) |
-| `feature_contribution_analysis.png` | **NEW**: Which features contribute most to detection |
-| `hardest_samples.png` | **NEW**: Analysis of hardest-to-detect samples |
+| `anomaly_type_case_studies.png` | Per-anomaly-type case studies (TP vs FN) |
+| `hardest_samples.png` | Analysis of hardest-to-detect samples |
 | `loss_by_anomaly_type.png` | Loss distributions by anomaly type |
 | `performance_by_anomaly_type.png` | Detection rate and mean score by anomaly type |
+| `value_vs_pattern_comparison.png` | Value-based vs pattern-based anomaly comparison |
 | `loss_scatter_by_anomaly_type.png` | Recon vs discrepancy scatter colored by anomaly type |
 | `sample_type_analysis.png` | Sample type (pure/disturbing/anomaly) analysis |
+| `anomaly_type_trends.png` | Epoch-wise recon/disc score trends per anomaly type |
+| `score_contribution_trends.png` | **NEW**: Stacked area plots of recon/disc contributions by anomaly type (epoch ≥ 5) |
 
 ### 6. Training Progress Visualizations (`training_progress/`)
 
@@ -390,22 +388,27 @@ model, config, test_loader, metrics = load_best_model('results/experiments/20260
 
 best_vis = BestModelVisualizer(model, config, test_loader, output_dir='output/best_model')
 best_vis.plot_roc_curve()
-best_vis.plot_score_distribution()
 best_vis.plot_confusion_matrix()
-best_vis.plot_score_components()
-best_vis.plot_teacher_student_comparison()
+best_vis.plot_score_contribution_analysis(experiment_dir)  # Comprehensive 4x3 analysis
 best_vis.plot_reconstruction_examples(num_examples=3)
 best_vis.plot_detection_examples()
 best_vis.plot_summary_statistics()
+best_vis.plot_learning_curve(history)
 best_vis.plot_pure_vs_disturbing_normal()
 best_vis.plot_discrepancy_trend()
-best_vis.plot_hypothesis_verification()
 # Qualitative case studies
-best_vis.plot_case_study_gallery()
-best_vis.plot_anomaly_type_case_studies()
-best_vis.plot_feature_contribution_analysis()
+best_vis.plot_case_study_gallery(experiment_dir)
+best_vis.plot_anomaly_type_case_studies(experiment_dir)
 best_vis.plot_hardest_samples()
-best_vis.generate_all()  # Generate all
+# Anomaly type analysis
+best_vis.plot_loss_by_anomaly_type(experiment_dir)
+best_vis.plot_performance_by_anomaly_type(experiment_dir)
+best_vis.plot_value_vs_pattern_comparison(experiment_dir)
+best_vis.plot_loss_scatter_by_anomaly_type(experiment_dir)
+best_vis.plot_sample_type_analysis(experiment_dir)
+best_vis.plot_anomaly_type_score_trends(experiment_dir, history)
+best_vis.plot_score_contribution_epoch_trends(experiment_dir, history)  # NEW
+best_vis.generate_all(experiment_dir, history)  # Generate all
 ```
 
 ### TrainingProgressVisualizer

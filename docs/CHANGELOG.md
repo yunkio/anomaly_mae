@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-01-25 (Update 32): Visualization Cleanup and all_patches Mode Fixes
+
+### Summary
+
+Removed redundant visualization functions, fixed `all_patches` mode visualizations, and added new score contribution epoch trends plot.
+
+### Changes
+
+1. **Removed Visualization Functions** (simplification):
+   - `plot_score_distribution()` - redundant with score_contribution_analysis
+   - `plot_score_components()` - redundant with score_contribution_analysis
+   - `plot_teacher_student_comparison()` - not essential for analysis
+   - `plot_hypothesis_verification()` - not essential for analysis
+   - `plot_feature_contribution_analysis()` - not essential for analysis
+
+2. **Fixed all_patches Mode Visualizations**:
+   - Added `_patch_idx_to_window_idx()` helper for index conversion
+   - Fixed `plot_detection_examples()`, `plot_case_study_gallery()`, `_plot_sample_detail()` to use window index
+   - Fixed `plot_reconstruction_examples()` to skip masked region shading in all_patches mode
+
+3. **Added New Visualization**:
+   - `plot_score_contribution_epoch_trends()`: Stacked area plots showing recon/disc score contributions over epochs for each anomaly type (similar to J-L plots), with unified y-axis and starting from epoch 5
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `mae_anomaly/visualization/best_model_visualizer.py` | Removed 5 functions, added helper and new plot, fixed all_patches mode |
+| `docs/VISUALIZATIONS.md` | Updated visualization list and API examples |
+
+---
+
 ## 2026-01-25 (Update 31): Fix Dimension Mismatch in collect_detailed_data for all_patches Mode
 
 ### Summary
