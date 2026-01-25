@@ -1,6 +1,6 @@
 # Ablation Studies Documentation
 
-**Last Updated**: 2026-01-23
+**Last Updated**: 2026-01-25
 **Status**: ✅ Verified and Logically Correct
 
 ---
@@ -16,13 +16,13 @@ This document describes the ablation studies used to validate the Self-Distilled
   - Conv1: num_features → d_model//2 (kernel_size=3, padding=1)
   - Conv2: d_model//2 → d_model (kernel_size=3, padding=1)
 - **Transformer**: Encoder-decoder architecture with self-distillation
-  - Encoder: 3 layers, 4 attention heads
-  - Teacher Decoder: 4 layers
+  - Encoder: 1 layer, 2 attention heads (t2s1 default)
+  - Teacher Decoder: 2 layers
   - Student Decoder: 1 layer
 
 **Pipeline**:
 1. Input (batch, 100, 8) → 1D-CNN → (batch, 64, 100)
-2. CNN features → Patch embedding → (batch, 25, 64)
+2. CNN features → Patch embedding → (batch, 10, 64)
 3. Patches + Positional encoding → Transformer encoder
 4. Latent → Teacher/Student decoders → Output projection
 5. Reconstruction (batch, 100, 8)
@@ -57,8 +57,8 @@ Full model with all components. This is the proposed architecture.
 
 **Configuration**:
 Different numbers of patches tested with baseline configuration:
-- 10 patches (patch size = 10)
-- 25 patches (patch size = 4) - **Default**
+- 10 patches (patch size = 10) - **Default**
+- 25 patches (patch size = 4)
 - 50 patches (patch size = 2)
 
 **Purpose**:
@@ -200,7 +200,7 @@ Test whether independent mask representations help differentiate teacher/student
 
 | Configuration | Num Patches | Patch Size | Purpose |
 |--------------|-------------|------------|---------|
-| **10 patches (Default)** | 10 | 10 | Balanced granularity (seq_length=100) |
+| **10 patches (Default)** | 10 | 10 | Balanced granularity (seq_length=100), matches mask_last_n |
 | **25 patches** | 25 | 4 | Fine granularity, precise localization |
 | **50 patches** | 50 | 2 | Very fine granularity |
 
@@ -211,10 +211,22 @@ Test whether independent mask representations help differentiate teacher/student
 **All ablations use the same evaluation protocol**:
 
 1. **Data**: Same test dataset with 25% anomaly ratio
-2. **Last Patch Masking**: Mask only the last patch (time steps 90-99 for patch_size=10)
-3. **Anomaly Score**: Compute error metric on the masked last patch
-4. **Label**: Binary label based on whether last patch contains anomaly
-5. **Metrics**: ROC-AUC, Precision, Recall, F1-Score
+2. **Masking**: Depends on `inference_mode` (see below)
+3. **Anomaly Score**: Compute error metric on masked positions
+4. **Label**: Binary label (window-level or patch-level depending on mode)
+5. **Metrics**: ROC-AUC, Precision, Recall, F1-Score, PA%K
+
+### Inference Modes
+
+| Mode | Masking | Sample Unit | Use Case |
+|------|---------|-------------|----------|
+| `last_patch` | Last patch only | Window | Fast, streaming detection |
+| `all_patches` | Each patch (N passes) | Patch | Thorough evaluation |
+
+- **last_patch**: 1 forward pass per window, window-level labels
+- **all_patches**: N forward passes per window, patch-level labels (10× more samples)
+
+See [INFERENCE_MODES.md](INFERENCE_MODES.md) for detailed flow diagrams.
 
 **Key Point**: Only the training configuration differs. Evaluation is consistent across all ablations for fair comparison.
 
@@ -364,9 +376,9 @@ Stage 2 uses a 3-phase diverse selection strategy:
 
 3. **Masking Strategies**: Both patch and feature-wise masking are tested.
 
-4. **Dataset Size**: 10000 train samples, 2500 test samples.
+4. **Dataset Size**: 440,000 timesteps total, ~22,000 train windows, ~2,000 test windows.
 
-5. **Last Patch Only**: All evaluations focus on predicting the last patch to simulate real-time anomaly detection.
+5. **Inference Modes**: Both `last_patch` (fast) and `all_patches` (thorough) evaluated.
 
 6. **Same Random Seed**: All experiments use the same random seed (42) for reproducibility.
 

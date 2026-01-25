@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-01-25 (Update 30): Fix Visualization Functions to Respect inference_mode
+
+### Summary
+
+Bug fix: `collect_predictions()` and `collect_detailed_data()` in visualization/base.py now respect `config.inference_mode` setting instead of always using last_patch mode.
+
+### Problem
+
+Confusion matrices and other visualizations were identical for both `last_patch` and `all_patches` inference modes because visualization functions ignored the `inference_mode` config:
+- Always masked only the last patch
+- Always used `last_patch_labels`
+
+### Solution
+
+Updated both functions to handle `inference_mode`:
+
+**For `all_patches` mode:**
+- Mask each patch one at a time (N forward passes)
+- Compute patch-level labels from `point_labels`
+- Flatten scores/labels to (n_windows × num_patches,)
+
+**For `last_patch` mode:**
+- Original behavior preserved
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `mae_anomaly/visualization/base.py` | `collect_predictions()`, `collect_detailed_data()` now check `inference_mode` |
+| `docs/ARCHITECTURE.md` | Added inference_mode documentation |
+| `docs/VISUALIZATIONS.md` | Added inference_mode handling section |
+
+### Impact
+
+- Confusion matrices now correctly differ between inference modes
+- ROC curves, score distributions match evaluation methodology
+- Ablation experiments restarted with fix applied
+
+---
+
 ## 2026-01-25 (Update 29): Point-Level PA%K with Stride=1 Sliding Window
 
 ### Summary

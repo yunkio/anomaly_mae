@@ -1,6 +1,6 @@
 # Dataset Documentation
 
-**Last Updated**: 2026-01-24
+**Last Updated**: 2026-01-25
 
 ---
 
@@ -90,15 +90,16 @@ This represents a challenging case where:
 ## Point-Level PA%K Evaluation
 
 With stride=1 sliding windows, each timestep is covered by multiple windows' last patches.
-The evaluation aggregates window-level scores to point-level using one of three methods:
+The evaluation aggregates window-level scores to point-level using one of four methods:
 
 ### Aggregation Methods
 
-| Method | Description | Formula |
-|--------|-------------|---------|
-| **Voting** (default) | Majority vote of binary predictions | `1 if votes > n/2 else 0` |
-| **Mean** | Average of window scores | `mean(scores)` |
-| **Median** | Median of window scores | `median(scores)` |
+| Method | Description | Formula | Characteristics |
+|--------|-------------|---------|-----------------|
+| **Voting** (default) | Majority vote of binary predictions | `1 if votes > n/2 else 0` | Robust to outliers |
+| **Mean** | Average of window scores | `mean(scores)` | Balanced aggregation |
+| **Median** | Median of window scores | `median(scores)` | Robust to outliers |
+| **Max** | Maximum of window scores | `max(scores)` | Most sensitive, catches any anomaly signal |
 
 ### Window Coverage
 

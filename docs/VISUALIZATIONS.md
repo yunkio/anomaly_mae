@@ -1,6 +1,6 @@
 # Visualization Documentation
 
-**Last Updated**: 2026-01-23
+**Last Updated**: 2026-01-25
 **Status**: Complete
 
 ---
@@ -148,8 +148,19 @@ Visualizations use the **same evaluation method** as `run_experiments.py`:
 | Test Samples | 2,000 | 2,000 | 2,000 |
 | Test Target | 1200:300:500 | 1200:300:500 | 1200:300:500 |
 | Epochs | 1 | 2 | N/A (uses saved model) |
-| Masking | Last `mask_last_n` | Last `mask_last_n` | Last `mask_last_n` |
+| Masking | Respects `inference_mode` | Respects `inference_mode` | Respects `inference_mode` |
 | Error Metric | MSE | MSE | MSE |
+
+### Inference Mode Handling
+
+The `collect_predictions()` and `collect_detailed_data()` functions in `base.py` respect the `config.inference_mode` setting:
+
+| Mode | Masking | Labels | Output Shape |
+|------|---------|--------|--------------|
+| `last_patch` | Last patch only | `last_patch_labels` | (n_windows,) |
+| `all_patches` | Each patch one at a time | Patch-level from `point_labels` | (n_windows × num_patches,) |
+
+This ensures visualizations (confusion matrix, ROC curves, etc.) match the evaluation methodology.
 
 ---
 
@@ -232,6 +243,7 @@ Detailed analysis of the single best performing model, including qualitative cas
 | `best_model_score_distribution.png` | Anomaly score distributions by label |
 | `best_model_confusion_matrix.png` | Confusion matrix with accuracy metrics |
 | `best_model_score_components.png` | Reconstruction error vs discrepancy scatter |
+| `best_model_score_contribution.png` | **IMPROVED**: 3x3 score contribution analysis: (A-F) Stacked bar, ratio %, scatter, violin, KDEs; (G-I) Per-sample-type contribution ratio trends over epochs for Normal, Disturbing Normal, and Anomaly (shared Y-axis 0-100%) |
 | `best_model_teacher_student_comparison.png` | Teacher vs Student error analysis |
 | `best_model_reconstruction.png` | Original vs Teacher vs Student reconstruction |
 | `best_model_detection_examples.png` | TP, TN, FP, FN example time series |

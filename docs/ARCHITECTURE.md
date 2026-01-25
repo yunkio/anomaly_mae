@@ -1,6 +1,6 @@
 # Model Architecture Documentation
 
-**Last Updated**: 2026-01-23
+**Last Updated**: 2026-01-25
 **Model**: 1D-CNN + Transformer Self-Distilled MAE
 
 ---
@@ -266,7 +266,7 @@ Input: (batch, 100, 8)
 The model supports two masking strategies, controlled by `config.masking_strategy`:
 
 **Patch Masking** (`masking_strategy='patch'`, default):
-- Randomly mask 40% of patches (configurable via `masking_ratio`)
+- Randomly mask 20% of patches (configurable via `masking_ratio`)
 - All features masked at same time points
 - Preserves cross-feature temporal coherence
 - Suitable for detecting anomalies that affect multiple features simultaneously
@@ -297,10 +297,21 @@ Each feature independently selects which patches to mask.
 
 ### Inference Time
 
-**Last Patch Masking**:
+The model supports two inference modes, controlled by `config.inference_mode`:
+
+**Last Patch Mode** (`inference_mode='last_patch'`, default):
 - Mask only the last patch (time steps 90-99 for patch_size=10)
-- Model predicts missing values
-- Anomaly score based on reconstruction/discrepancy
+- Single forward pass per window
+- Window-level score for sample metrics (ROC-AUC, F1, etc.)
+- Suitable for real-time/streaming scenarios
+
+**All Patches Mode** (`inference_mode='all_patches'`):
+- Mask each patch one at a time (N forward passes per window)
+- Per-patch scores with patch-level labels
+- Each patch is a sample for metrics (N× more samples)
+- More thorough evaluation, 10× coverage per timestep
+
+See [INFERENCE_MODES.md](INFERENCE_MODES.md) for detailed flow diagrams.
 
 ---
 
@@ -554,21 +565,27 @@ anomaly_score = MSE(student_out - original)
 | seq_length | 100 | Input sequence length |
 | num_features | 8 | Multivariate features (server metrics) |
 | d_model | 64 | Model dimension |
-| num_patches | 10 | Number of patches |
-| patch_size | 10 | Time steps per patch |
-| patchify_mode | linear | Patchify mode (linear/patch_cnn) |
+| nhead | 2 | Number of attention heads |
+| dim_feedforward | 256 | FFN dimension (4x d_model) |
+| num_patches | 10 | Number of patches (seq_length / patch_size) |
+| patch_size | 10 | Time steps per patch (fixed) |
+| patchify_mode | patch_cnn | Patchify mode (patch_cnn/linear) |
+| cnn_channels | (32, 64) | CNN channels (d_model//2, d_model) |
 | masking_strategy | patch | Masking strategy (patch/feature_wise) |
-| masking_ratio | 0.4 | Training masking ratio |
+| masking_ratio | 0.2 | Training masking ratio |
 | mask_after_encoder | False | Standard MAE masking (encode visible only) |
 | shared_mask_token | True | Share mask token between teacher/student |
-| num_encoder_layers | 3 | Encoder layers |
-| num_teacher_decoder_layers | 4 | Teacher decoder layers |
+| num_encoder_layers | 1 | Encoder layers |
+| num_teacher_decoder_layers | 2 | Teacher decoder layers (t2s1) |
 | num_student_decoder_layers | 1 | Student decoder layers |
 | margin | 0.5 | Discrepancy margin (fixed) |
 | lambda_disc | 0.5 | Discrepancy loss weight (fixed) |
-| margin_type | hinge | Margin loss type |
+| margin_type | dynamic | Margin loss type (dynamic/hinge/softplus) |
+| dynamic_margin_k | 1.5 | k for dynamic margin (mu + k*sigma) |
 | patch_level_loss | True | Loss computation level |
-| teacher_only_warmup_epochs | 1 | Epochs for teacher-only training |
+| learning_rate | 2e-3 | Learning rate |
+| weight_decay | 1e-5 | Weight decay |
+| teacher_only_warmup_epochs | 3 | Epochs for teacher-only training |
 
 ---
 
