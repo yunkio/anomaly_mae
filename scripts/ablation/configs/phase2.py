@@ -506,6 +506,12 @@ def print_experiment_summary():
     print("=" * 80)
 
 
+# =============================================================================
+# Export experiments for run_ablation.py
+# =============================================================================
+EXPERIMENTS = get_experiments()
+
+
 if __name__ == "__main__":
     print_experiment_summary()
     experiments = get_experiments()
