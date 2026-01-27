@@ -382,7 +382,7 @@ def collect_predictions(model, dataloader, config) -> Dict:
 
             if inference_mode == 'all_patches':
                 # All patches mode: process patches in batches for memory efficiency
-                patch_batch_size = 4  # Fixed: process 4 patches at a time
+                patch_batch_size = 2  # Fixed: process 2 patches at a time (reduced for GPU memory)
 
                 # Initialize result tensors
                 patch_recon_scores = torch.zeros(batch_size, num_patches, device=device)
@@ -646,7 +646,7 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
 
             if inference_mode == 'all_patches':
                 # All patches mode: process patches in batches for memory efficiency
-                patch_batch_size = 4  # Fixed: process 4 patches at a time
+                patch_batch_size = 2  # Fixed: process 2 patches at a time (reduced for GPU memory)
 
                 # Initialize final result tensors
                 teacher_error_final = torch.zeros(batch_size, seq_length, device=device)
@@ -808,7 +808,7 @@ def collect_all_visualization_data(model, dataloader, config) -> Tuple[Dict, Dic
 
             if inference_mode == 'all_patches':
                 # All patches mode: process patches in batches for memory efficiency
-                patch_batch_size = 4
+                patch_batch_size = 2
 
                 # Initialize prediction result tensors
                 patch_recon_scores = torch.zeros(batch_size, num_patches, device=device)
