@@ -1,5 +1,224 @@
 # Changelog
 
+## 2026-01-27 (Update 37): Phase 1 Analysis and Phase 2 Experiment Planning
+
+### Summary
+
+Comprehensive analysis of 1,392 Phase 1 ablation experiments with deep-dive insights across 10 analysis points. Generated 150 Phase 2 experiment configurations organized into 7 thematic tracks based on Phase 1 findings.
+
+### Key Findings
+
+1. **Best Performance:** ROC-AUC=0.9624 with `mask_after=False`, `d_model=128`, `nhead=16`
+2. **Highest Disc Ratio:** 4.26 with `mask_after=True`, `dynamic_margin_k=4.0` (but lower ROC-AUC)
+3. **Trade-off Identified:** High disc_ratio negatively correlates with performance (-0.45 with recon_ratio)
+4. **Window Size:** w500_p20 achieved ROC-AUC=0.9586 (2nd best), warrants further exploration
+5. **Inference Mode:** `all_patches` outperforms `last_patch` by +0.046 ROC-AUC
+
+### Phase 2 Experiment Tracks (150 total)
+
+1. **Track 1 (30):** Balanced Performance Optimization - optimize mask_before configs
+2. **Track 2 (25):** Window Size Exploration - systematically test w500/1000/1500
+3. **Track 3 (25):** High Disc Ratio Optimization - improve ROC while maintaining high disc
+4. **Track 4 (20):** Disturbing Normal Discrimination - optimize disturbing vs anomaly separation
+5. **Track 5 (20):** Architectural Depth - systematic encoder-decoder depth exploration
+6. **Track 6 (15):** Masking Ratio Fine-tuning - fine-grained search in 0.08-0.3 range
+7. **Track 7 (15):** Lambda_disc Exploration - systematic lambda values
+
+### Files
+
+| File | Status |
+|------|--------|
+| `docs/ablation_result/phase1_top_models_tables.md` | NEW (top 10 models by 3 metrics) |
+| `docs/ablation_result/phase1_deep_analysis.md` | NEW (10-point analysis, 22 tables) |
+| `docs/ablation_result/PHASE1_SUMMARY_AND_PHASE2_PLAN.md` | NEW (executive summary) |
+| `scripts/ablation/configs/phase2/20260127_141642_phase2.py` | NEW (150 phase2 configs) |
+| `docs/CHANGELOG.md` | UPDATED |
+
+### Usage
+
+```bash
+# View analysis results
+cat docs/ablation_result/PHASE1_SUMMARY_AND_PHASE2_PLAN.md
+
+# Run Phase 2 experiments
+python scripts/ablation/run_ablation.py --config configs/phase2/20260127_141642_phase2.py
+```
+
+---
+
+## 2026-01-27 (Update 36): Unified Ablation Study and Visualization Optimization
+
+### Summary
+
+Unified Phase 1 and Phase 2 ablation configs into single Phase 1 (170 experiments). Added parallel visualization support and optimized data collection with `collect_all_visualization_data()` function for ~2x speedup.
+
+### Changes
+
+1. **Unified Ablation Config** (`scripts/ablation/configs/20260127_052220_phase1.py`):
+   - Combined 70 (Phase 1) + 100 (Phase 2) = **170 experiments**
+   - Unified base config defaults: d_model=64, nhead=2, masking_ratio=0.2
+   - Total expected results: 170 × 2 (mask) × 2 (inference) × 3 (scoring) = **2040**
+
+2. **Visualization Optimization** (`mae_anomaly/visualization/base.py`):
+   - Added `collect_all_visualization_data()` - merged function for ~2x speedup
+   - Combines `collect_predictions()` and `collect_detailed_data()` into single pass
+   - Reduces redundant forward passes
+
+3. **Parallel Visualization** (`mae_anomaly/visualization/parallel.py`):
+   - New `ParallelVisualizer` class for multiprocessing-based plot generation
+   - New `generate_plots_parallel()` helper function
+   - Uses file-based data passing to avoid IPC overhead
+
+4. **Module Exports** (`mae_anomaly/visualization/__init__.py`):
+   - Added `collect_all_visualization_data` export
+   - Added `ParallelVisualizer`, `generate_plots_parallel` exports
+
+### Usage
+
+```bash
+# Run unified Phase 1 (170 experiments × 12 variants = 2040 results)
+python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py
+```
+
+### Files
+
+| File | Status |
+|------|--------|
+| `scripts/ablation/configs/20260127_052220_phase1.py` | NEW (unified) |
+| `mae_anomaly/visualization/base.py` | MODIFIED (collect_all_visualization_data) |
+| `mae_anomaly/visualization/parallel.py` | NEW |
+| `mae_anomaly/visualization/__init__.py` | MODIFIED |
+| `docs/ABLATION_EXPERIMENTS.md` | UPDATED |
+| `docs/VISUALIZATIONS.md` | UPDATED |
+
+---
+
+## 2026-01-27: Ablation Study Framework Refactoring
+
+### Summary
+
+Refactored ablation study scripts into a unified, modular framework with separate config files.
+
+### Changes
+
+1. **Unified Runner** (`scripts/ablation/run_ablation.py`):
+   - Single entry point for all ablation studies
+   - Dynamic config loading from Python files
+   - Background visualization with concurrency control
+   - Skip-existing and experiment filtering support
+
+2. **Config Files** (`scripts/ablation/configs/`):
+   - Modular format for easy extension
+
+3. **Visualization Fix** (`mae_anomaly/visualization/best_model_visualizer.py`):
+   - Fixed `best_model_score_contribution_trends.png` for adaptive/normalized modes
+   - Now correctly recalculates disc score weights from raw history values
+
+### Usage
+
+```bash
+# Run unified Phase 1
+python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py
+
+# Run specific experiments
+python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py \
+    --experiments 001_default 002_window_200
+```
+
+### Files
+
+| File | Status |
+|------|--------|
+| `scripts/ablation/run_ablation.py` | NEW |
+| `scripts/ablation/configs/__init__.py` | NEW |
+| `scripts/ablation/configs/20260127_052220_phase1.py` | NEW |
+| `scripts/ablation/run_ablation_experiments_*.py` | DEPRECATED |
+| `docs/ABLATION_EXPERIMENTS.md` | UPDATED |
+| `mae_anomaly/visualization/best_model_visualizer.py` | FIXED |
+
+---
+
+## 2026-01-25 (Update 34): Mixed Precision Training (AMP) Support
+
+### Summary
+
+Added Automatic Mixed Precision (AMP) training support for faster training and reduced memory usage.
+
+### Performance Impact (RTX 3080 Ti)
+
+| Metric | No AMP | AMP | Improvement |
+|--------|--------|-----|-------------|
+| Training time | 2.89s | 2.40s | **1.20x** |
+| Inference time | 4.32s | 3.52s | **1.23x** |
+| Training memory | 449 MB | 272 MB | **40% ↓** |
+| Inference memory | 1062 MB | 437 MB | **59% ↓** |
+
+### Changes
+
+1. **Config**: Added `use_amp: bool = True` option
+2. **Epsilon values**: Changed all `1e-8` → `1e-4` for float16 numerical stability
+3. **Trainer**: Added `autocast` and `GradScaler` for mixed precision training
+4. **Evaluator**: Added `autocast` for mixed precision inference
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `mae_anomaly/config.py` | Added `use_amp` option |
+| `mae_anomaly/loss.py` | 14x epsilon update |
+| `mae_anomaly/trainer.py` | AMP support + 8x epsilon update |
+| `mae_anomaly/evaluator.py` | AMP support + 6x epsilon update |
+
+### Notes
+
+- AMP is enabled by default (`use_amp=True`)
+- Requires GPU with Tensor Cores (Volta+) for best speedup
+- Accuracy is preserved (ROC-AUC difference < 0.01)
+
+---
+
+## 2026-01-25 (Update 33): Performance Optimization - Batched all_patches and Training Params
+
+### Summary
+
+Major performance improvements: batched `all_patches` inference (7x speedup), batch_size=1024, learning_rate=5e-3.
+
+### Changes
+
+1. **Batched all_patches Inference** (~7x speedup):
+   - `evaluator.py`: `_compute_patch_scores_all_patches()` now processes all patches in single forward pass
+   - `visualization/base.py`: `collect_predictions()` and `collect_detailed_data()` also optimized
+   - Before: 10 forward passes per batch (one per patch)
+   - After: 1 forward pass per batch (all patches expanded in batch dimension)
+
+2. **Updated Training Parameters**:
+   - `batch_size`: 32 → 1024 (better GPU utilization, ~0.6GB VRAM)
+   - `learning_rate`: 2e-3 → 5e-3 (faster convergence with larger batch)
+
+3. **Enabled cuDNN Benchmark**:
+   - `cudnn.benchmark = True` for auto-tuned convolution algorithms
+   - Additional ~20% training speedup
+
+### Performance Impact
+
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| all_patches per batch | 23.87 ms | 3.43 ms | **7.0x** |
+| Training throughput | - | ~3x faster | GPU utilization |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `mae_anomaly/config.py` | batch_size=1024, learning_rate=5e-3, cudnn.benchmark=True |
+| `mae_anomaly/evaluator.py` | Batched all_patches in `_compute_patch_scores_all_patches()` |
+| `mae_anomaly/visualization/base.py` | Batched all_patches in `collect_predictions()`, `collect_detailed_data()` |
+| `docs/DATASET.md` | Updated DataLoader example |
+| `docs/ABLATION_EXPERIMENTS.md` | Updated learning_rate default |
+| `docs/ARCHITECTURE.md` | Updated learning_rate default |
+
+---
+
 ## 2026-01-25 (Update 32): Visualization Cleanup and all_patches Mode Fixes
 
 ### Summary
