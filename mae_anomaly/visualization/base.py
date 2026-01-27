@@ -106,12 +106,14 @@ SAMPLE_TYPE_COLORS = {0: '#3498DB', 1: '#F39C12', 2: '#E74C3C'}
 VIS_COLORS = {
     # Primary data types
     'normal': '#3498DB',      # Blue for normal data
+    'pure_normal': '#2ECC71', # Green for pure normal (in normal window)
     'anomaly': '#E74C3C',     # Red for anomaly data
     'disturbing': '#F39C12',  # Orange for disturbing normal
     # Model components
     'teacher': '#27AE60',     # Green for teacher model
     'student': '#9B59B6',     # Purple for student model
     'discrepancy': '#9B59B6', # Purple for discrepancy (same as student)
+    'reconstruction': '#27AE60',  # Green for reconstruction
     'total': '#2ECC71',       # Green for totals/combined
     # Region highlighting
     'anomaly_region': '#E74C3C',  # Red for anomaly region highlight
@@ -367,8 +369,9 @@ def collect_predictions(model, dataloader, config) -> Dict:
 
     all_scores = []
     all_labels = []
-    all_recon_errors = []
-    all_discrepancies = []
+    all_recon_errors = []      # Teacher reconstruction error (teacher vs original)
+    all_student_errors = []    # Student reconstruction error (student vs original)
+    all_discrepancies = []     # Teacher-student difference
     all_sample_types = []
 
     with torch.no_grad():
@@ -378,36 +381,55 @@ def collect_predictions(model, dataloader, config) -> Dict:
             batch_size, seq_length, num_features = sequences.shape
 
             if inference_mode == 'all_patches':
-                # All patches mode: mask each patch one at a time
-                # Output: (batch_size, num_patches) scores and labels
+                # All patches mode: process patches in batches for memory efficiency
+                patch_batch_size = 4  # Fixed: process 4 patches at a time
+
+                # Initialize result tensors
                 patch_recon_scores = torch.zeros(batch_size, num_patches, device=device)
+                patch_student_scores = torch.zeros(batch_size, num_patches, device=device)
                 patch_disc_scores = torch.zeros(batch_size, num_patches, device=device)
 
-                for patch_idx in range(num_patches):
-                    start_pos = patch_idx * patch_size
-                    end_pos = start_pos + patch_size
+                # Process patches in batches
+                for batch_start in range(0, num_patches, patch_batch_size):
+                    batch_end = min(batch_start + patch_batch_size, num_patches)
+                    current_batch_patches = batch_end - batch_start
 
-                    # Create mask for this patch
-                    mask = torch.ones(batch_size, seq_length, device=device)
-                    mask[:, start_pos:end_pos] = 0
+                    # Expand only for current patch batch
+                    expanded = sequences.unsqueeze(1).expand(-1, current_batch_patches, -1, -1)
+                    expanded = expanded.reshape(batch_size * current_batch_patches, seq_length, num_features)
 
-                    # Forward pass
-                    teacher_output, student_output, _ = model(sequences, masking_ratio=0.0, mask=mask)
+                    # Create masks for current patch batch
+                    masks = torch.ones(batch_size * current_batch_patches, seq_length, device=device)
+                    for i, patch_idx in enumerate(range(batch_start, batch_end)):
+                        start_pos = patch_idx * patch_size
+                        end_pos = start_pos + patch_size
+                        masks[i::current_batch_patches, start_pos:end_pos] = 0
 
-                    # Compute errors for masked positions
-                    recon_error = ((teacher_output - sequences) ** 2).mean(dim=2)
-                    discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)
+                    # Forward pass for current batch
+                    teacher_output, student_output, _ = model(expanded, masking_ratio=0.0, mask=masks)
 
-                    # Average over masked positions for this patch
-                    masked_positions = (mask == 0)
-                    recon = (recon_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
-                    disc = (discrepancy * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
+                    # Compute errors
+                    recon_error = ((teacher_output - expanded) ** 2).mean(dim=2)  # Teacher vs original
+                    student_error = ((student_output - expanded) ** 2).mean(dim=2)  # Student vs original
+                    discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)  # Teacher vs Student
 
-                    patch_recon_scores[:, patch_idx] = recon
-                    patch_disc_scores[:, patch_idx] = disc
+                    # Reshape to (B, current_batch_patches, S)
+                    recon_error = recon_error.view(batch_size, current_batch_patches, seq_length)
+                    student_error = student_error.view(batch_size, current_batch_patches, seq_length)
+                    discrepancy = discrepancy.view(batch_size, current_batch_patches, seq_length)
+
+                    # Extract scores for each patch's masked region
+                    for i, patch_idx in enumerate(range(batch_start, batch_end)):
+                        start_pos = patch_idx * patch_size
+                        end_pos = start_pos + patch_size
+                        patch_recon_scores[:, patch_idx] = recon_error[:, i, start_pos:end_pos].mean(dim=1)
+                        patch_student_scores[:, patch_idx] = student_error[:, i, start_pos:end_pos].mean(dim=1)
+                        patch_disc_scores[:, patch_idx] = discrepancy[:, i, start_pos:end_pos].mean(dim=1)
+
+                    # Clear intermediate tensors
+                    del expanded, masks, teacher_output, student_output, recon_error, student_error, discrepancy
 
                 # Compute patch-level labels from point_labels
-                # patch_labels[w, p] = 1 if any anomaly in patch p of window w
                 patch_labels = torch.zeros(batch_size, num_patches, dtype=torch.long)
                 for p_idx in range(num_patches):
                     start_pos = p_idx * patch_size
@@ -419,13 +441,24 @@ def collect_predictions(model, dataloader, config) -> Dict:
                 scores = (patch_recon_scores + config.lambda_disc * patch_disc_scores).flatten()
                 labels = patch_labels.flatten()
                 recon_flat = patch_recon_scores.flatten()
+                student_flat = patch_student_scores.flatten()
                 disc_flat = patch_disc_scores.flatten()
-                # Repeat sample_types for each patch
-                sample_types_expanded = sample_types.unsqueeze(1).expand(-1, num_patches).flatten()
+
+                # Compute per-patch sample_types based on patch labels (generalized approach)
+                # sample_type: 2=anomaly (patch has anomaly), 1=disturbing (normal patch in anomaly window), 0=pure_normal
+                window_has_anomaly = (point_labels.sum(dim=1) > 0).unsqueeze(1)  # (B, 1)
+                patch_sample_types = torch.zeros_like(patch_labels)
+                patch_sample_types[patch_labels == 1] = 2  # patches with anomaly
+                # Normal patches in windows that have anomaly elsewhere → disturbing
+                normal_in_anomaly_window = (patch_labels == 0) & window_has_anomaly
+                patch_sample_types[normal_in_anomaly_window] = 1
+                # Remaining (normal patches in normal windows) stay 0 (pure_normal)
+                sample_types_expanded = patch_sample_types.flatten()
 
                 all_scores.append(scores.cpu().numpy())
                 all_labels.append(labels.numpy())
                 all_recon_errors.append(recon_flat.cpu().numpy())
+                all_student_errors.append(student_flat.cpu().numpy())
                 all_discrepancies.append(disc_flat.cpu().numpy())
                 all_sample_types.append(sample_types_expanded.numpy())
 
@@ -438,26 +471,30 @@ def collect_predictions(model, dataloader, config) -> Dict:
                 teacher_output, student_output, _ = model(sequences, masking_ratio=0.0, mask=mask)
 
                 # Compute errors using MSE
-                recon_error = ((teacher_output - sequences) ** 2).mean(dim=2)
-                discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)
+                recon_error = ((teacher_output - sequences) ** 2).mean(dim=2)  # Teacher vs original
+                student_error = ((student_output - sequences) ** 2).mean(dim=2)  # Student vs original
+                discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)  # Teacher vs Student
 
                 # Compute scores on masked positions only
                 masked_positions = (mask == 0)
                 recon = (recon_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
+                student = (student_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
                 disc = (discrepancy * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
                 scores = recon + config.lambda_disc * disc
 
                 all_scores.append(scores.cpu().numpy())
                 all_labels.append(last_patch_labels.numpy())
                 all_recon_errors.append(recon.cpu().numpy())
+                all_student_errors.append(student.cpu().numpy())
                 all_discrepancies.append(disc.cpu().numpy())
                 all_sample_types.append(sample_types.numpy())
 
     return {
         'scores': np.concatenate(all_scores),
         'labels': np.concatenate(all_labels),
-        'recon_errors': np.concatenate(all_recon_errors),
-        'discrepancies': np.concatenate(all_discrepancies),
+        'recon_errors': np.concatenate(all_recon_errors),        # Teacher reconstruction error
+        'student_errors': np.concatenate(all_student_errors),    # Student reconstruction error
+        'discrepancies': np.concatenate(all_discrepancies),      # Teacher-student difference
         'sample_types': np.concatenate(all_sample_types)
     }
 
@@ -608,61 +645,73 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
             batch_size, seq_length, num_features = sequences.shape
 
             if inference_mode == 'all_patches':
-                # All patches mode: accumulate errors/recons across all patch masks
-                teacher_error_accum = torch.zeros(batch_size, seq_length, device=device)
-                student_error_accum = torch.zeros(batch_size, seq_length, device=device)
-                discrepancy_accum = torch.zeros(batch_size, seq_length, device=device)
-                teacher_recon_accum = torch.zeros_like(sequences)
-                student_recon_accum = torch.zeros_like(sequences)
-                count_accum = torch.zeros(batch_size, seq_length, device=device)
+                # All patches mode: process patches in batches for memory efficiency
+                patch_batch_size = 4  # Fixed: process 4 patches at a time
 
-                for patch_idx in range(num_patches):
-                    start_pos = patch_idx * patch_size
-                    end_pos = start_pos + patch_size
+                # Initialize final result tensors
+                teacher_error_final = torch.zeros(batch_size, seq_length, device=device)
+                student_error_final = torch.zeros(batch_size, seq_length, device=device)
+                discrepancy_final = torch.zeros(batch_size, seq_length, device=device)
+                teacher_recon_final = torch.zeros_like(sequences)
+                student_recon_final = torch.zeros_like(sequences)
 
-                    # Create mask for this patch
-                    mask = torch.ones(batch_size, seq_length, device=device)
-                    mask[:, start_pos:end_pos] = 0
+                # Process patches in batches
+                for batch_start in range(0, num_patches, patch_batch_size):
+                    batch_end = min(batch_start + patch_batch_size, num_patches)
+                    current_batch_patches = batch_end - batch_start
 
-                    # Forward pass
-                    teacher_output, student_output, _ = model(sequences, masking_ratio=0.0, mask=mask)
+                    # Expand only for current patch batch
+                    expanded = sequences.unsqueeze(1).expand(-1, current_batch_patches, -1, -1)
+                    expanded = expanded.reshape(batch_size * current_batch_patches, seq_length, num_features)
+
+                    # Create masks for current patch batch
+                    masks = torch.ones(batch_size * current_batch_patches, seq_length, device=device)
+                    for i, patch_idx in enumerate(range(batch_start, batch_end)):
+                        start_pos = patch_idx * patch_size
+                        end_pos = start_pos + patch_size
+                        masks[i::current_batch_patches, start_pos:end_pos] = 0
+
+                    # Forward pass for current batch
+                    teacher_output, student_output, _ = model(expanded, masking_ratio=0.0, mask=masks)
 
                     # Compute errors
-                    teacher_error = ((teacher_output - sequences) ** 2).mean(dim=-1)
-                    student_error = ((student_output - sequences) ** 2).mean(dim=-1)
+                    teacher_error = ((teacher_output - expanded) ** 2).mean(dim=-1)
+                    student_error = ((student_output - expanded) ** 2).mean(dim=-1)
                     discrepancy = ((teacher_output - student_output) ** 2).mean(dim=-1)
 
-                    # Accumulate only for masked positions
-                    masked_positions = (mask == 0).float()
-                    teacher_error_accum += teacher_error * masked_positions
-                    student_error_accum += student_error * masked_positions
-                    discrepancy_accum += discrepancy * masked_positions
-                    teacher_recon_accum += teacher_output * masked_positions.unsqueeze(-1)
-                    student_recon_accum += student_output * masked_positions.unsqueeze(-1)
-                    count_accum += masked_positions
+                    # Reshape to (B, current_batch_patches, S, F)
+                    teacher_output = teacher_output.view(batch_size, current_batch_patches, seq_length, num_features)
+                    student_output = student_output.view(batch_size, current_batch_patches, seq_length, num_features)
+                    teacher_error = teacher_error.view(batch_size, current_batch_patches, seq_length)
+                    student_error = student_error.view(batch_size, current_batch_patches, seq_length)
+                    discrepancy = discrepancy.view(batch_size, current_batch_patches, seq_length)
 
-                # Average (each position masked exactly once)
-                teacher_error_final = teacher_error_accum / (count_accum + 1e-8)
-                student_error_final = student_error_accum / (count_accum + 1e-8)
-                discrepancy_final = discrepancy_accum / (count_accum + 1e-8)
-                teacher_recon_final = teacher_recon_accum / (count_accum.unsqueeze(-1) + 1e-8)
-                student_recon_final = student_recon_accum / (count_accum.unsqueeze(-1) + 1e-8)
+                    # Assemble results for this batch of patches
+                    for i, patch_idx in enumerate(range(batch_start, batch_end)):
+                        start_pos = patch_idx * patch_size
+                        end_pos = start_pos + patch_size
+                        teacher_error_final[:, start_pos:end_pos] = teacher_error[:, i, start_pos:end_pos]
+                        student_error_final[:, start_pos:end_pos] = student_error[:, i, start_pos:end_pos]
+                        discrepancy_final[:, start_pos:end_pos] = discrepancy[:, i, start_pos:end_pos]
+                        teacher_recon_final[:, start_pos:end_pos] = teacher_output[:, i, start_pos:end_pos]
+                        student_recon_final[:, start_pos:end_pos] = student_output[:, i, start_pos:end_pos]
 
-                # Create combined mask (all positions were masked at some point)
+                    # Clear intermediate tensors to free memory
+                    del expanded, masks, teacher_output, student_output, teacher_error, student_error, discrepancy
+
+                # Combined mask (all positions were masked at some point)
                 combined_mask = torch.zeros(batch_size, seq_length, device=device)
 
-                # For collect_detailed_data, keep window-level labels since errors/recons are window-level
-                # (unlike collect_predictions which uses patch-level labels with patch-level scores)
                 all_teacher_errors.append(teacher_error_final.cpu().numpy())
                 all_student_errors.append(student_error_final.cpu().numpy())
                 all_discrepancies.append(discrepancy_final.cpu().numpy())
                 all_masks.append(combined_mask.cpu().numpy())
-                all_labels.append(last_patch_labels.numpy())  # Window-level labels
+                all_labels.append(last_patch_labels.numpy())
                 all_point_labels.append(point_labels.numpy())
                 all_originals.append(sequences.cpu().numpy())
                 all_teacher_recons.append(teacher_recon_final.cpu().numpy())
                 all_student_recons.append(student_recon_final.cpu().numpy())
-                all_sample_types.append(sample_types.numpy())  # Window-level sample types
+                all_sample_types.append(sample_types.numpy())
 
             else:
                 # Last patch mode (original behavior)
@@ -702,6 +751,236 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
         'student_recons': np.concatenate(all_student_recons),
         'sample_types': np.concatenate(all_sample_types),
     }
+
+
+def collect_all_visualization_data(model, dataloader, config) -> Tuple[Dict, Dict]:
+    """Collect both prediction and detailed data in a SINGLE forward pass.
+
+    This function eliminates duplicate forward passes by collecting both:
+    - Prediction data (scores, labels, errors for metrics)
+    - Detailed data (reconstructions for visualization)
+
+    Performance improvement: ~2x faster than calling collect_predictions()
+    and collect_detailed_data() separately for all_patches mode.
+
+    Args:
+        model: Trained model
+        dataloader: Test data loader
+        config: Model configuration
+
+    Returns:
+        Tuple of (pred_data, detailed_data) where:
+        - pred_data: Dict with scores, labels, recon_errors, student_errors, discrepancies, sample_types
+        - detailed_data: Dict with teacher_errors, student_errors, discrepancies, masks,
+                        labels, point_labels, originals, teacher_recons, student_recons, sample_types
+    """
+    model.eval()
+    device = config.device
+    inference_mode = getattr(config, 'inference_mode', 'last_patch')
+    patch_size = getattr(config, 'patch_size', 10)
+    num_patches = getattr(config, 'num_patches', 10)
+
+    # Prediction data collectors
+    all_scores = []
+    all_pred_labels = []
+    all_recon_errors = []
+    all_student_errors_pred = []
+    all_discrepancies_pred = []
+    all_sample_types_pred = []
+
+    # Detailed data collectors
+    all_teacher_errors_det = []
+    all_student_errors_det = []
+    all_discrepancies_det = []
+    all_masks = []
+    all_det_labels = []
+    all_point_labels = []
+    all_originals = []
+    all_teacher_recons = []
+    all_student_recons = []
+    all_sample_types_det = []
+
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc=f"Collecting all data ({inference_mode})"):
+            sequences, last_patch_labels, point_labels, sample_types, _ = batch
+            sequences = sequences.to(device)
+            batch_size, seq_length, num_features = sequences.shape
+
+            if inference_mode == 'all_patches':
+                # All patches mode: process patches in batches for memory efficiency
+                patch_batch_size = 4
+
+                # Initialize prediction result tensors
+                patch_recon_scores = torch.zeros(batch_size, num_patches, device=device)
+                patch_student_scores = torch.zeros(batch_size, num_patches, device=device)
+                patch_disc_scores = torch.zeros(batch_size, num_patches, device=device)
+
+                # Initialize detailed result tensors
+                teacher_error_final = torch.zeros(batch_size, seq_length, device=device)
+                student_error_final = torch.zeros(batch_size, seq_length, device=device)
+                discrepancy_final = torch.zeros(batch_size, seq_length, device=device)
+                teacher_recon_final = torch.zeros_like(sequences)
+                student_recon_final = torch.zeros_like(sequences)
+
+                # Process patches in batches (SINGLE forward pass per batch)
+                for batch_start in range(0, num_patches, patch_batch_size):
+                    batch_end = min(batch_start + patch_batch_size, num_patches)
+                    current_batch_patches = batch_end - batch_start
+
+                    # Expand for current patch batch
+                    expanded = sequences.unsqueeze(1).expand(-1, current_batch_patches, -1, -1)
+                    expanded = expanded.reshape(batch_size * current_batch_patches, seq_length, num_features)
+
+                    # Create masks for current patch batch
+                    masks = torch.ones(batch_size * current_batch_patches, seq_length, device=device)
+                    for i, patch_idx in enumerate(range(batch_start, batch_end)):
+                        start_pos = patch_idx * patch_size
+                        end_pos = start_pos + patch_size
+                        masks[i::current_batch_patches, start_pos:end_pos] = 0
+
+                    # SINGLE forward pass for this batch
+                    teacher_output, student_output, _ = model(expanded, masking_ratio=0.0, mask=masks)
+
+                    # Compute errors (used for both prediction and detailed data)
+                    recon_error = ((teacher_output - expanded) ** 2).mean(dim=2)
+                    student_error = ((student_output - expanded) ** 2).mean(dim=2)
+                    discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)
+
+                    # Reshape errors
+                    recon_error_view = recon_error.view(batch_size, current_batch_patches, seq_length)
+                    student_error_view = student_error.view(batch_size, current_batch_patches, seq_length)
+                    discrepancy_view = discrepancy.view(batch_size, current_batch_patches, seq_length)
+
+                    # Reshape outputs for detailed data
+                    teacher_output_view = teacher_output.view(batch_size, current_batch_patches, seq_length, num_features)
+                    student_output_view = student_output.view(batch_size, current_batch_patches, seq_length, num_features)
+
+                    # Extract data for each patch
+                    for i, patch_idx in enumerate(range(batch_start, batch_end)):
+                        start_pos = patch_idx * patch_size
+                        end_pos = start_pos + patch_size
+
+                        # Prediction data: patch-level scores
+                        patch_recon_scores[:, patch_idx] = recon_error_view[:, i, start_pos:end_pos].mean(dim=1)
+                        patch_student_scores[:, patch_idx] = student_error_view[:, i, start_pos:end_pos].mean(dim=1)
+                        patch_disc_scores[:, patch_idx] = discrepancy_view[:, i, start_pos:end_pos].mean(dim=1)
+
+                        # Detailed data: full sequence reconstruction
+                        teacher_error_final[:, start_pos:end_pos] = recon_error_view[:, i, start_pos:end_pos]
+                        student_error_final[:, start_pos:end_pos] = student_error_view[:, i, start_pos:end_pos]
+                        discrepancy_final[:, start_pos:end_pos] = discrepancy_view[:, i, start_pos:end_pos]
+                        teacher_recon_final[:, start_pos:end_pos] = teacher_output_view[:, i, start_pos:end_pos]
+                        student_recon_final[:, start_pos:end_pos] = student_output_view[:, i, start_pos:end_pos]
+
+                    # Clear intermediate tensors
+                    del expanded, masks, teacher_output, student_output, recon_error, student_error, discrepancy
+
+                # === Prediction data processing ===
+                patch_labels = torch.zeros(batch_size, num_patches, dtype=torch.long)
+                for p_idx in range(num_patches):
+                    start_pos = p_idx * patch_size
+                    end_pos = min(start_pos + patch_size, seq_length)
+                    patch_has_anomaly = point_labels[:, start_pos:end_pos].any(dim=1)
+                    patch_labels[:, p_idx] = patch_has_anomaly.long()
+
+                scores = (patch_recon_scores + config.lambda_disc * patch_disc_scores).flatten()
+                labels_flat = patch_labels.flatten()
+                recon_flat = patch_recon_scores.flatten()
+                student_flat = patch_student_scores.flatten()
+                disc_flat = patch_disc_scores.flatten()
+
+                window_has_anomaly = (point_labels.sum(dim=1) > 0).unsqueeze(1)
+                patch_sample_types = torch.zeros_like(patch_labels)
+                patch_sample_types[patch_labels == 1] = 2
+                normal_in_anomaly_window = (patch_labels == 0) & window_has_anomaly
+                patch_sample_types[normal_in_anomaly_window] = 1
+                sample_types_expanded = patch_sample_types.flatten()
+
+                all_scores.append(scores.cpu().numpy())
+                all_pred_labels.append(labels_flat.numpy())
+                all_recon_errors.append(recon_flat.cpu().numpy())
+                all_student_errors_pred.append(student_flat.cpu().numpy())
+                all_discrepancies_pred.append(disc_flat.cpu().numpy())
+                all_sample_types_pred.append(sample_types_expanded.numpy())
+
+                # === Detailed data processing ===
+                combined_mask = torch.zeros(batch_size, seq_length, device=device)
+                all_teacher_errors_det.append(teacher_error_final.cpu().numpy())
+                all_student_errors_det.append(student_error_final.cpu().numpy())
+                all_discrepancies_det.append(discrepancy_final.cpu().numpy())
+                all_masks.append(combined_mask.cpu().numpy())
+                all_det_labels.append(last_patch_labels.numpy())
+                all_point_labels.append(point_labels.numpy())
+                all_originals.append(sequences.cpu().numpy())
+                all_teacher_recons.append(teacher_recon_final.cpu().numpy())
+                all_student_recons.append(student_recon_final.cpu().numpy())
+                all_sample_types_det.append(sample_types.numpy())
+
+            else:
+                # Last patch mode: SINGLE forward pass
+                mask = torch.ones(batch_size, seq_length, device=device)
+                mask[:, -config.mask_last_n:] = 0
+
+                teacher_output, student_output, _ = model(sequences, masking_ratio=0.0, mask=mask)
+
+                # Compute errors
+                recon_error = ((teacher_output - sequences) ** 2).mean(dim=2)
+                student_error = ((student_output - sequences) ** 2).mean(dim=2)
+                discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)
+
+                # === Prediction data ===
+                masked_positions = (mask == 0)
+                recon = (recon_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
+                student = (student_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
+                disc = (discrepancy * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
+                scores = recon + config.lambda_disc * disc
+
+                all_scores.append(scores.cpu().numpy())
+                all_pred_labels.append(last_patch_labels.numpy())
+                all_recon_errors.append(recon.cpu().numpy())
+                all_student_errors_pred.append(student.cpu().numpy())
+                all_discrepancies_pred.append(disc.cpu().numpy())
+                all_sample_types_pred.append(sample_types.numpy())
+
+                # === Detailed data ===
+                teacher_error_det = ((teacher_output - sequences) ** 2).mean(dim=-1)
+                student_error_det = ((student_output - sequences) ** 2).mean(dim=-1)
+                discrepancy_det = ((teacher_output - student_output) ** 2).mean(dim=-1)
+
+                all_teacher_errors_det.append(teacher_error_det.cpu().numpy())
+                all_student_errors_det.append(student_error_det.cpu().numpy())
+                all_discrepancies_det.append(discrepancy_det.cpu().numpy())
+                all_masks.append(mask.cpu().numpy())
+                all_det_labels.append(last_patch_labels.numpy())
+                all_point_labels.append(point_labels.numpy())
+                all_originals.append(sequences.cpu().numpy())
+                all_teacher_recons.append(teacher_output.cpu().numpy())
+                all_student_recons.append(student_output.cpu().numpy())
+                all_sample_types_det.append(sample_types.numpy())
+
+    pred_data = {
+        'scores': np.concatenate(all_scores),
+        'labels': np.concatenate(all_pred_labels),
+        'recon_errors': np.concatenate(all_recon_errors),
+        'student_errors': np.concatenate(all_student_errors_pred),
+        'discrepancies': np.concatenate(all_discrepancies_pred),
+        'sample_types': np.concatenate(all_sample_types_pred)
+    }
+
+    detailed_data = {
+        'teacher_errors': np.concatenate(all_teacher_errors_det),
+        'student_errors': np.concatenate(all_student_errors_det),
+        'discrepancies': np.concatenate(all_discrepancies_det),
+        'masks': np.concatenate(all_masks),
+        'labels': np.concatenate(all_det_labels),
+        'point_labels': np.concatenate(all_point_labels),
+        'originals': np.concatenate(all_originals),
+        'teacher_recons': np.concatenate(all_teacher_recons),
+        'student_recons': np.concatenate(all_student_recons),
+        'sample_types': np.concatenate(all_sample_types_det),
+    }
+
+    return pred_data, detailed_data
 
 
 # =============================================================================

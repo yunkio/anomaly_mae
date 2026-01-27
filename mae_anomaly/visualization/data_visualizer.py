@@ -121,7 +121,7 @@ class DataVisualizer:
         set_seed(42)
         generator = SlidingWindowTimeSeriesGenerator(
             total_length=100000,  # Larger dataset for better diversity
-            num_features=self.config.num_features,  # Use config value (must be >= 2 for point_spike)
+            num_features=self.config.num_features,
             interval_scale=1.5,
             seed=42
         )

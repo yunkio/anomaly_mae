@@ -825,8 +825,8 @@ test_dataset = SlidingWindowDataset(
 ```python
 from torch.utils.data import DataLoader
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=1024, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=1024, shuffle=False)
 
 for batch in train_loader:
     sequence, label, point_labels, sample_type, anomaly_type = batch

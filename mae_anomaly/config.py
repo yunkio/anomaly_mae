@@ -34,22 +34,22 @@ class Config:
 
     # Model parameters
     d_model: int = 64
-    nhead: int = 4
-    num_encoder_layers: int = 3
-    num_teacher_decoder_layers: int = 4
+    nhead: int = 2
+    num_encoder_layers: int = 1
+    num_teacher_decoder_layers: int = 2  # t2s1 decoder
     num_student_decoder_layers: int = 1
     num_shared_decoder_layers: int = 0  # Shared decoder layers before teacher/student decoders
     # - 0: No shared decoder (default)
     # - >0: Shared decoder trained with teacher, separate mask tokens for student
-    dim_feedforward: int = 256
+    dim_feedforward: int = 256  # 4 * d_model
     dropout: float = 0.1
-    masking_ratio: float = 0.4
+    masking_ratio: float = 0.2
     masking_strategy: str = 'patch'  # 'patch' or 'feature_wise'
     # - 'patch': Mask entire patches (all features at same time points)
     # - 'feature_wise': Mask each feature independently (different time points per feature)
-    num_patches: int = 10  # 10 patches per sequence
-    patch_size: int = 10  # seq_length / num_patches = 100 / 10 = 10
-    patchify_mode: str = 'linear'  # 'patch_cnn', 'linear'
+    num_patches: int = 10  # seq_length / patch_size (dynamically computed when window size changes)
+    patch_size: int = 10  # Fixed patch size; num_patches = seq_length / patch_size
+    patchify_mode: str = 'patch_cnn'  # 'patch_cnn', 'linear'
     # - 'patch_cnn': Patchify first, then CNN per patch (no cross-patch leakage)
     # - 'linear': Patchify then linear embedding (MAE original style, no CNN)
     mask_after_encoder: bool = False  # Standard MAE masking architecture
@@ -68,14 +68,11 @@ class Config:
     # Loss parameters
     margin: float = 0.5
     lambda_disc: float = 0.5
-    margin_type: str = 'hinge'  # 'hinge' (relu), 'softplus', 'dynamic'
-    dynamic_margin_k: float = 3.0  # k for dynamic margin (mu + k*sigma)
+    margin_type: str = 'dynamic'  # 'hinge' (relu), 'softplus', 'dynamic'
+    dynamic_margin_k: float = 1.5  # k for dynamic margin (mu + k*sigma)
     patch_level_loss: bool = True  # True=patch-level, False=window-level discrepancy loss
 
-    # Student loss parameters
-    use_student_reconstruction_loss: bool = False  # Add reconstruction loss to student
-    # - False: Student only learns via discrepancy loss (default)
-    # - True: Student also has reconstruction loss (opposite direction for anomaly)
+    # Anomaly loss parameters
     anomaly_loss_weight: float = 1.0  # Weight multiplier for anomaly discrepancy loss
     # - 1.0: Default (equal weight)
     # - 2.0/3.0/5.0: Stronger interference on anomaly samples
@@ -88,20 +85,27 @@ class Config:
     # - 'ratio_weighted': Ratio-based (recon * (1 + disc/median_disc))
 
     # Training parameters
-    batch_size: int = 32
+    batch_size: int = 1024  # Batch size for training
     num_epochs: int = 50
-    learning_rate: float = 1e-3
+    learning_rate: float = 5e-3
     weight_decay: float = 1e-5
     warmup_epochs: int = 10
-    teacher_only_warmup_epochs: int = 1  # First N epochs train teacher only (no discrepancy/student loss)
+    teacher_only_warmup_epochs: int = 3  # First N epochs train teacher only (no discrepancy/student loss)
+    use_amp: bool = True  # Mixed Precision Training (Automatic Mixed Precision)
+    # - True: Use float16 for forward pass, float32 for loss/gradients (faster on Tensor Core GPUs)
+    # - False: Use float32 everywhere (more stable, required for older GPUs)
 
     # Inference parameters
     mask_last_n: int = 10  # Last 1 patch (= patch_size)
+    inference_mode: str = 'last_patch'  # 'last_patch' or 'all_patches'
+    # - 'last_patch': Mask only last patch (faster, current behavior)
+    # - 'all_patches': Mask each patch one at a time, N forward passes (more robust)
 
     # Point-level PA%K aggregation method
-    point_aggregation_method: str = 'voting'  # 'mean', 'median', 'voting'
+    point_aggregation_method: str = 'voting'  # 'mean', 'median', 'max', 'voting'
     # - 'mean': Average of window scores for each timestep
     # - 'median': Median of window scores for each timestep
+    # - 'max': Maximum of window scores for each timestep (most sensitive)
     # - 'voting': Majority vote of binary predictions (default)
 
     # Ablation flags
@@ -124,5 +128,5 @@ def set_seed(seed: int) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
+    torch.backends.cudnn.benchmark = True  # Auto-tune convolution algorithms for speed

@@ -39,7 +39,18 @@ from .base import (
 class BestModelVisualizer:
     """Visualize best model analysis"""
 
-    def __init__(self, model, config: Config, test_loader, output_dir: str):
+    def __init__(self, model, config: Config, test_loader, output_dir: str,
+                 pred_data: Dict = None, detailed_data: Dict = None):
+        """Initialize BestModelVisualizer.
+
+        Args:
+            model: Trained model
+            config: Model configuration
+            test_loader: Test data loader
+            output_dir: Output directory for visualizations
+            pred_data: Pre-computed predictions (optional, skips GPU inference if provided)
+            detailed_data: Pre-computed detailed data (optional, skips GPU inference if provided)
+        """
         self.model = model
         self.config = config
         self.test_loader = test_loader
@@ -50,11 +61,149 @@ class BestModelVisualizer:
         self.inference_mode = getattr(config, 'inference_mode', 'last_patch')
         self.num_patches = getattr(config, 'num_patches', 10)
 
-        # Collect data
-        print("  Collecting model predictions...")
-        self.pred_data = collect_predictions(model, test_loader, config)
-        print("  Collecting detailed data...")
-        self.detailed_data = collect_detailed_data(model, test_loader, config)
+        # Collect prediction data (or use pre-computed data for efficiency)
+        if pred_data is not None:
+            self.pred_data = pred_data
+        else:
+            print("  Collecting model predictions...")
+            self.pred_data = collect_predictions(model, test_loader, config)
+
+        # === OPTIMIZATION: Lazy Loading for detailed_data ===
+        # Store pre-computed detailed_data or None for lazy loading
+        self._detailed_data = detailed_data
+        self._detailed_data_loaded = detailed_data is not None
+
+        # Compute and store threshold (only needs pred_data)
+        self._compute_threshold()
+
+        # === OPTIMIZATION: Pre-compute cached values (lazy for detailed_data-dependent caches) ===
+        self._sample_type_masks = None
+        self._init_pred_caches()
+
+        # If detailed_data was pre-computed, initialize its caches now
+        if self._detailed_data_loaded and self._detailed_data is not None:
+            self._init_detailed_caches()
+
+    @property
+    def detailed_data(self):
+        """Lazy-load detailed_data when first accessed."""
+        if not self._detailed_data_loaded:
+            print("  [Lazy] Collecting detailed data...")
+            self._detailed_data = collect_detailed_data(self.model, self.test_loader, self.config)
+            self._detailed_data_loaded = True
+            # Initialize sample type masks now that we have detailed_data
+            self._init_detailed_caches()
+        return self._detailed_data
+
+    def _init_detailed_caches(self):
+        """Initialize caches that depend on detailed_data (called lazily)."""
+        if self._detailed_data is None:
+            return
+        self._sample_type_masks = {
+            'pure_normal': self._detailed_data['sample_types'] == 0,
+            'disturbing': self._detailed_data['sample_types'] == 1,
+            'anomaly': self._detailed_data['sample_types'] == 2,
+        }
+
+    def _get_sample_type_masks(self):
+        """Get sample type masks from pred_data (patch-level, unified for all modes).
+
+        This is the canonical source for sample_type masks used in statistical visualizations.
+        For all_patches mode: (n_windows × num_patches) samples with per-patch sample_types
+        For last_patch mode: (n_windows) samples with per-window sample_types (equivalent to last-patch)
+        """
+        return self._pred_sample_type_masks
+
+    def _get_detailed_sample_type_masks(self):
+        """Get sample type masks from detailed_data (window-level, for time series indexing).
+
+        Note: This is only used for indexing into window-level detailed_data arrays.
+        For statistical analysis, use _get_sample_type_masks() instead.
+        """
+        if self._sample_type_masks is None:
+            _ = self.detailed_data  # Trigger lazy load
+        return self._sample_type_masks
+
+    def _init_pred_caches(self):
+        """Pre-compute cached values that only need pred_data (not detailed_data)."""
+        # Cache predictions
+        self._predictions = (self.pred_data['scores'] >= self.threshold).astype(int)
+
+        # Cache label masks
+        self._label_masks = {
+            'normal': self.pred_data['labels'] == 0,
+            'anomaly': self.pred_data['labels'] == 1,
+        }
+
+        # Cache sample type masks from pred_data (patch-level, unified for all modes)
+        # This is the canonical source for sample_type masks
+        self._pred_sample_type_masks = {
+            'pure_normal': self.pred_data['sample_types'] == 0,
+            'disturbing': self.pred_data['sample_types'] == 1,
+            'anomaly': self.pred_data['sample_types'] == 2,
+        }
+
+        # Cache ROC data (used in multiple plots)
+        fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
+        self._roc_data = {'fpr': fpr, 'tpr': tpr, 'thresholds': thresholds}
+        self._optimal_idx = np.argmax(tpr - fpr)
+
+    # === OPTIMIZATION: Data sampling for KDE and heatmaps ===
+    MAX_SAMPLES_KDE = 3000  # Max samples for KDE computation
+    MAX_SAMPLES_HEATMAP = 50  # Max rows for heatmap visualization
+
+    def _sample_for_kde(self, data: np.ndarray) -> np.ndarray:
+        """Sample data for KDE computation to reduce computation time."""
+        if len(data) <= self.MAX_SAMPLES_KDE:
+            return data
+        indices = np.random.choice(len(data), self.MAX_SAMPLES_KDE, replace=False)
+        return data[indices]
+
+    def _sample_for_heatmap(self, data: np.ndarray) -> np.ndarray:
+        """Sample data for heatmap visualization to reduce rendering time."""
+        if len(data) <= self.MAX_SAMPLES_HEATMAP:
+            return data
+        indices = np.random.choice(len(data), self.MAX_SAMPLES_HEATMAP, replace=False)
+        return data[indices]
+
+    def _compute_threshold(self):
+        """Compute optimal threshold from current scores using ROC analysis."""
+        from sklearn.metrics import roc_curve
+        fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
+        optimal_idx = np.argmax(tpr - fpr)
+        self.threshold = thresholds[optimal_idx]
+
+    def recompute_scores(self, scoring_mode: str):
+        """Recompute anomaly scores with different scoring mode (CPU only, fast).
+
+        This allows generating visualizations for different scoring modes without
+        re-running GPU inference. The raw recon_errors and discrepancies are preserved,
+        only the combined 'scores' are recomputed.
+
+        Args:
+            scoring_mode: One of 'default', 'adaptive', 'normalized'
+        """
+        recon = self.pred_data['recon_errors']
+        disc = self.pred_data['discrepancies']
+        lambda_disc = getattr(self.config, 'lambda_disc', 0.5)
+
+        if scoring_mode == 'default':
+            scores = recon + lambda_disc * disc
+        elif scoring_mode == 'adaptive':
+            adaptive_lambda = recon.mean() / (disc.mean() + 1e-8)
+            scores = recon + adaptive_lambda * disc
+        elif scoring_mode == 'normalized':
+            recon_z = (recon - recon.mean()) / (recon.std() + 1e-8)
+            disc_z = (disc - disc.mean()) / (disc.std() + 1e-8)
+            scores = recon_z + disc_z
+        else:
+            raise ValueError(f"Unknown scoring_mode: {scoring_mode}")
+
+        self.pred_data['scores'] = scores
+        self.config.anomaly_score_mode = scoring_mode
+
+        # Recompute threshold with new scores
+        self._compute_threshold()
 
     def _patch_idx_to_window_idx(self, patch_idx: int) -> int:
         """Convert patch-level index to window-level index for all_patches mode.
@@ -65,6 +214,48 @@ class BestModelVisualizer:
         if self.inference_mode == 'all_patches':
             return patch_idx // self.num_patches
         return patch_idx
+
+    def _get_masked_region(self, patch_idx: int, seq_len: int) -> tuple:
+        """Get the masked region (start, end) for a given patch_idx.
+
+        Args:
+            patch_idx: Index from pred_data (patch-level in all_patches mode)
+            seq_len: Length of the time series (for validation)
+
+        Returns:
+            (mask_start, mask_end): Start and end indices of the masked region
+        """
+        patch_size = self.config.patch_size
+
+        if self.inference_mode == 'all_patches':
+            # In all_patches mode, each patch_idx corresponds to masking a specific patch
+            masked_patch = patch_idx % self.num_patches
+            mask_start = masked_patch * patch_size
+            mask_end = min((masked_patch + 1) * patch_size, seq_len)
+        else:
+            # In last_patch mode, always mask the last mask_last_n points
+            mask_start = seq_len - self.config.mask_last_n
+            mask_end = seq_len
+
+        return mask_start, mask_end
+
+    def _highlight_masked_region(self, ax, patch_idx: int, seq_len: int,
+                                  color=None, alpha=0.2, label='Masked'):
+        """Highlight the masked region for a given patch_idx.
+
+        Args:
+            ax: matplotlib axis
+            patch_idx: Index from pred_data
+            seq_len: Length of the time series
+            color: Color for the shaded region (default: VIS_COLORS['masked_region'])
+            alpha: Transparency
+            label: Label for legend (set to None to skip legend)
+        """
+        if color is None:
+            color = VIS_COLORS['masked_region']
+
+        mask_start, mask_end = self._get_masked_region(patch_idx, seq_len)
+        ax.axvspan(mask_start, mask_end, alpha=alpha, color=color, label=label)
 
     def _highlight_anomaly_regions(self, ax, point_labels, color=None, alpha=0.2, label='Anomaly Region'):
         # Use VIS_COLORS if color not specified
@@ -106,11 +297,14 @@ class BestModelVisualizer:
 
     def plot_roc_curve(self):
         """Plot ROC curve"""
-        fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
+        # Use cached ROC data
+        fpr = self._roc_data['fpr']
+        tpr = self._roc_data['tpr']
+        thresholds = self._roc_data['thresholds']
         roc_auc = auc(fpr, tpr)
 
-        # Find optimal threshold
-        optimal_idx = np.argmax(tpr - fpr)
+        # Use cached optimal index
+        optimal_idx = self._optimal_idx
         optimal_threshold = thresholds[optimal_idx]
 
         fig, ax = plt.subplots(figsize=(8, 8))
@@ -133,11 +327,9 @@ class BestModelVisualizer:
 
     def plot_confusion_matrix(self):
         """Plot confusion matrix"""
-        fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
-        optimal_idx = np.argmax(tpr - fpr)
-        optimal_threshold = thresholds[optimal_idx]
-
-        predictions = (self.pred_data['scores'] >= optimal_threshold).astype(int)
+        # Use cached values
+        optimal_threshold = self._roc_data['thresholds'][self._optimal_idx]
+        predictions = self._predictions
         cm = confusion_matrix(self.pred_data['labels'], predictions)
 
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -154,7 +346,13 @@ class BestModelVisualizer:
         print("  - best_model_confusion_matrix.png")
 
     def plot_reconstruction_examples(self, num_examples: int = 3):
-        """Show reconstruction examples"""
+        """Show reconstruction examples
+
+        For all_patches mode: Shows assembled reconstruction where each position was
+        reconstructed when its patch was masked. All patches are shown as reconstructed.
+
+        For last_patch mode: Shows reconstruction of the last patch region only.
+        """
         normal_idx = np.where(self.detailed_data['labels'] == 0)[0]
         anomaly_idx = np.where(self.detailed_data['labels'] == 1)[0]
 
@@ -170,32 +368,39 @@ class BestModelVisualizer:
             original = self.detailed_data['originals'][idx, :, 0]
             teacher = self.detailed_data['teacher_recons'][idx, :, 0]
             student = self.detailed_data['student_recons'][idx, :, 0]
-            mask = self.detailed_data['masks'][idx]
             disc = self.detailed_data['discrepancies'][idx]
             point_labels = self.detailed_data['point_labels'][idx]
 
             seq_len = len(original)
             x = np.arange(seq_len)
 
-            # In all_patches mode, mask is all zeros (each patch was masked in turn)
-            # Use mask_last_n for visualization consistency
+            # Determine representative patch_idx for masked region highlighting
             if self.inference_mode == 'all_patches':
-                # Don't show masked region for all_patches mode (all positions evaluated)
-                mask_start, mask_end = seq_len, seq_len
-            else:
-                masked_region = np.where(mask == 0)[0]
-                if len(masked_region) > 0:
-                    mask_start, mask_end = masked_region[0], masked_region[-1]
+                # For all_patches mode, find the most relevant patch to highlight
+                # For anomaly samples: find patch containing anomaly
+                # For normal samples: use last patch
+                if label == 'Anomaly' and point_labels.sum() > 0:
+                    # Find first anomaly point and determine its patch
+                    anomaly_start = np.where(point_labels == 1)[0][0]
+                    highlighted_patch = anomaly_start // self.config.patch_size
                 else:
-                    mask_start, mask_end = seq_len, seq_len
+                    # For normal samples, highlight the last patch
+                    highlighted_patch = self.num_patches - 1
+                # Compute patch_idx for _highlight_masked_region
+                representative_patch_idx = idx * self.num_patches + highlighted_patch
+            else:
+                representative_patch_idx = idx  # For last_patch mode, window_idx == patch_idx
 
             # Original vs Teacher
             ax = axes[row, 0] if len(all_samples) > 1 else axes[0]
             self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly')
             ax.plot(x, original, 'b-', label='Original', alpha=0.8)
             ax.plot(x, teacher, 'g--', label='Teacher', alpha=0.8)
-            ax.axvspan(mask_start, mask_end, alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked')
-            ax.set_title(f'{label} - Original vs Teacher')
+            self._highlight_masked_region(ax, representative_patch_idx, seq_len, label='Masked')
+            if self.inference_mode == 'all_patches':
+                ax.set_title(f'{label} - Original vs Teacher (Patch {highlighted_patch})')
+            else:
+                ax.set_title(f'{label} - Original vs Teacher')
             ax.legend(fontsize=8)
 
             # Original vs Student
@@ -203,19 +408,27 @@ class BestModelVisualizer:
             self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly')
             ax.plot(x, original, 'b-', label='Original', alpha=0.8)
             ax.plot(x, student, 'r--', label='Student', alpha=0.8)
-            ax.axvspan(mask_start, mask_end, alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked')
-            ax.set_title(f'{label} - Original vs Student')
+            self._highlight_masked_region(ax, representative_patch_idx, seq_len, label='Masked')
+            if self.inference_mode == 'all_patches':
+                ax.set_title(f'{label} - Original vs Student (Patch {highlighted_patch})')
+            else:
+                ax.set_title(f'{label} - Original vs Student')
             ax.legend(fontsize=8)
 
             # Discrepancy
             ax = axes[row, 2] if len(all_samples) > 1 else axes[2]
             self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly')
             ax.plot(x, disc, color=VIS_COLORS['student'], lw=2)
-            ax.axvspan(mask_start, mask_end, alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked')
+            self._highlight_masked_region(ax, representative_patch_idx, seq_len, label='Masked')
+            if self.inference_mode == 'all_patches':
+                ax.set_title(f'{label} - Discrepancy Profile (Patch {highlighted_patch})')
+            else:
+                ax.set_title(f'{label} - Discrepancy Profile')
             ax.axhline(y=disc.mean(), color=VIS_COLORS['disturbing'], linestyle='--', label=f'Mean: {disc.mean():.4f}')
-            ax.set_title(f'{label} - Discrepancy Profile')
             ax.legend(fontsize=8)
 
+        mode_str = 'All Patches' if self.inference_mode == 'all_patches' else 'Last Patch'
+        plt.suptitle(f'Reconstruction Examples (Inference Mode: {mode_str})', fontsize=12, y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'best_model_reconstruction.png'), dpi=150, bbox_inches='tight')
         plt.close()
@@ -223,11 +436,9 @@ class BestModelVisualizer:
 
     def plot_detection_examples(self):
         """Show TP, TN, FP, FN examples with anomaly region and masked region highlighted"""
-        fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
-        optimal_idx = np.argmax(tpr - fpr)
-        threshold = thresholds[optimal_idx]
-
-        predictions = (self.pred_data['scores'] >= threshold).astype(int)
+        # Use cached values
+        threshold = self._roc_data['thresholds'][self._optimal_idx]
+        predictions = self._predictions
         labels = self.pred_data['labels']
 
         # Find examples
@@ -256,10 +467,8 @@ class BestModelVisualizer:
                 # Highlight anomaly regions first (so they appear behind the line)
                 self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly Region')
 
-                # Highlight masked region (only for last_patch mode)
-                if self.inference_mode != 'all_patches':
-                    mask_start = len(original) - self.config.mask_last_n
-                    ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked Region')
+                # Highlight masked region (works for both modes)
+                self._highlight_masked_region(ax, patch_idx, len(original), label='Masked Region')
 
                 ax.plot(x, original, color=color, lw=2, label='Signal')
                 ax.set_title(f'{title}\nScore: {self.pred_data["scores"][patch_idx]:.4f}, '
@@ -337,91 +546,6 @@ class BestModelVisualizer:
         plt.close()
         print("  - best_model_summary.png")
 
-    def plot_loss_by_anomaly_type(self, experiment_dir: str = None):
-        """Plot loss distributions by anomaly type
-
-        Args:
-            experiment_dir: Path to experiment directory containing best_model_detailed.csv
-        """
-        # Try to load detailed results from file
-        detailed_csv = None
-        if experiment_dir:
-            csv_path = os.path.join(experiment_dir, 'best_model_detailed.csv')
-            if os.path.exists(csv_path):
-                detailed_csv = pd.read_csv(csv_path)
-
-        if detailed_csv is None:
-            print("  ! Skipping loss_by_anomaly_type (no detailed CSV found)")
-            return
-
-        # Get unique anomaly types present in data
-        anomaly_types_present = detailed_csv['anomaly_type_name'].unique()
-
-        # Setup colors dynamically from base module
-        colors = get_anomaly_colors()
-
-        n_types = len(ANOMALY_TYPE_NAMES)
-        n_cols = 4
-        n_rows = (n_types + n_cols - 1) // n_cols
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4 * n_rows))
-        axes = axes.flatten()
-
-        for idx, atype in enumerate(ANOMALY_TYPE_NAMES):
-            if idx >= len(axes):
-                break
-            ax = axes[idx]
-            type_data = detailed_csv[detailed_csv['anomaly_type_name'] == atype]
-
-            if len(type_data) == 0:
-                ax.text(0.5, 0.5, f'No {atype} samples', ha='center', va='center', transform=ax.transAxes)
-                ax.set_title(atype.replace('_', ' ').title(), fontweight='bold')
-                continue
-
-            # Create violin plot for both loss types
-            data_to_plot = [
-                type_data['reconstruction_loss'].values,
-                type_data['discrepancy_loss'].values
-            ]
-
-            parts = ax.violinplot(data_to_plot, positions=[1, 2], showmeans=True, showmedians=True)
-
-            # Color the violins
-            for i, pc in enumerate(parts['bodies']):
-                pc.set_facecolor(colors.get(atype, VIS_COLORS['reference']))
-                pc.set_alpha(0.7)
-
-            ax.set_xticks([1, 2])
-            ax.set_xticklabels(['Recon Loss', 'Discrepancy'])
-            ax.set_title(f"{atype.replace('_', ' ').title()} (n={len(type_data)})", fontweight='bold')
-            ax.set_ylabel('Loss Value')
-
-            # Add statistics
-            recon_mean = type_data['reconstruction_loss'].mean()
-            disc_mean = type_data['discrepancy_loss'].mean()
-            ax.text(0.95, 0.95, f'R: {recon_mean:.4f}\nD: {disc_mean:.4f}',
-                   transform=ax.transAxes, ha='right', va='top', fontsize=9,
-                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-        # Compute global y-limits for consistent comparison across anomaly types
-        all_recon = detailed_csv['reconstruction_loss'].values
-        all_disc = detailed_csv['discrepancy_loss'].values
-        global_max = max(all_recon.max(), all_disc.max())
-        global_min = min(0, all_recon.min(), all_disc.min())
-
-        # Apply unified y-axis to all subplots
-        for idx in range(min(len(ANOMALY_TYPE_NAMES), len(axes))):
-            axes[idx].set_ylim(global_min, global_max * 1.1)
-
-        # Hide empty subplots
-        for idx in range(len(ANOMALY_TYPE_NAMES), len(axes)):
-            axes[idx].axis('off')
-
-        plt.suptitle('Loss Distribution by Anomaly Type (unified y-axis)', fontsize=14, fontweight='bold', y=1.02)
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'loss_by_anomaly_type.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-        print("  - loss_by_anomaly_type.png")
-
     def plot_performance_by_anomaly_type(self, experiment_dir: str = None):
         """Plot detection performance by anomaly type
 
@@ -450,9 +574,17 @@ class BestModelVisualizer:
         mean_scores = []
         counts = []
 
+        # Extract normal/disturbing scores for reference
+        normal_mean_score = 0.0
+        disturbing_mean_score = 0.0
+
         for atype, metrics in metrics_json.items():
             if atype == 'normal':
-                continue  # Skip normal for this plot
+                normal_mean_score = metrics.get('mean_score', 0)
+                continue  # Skip normal for detection rate plots
+            if atype == 'disturbing_normal':
+                disturbing_mean_score = metrics.get('mean_score', 0)
+                continue  # Skip disturbing for detection rate plots
             anomaly_types_original.append(atype)
             anomaly_types_display.append(atype.replace('_', '\n'))
             detection_rates.append(metrics.get('detection_rate', 0) * 100)
@@ -537,14 +669,34 @@ class BestModelVisualizer:
         ax.set_ylim(0, 115)
         ax.legend(loc='upper right', fontsize=8)
 
-        # Row 2, Col 3: Mean Anomaly Score
+        # Row 2, Col 3: Mean Anomaly Score (includes normal/disturbing reference)
         ax = axes[1, 2]
-        bars = ax.bar(anomaly_types_display, mean_scores, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
+
+        # For normalized mode, shift all scores so minimum is 0
+        scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        all_scores_for_shift = mean_scores + [normal_mean_score, disturbing_mean_score]
+        score_min = min(all_scores_for_shift) if scoring_mode == 'normalized' else 0
+
+        # Shift scores for normalized mode
+        display_scores = [s - score_min for s in mean_scores]
+        display_normal = normal_mean_score - score_min
+        display_disturbing = disturbing_mean_score - score_min
+
+        # Bar chart for anomaly types only
+        bars = ax.bar(anomaly_types_display, display_scores, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
         ax.set_ylabel('Mean Anomaly Score')
-        ax.set_title('Mean Score by Anomaly Type', fontweight='bold')
-        for bar, score in zip(bars, mean_scores):
+        title_suffix = ' (shifted to 0)' if scoring_mode == 'normalized' else ''
+        ax.set_title(f'Mean Score by Sample Type{title_suffix}', fontweight='bold')
+        for bar, score in zip(bars, display_scores):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
-                   f'{score:.4f}', ha='center', va='bottom', fontsize=7)
+                   f'{score:.4f}', ha='center', va='bottom', fontsize=6, rotation=45)
+
+        # Add dashed horizontal lines for normal and disturbing (like threshold)
+        ax.axhline(y=display_normal, color=VIS_COLORS['pure_normal'], linestyle='--', linewidth=2,
+                   label=f'Pure Normal ({display_normal:.4f})')
+        ax.axhline(y=display_disturbing, color=VIS_COLORS['disturbing'], linestyle='--', linewidth=2,
+                   label=f'Disturbing Normal ({display_disturbing:.4f})')
+        ax.legend(loc='upper right', fontsize=7)
 
         # ===== Row 3: Summary Statistics =====
         # Row 3, Col 1: Detection Rate Drop (PA%10 - PA%80)
@@ -594,171 +746,12 @@ Consistency Gap: {avg_pa10 - avg_pa80:.1f}%
         plt.close()
         print("  - performance_by_anomaly_type.png")
 
-    def plot_value_vs_pattern_comparison(self, experiment_dir: str = None):
-        """Compare detection performance: value-based vs pattern-based anomalies
+    def plot_score_distribution_by_type(self, experiment_dir: str = None):
+        """Plot violin charts comparing reconstruction and discrepancy score distributions
+        by normal and each anomaly pattern type.
 
-        Value-based anomalies (types 1-7): Values deviate from normal range
-        Pattern-based anomalies (types 8-10): Values in normal range, patterns differ
-
-        This visualization helps answer: Is the model detecting based on unusual VALUES
-        or based on unusual PATTERNS?
-
-        Args:
-            experiment_dir: Path to experiment directory containing detailed CSV and metrics JSON
-        """
-        # Load detailed CSV
-        detailed_csv = None
-        if experiment_dir:
-            csv_path = os.path.join(experiment_dir, 'best_model_detailed.csv')
-            if os.path.exists(csv_path):
-                detailed_csv = pd.read_csv(csv_path)
-
-        if detailed_csv is None:
-            print("  ! Skipping value_vs_pattern_comparison (no detailed CSV found)")
-            return
-
-        # Add category column based on ANOMALY_CATEGORY
-        def get_category(row):
-            atype_name = row['anomaly_type_name']
-            if atype_name == 'normal':
-                return 'normal'
-            atype_idx = ANOMALY_TYPE_NAMES.index(atype_name) if atype_name in ANOMALY_TYPE_NAMES else -1
-            return ANOMALY_CATEGORY.get(atype_idx, 'unknown')
-
-        detailed_csv['category'] = detailed_csv.apply(get_category, axis=1)
-
-        # Separate data by category
-        normal_data = detailed_csv[detailed_csv['category'] == 'normal']
-        value_data = detailed_csv[detailed_csv['category'] == 'value']
-        pattern_data = detailed_csv[detailed_csv['category'] == 'pattern']
-
-        if len(value_data) == 0 and len(pattern_data) == 0:
-            print("  ! Skipping value_vs_pattern_comparison (no anomaly data)")
-            return
-
-        # Create figure with 2x2 layout
-        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
-
-        # Colors for categories
-        cat_colors = {
-            'normal': VIS_COLORS['normal'],
-            'value': VIS_COLORS['anomaly'],  # Red for value-based
-            'pattern': VIS_COLORS['discrepancy']  # Blue for pattern-based
-        }
-
-        # ===== Plot 1: Score Distribution Comparison =====
-        ax = axes[0, 0]
-        if len(normal_data) > 0:
-            ax.hist(normal_data['total_loss'], bins=50, alpha=0.5, label=f'Normal (n={len(normal_data)})',
-                   color=cat_colors['normal'], density=True)
-        if len(value_data) > 0:
-            ax.hist(value_data['total_loss'], bins=50, alpha=0.5, label=f'Value-based (n={len(value_data)})',
-                   color=cat_colors['value'], density=True)
-        if len(pattern_data) > 0:
-            ax.hist(pattern_data['total_loss'], bins=50, alpha=0.5, label=f'Pattern-based (n={len(pattern_data)})',
-                   color=cat_colors['pattern'], density=True)
-        ax.set_xlabel('Anomaly Score')
-        ax.set_ylabel('Density')
-        ax.set_title('Score Distribution: Value vs Pattern Anomalies', fontweight='bold')
-        ax.legend()
-
-        # ===== Plot 2: Box Plot Comparison =====
-        ax = axes[0, 1]
-        categories = []
-        scores = []
-        for cat_name, cat_data in [('Normal', normal_data), ('Value-based', value_data), ('Pattern-based', pattern_data)]:
-            if len(cat_data) > 0:
-                categories.extend([cat_name] * len(cat_data))
-                scores.extend(cat_data['total_loss'].values)
-
-        if len(categories) > 0:
-            plot_df = pd.DataFrame({'Category': categories, 'Score': scores})
-            box_colors = [cat_colors['normal'], cat_colors['value'], cat_colors['pattern']]
-            box_colors = box_colors[:len(plot_df['Category'].unique())]
-            bp = ax.boxplot([plot_df[plot_df['Category'] == cat]['Score'].values
-                            for cat in plot_df['Category'].unique()],
-                           labels=plot_df['Category'].unique(), patch_artist=True)
-            for patch, color in zip(bp['boxes'], box_colors):
-                patch.set_facecolor(color)
-                patch.set_alpha(0.7)
-
-        ax.set_ylabel('Anomaly Score')
-        ax.set_title('Score Comparison by Category', fontweight='bold')
-
-        # ===== Plot 3: Detection Rate Bar Chart =====
-        ax = axes[1, 0]
-        # Calculate detection rates using threshold from self.threshold
-        threshold = self.threshold
-
-        detection_rates = []
-        category_names = []
-        sample_counts = []
-
-        for cat_name, cat_data, cat_key in [('Normal\n(FPR)', normal_data, 'normal'),
-                                              ('Value-based', value_data, 'value'),
-                                              ('Pattern-based', pattern_data, 'pattern')]:
-            if len(cat_data) > 0:
-                if cat_key == 'normal':
-                    # For normal, detection rate means FPR (false positives)
-                    rate = (cat_data['total_loss'] >= threshold).mean() * 100
-                else:
-                    # For anomalies, detection rate means TPR
-                    rate = (cat_data['total_loss'] >= threshold).mean() * 100
-                detection_rates.append(rate)
-                category_names.append(cat_name)
-                sample_counts.append(len(cat_data))
-
-        if len(category_names) > 0:
-            colors = [cat_colors.get('normal' if 'Normal' in cat else 'value' if 'Value' in cat else 'pattern', 'gray')
-                     for cat in category_names]
-            bars = ax.bar(category_names, detection_rates, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
-
-            for bar, rate, count in zip(bars, detection_rates, sample_counts):
-                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
-                       f'{rate:.1f}%\n(n={count})', ha='center', va='bottom', fontsize=10)
-
-        ax.set_ylabel('Detection Rate (%)')
-        ax.set_title('Detection Rate Comparison\n(Value-based vs Pattern-based)', fontweight='bold')
-        ax.set_ylim(0, 115)
-
-        # ===== Plot 4: Mean Score Components =====
-        ax = axes[1, 1]
-        categories_plot = []
-        recon_means = []
-        disc_means = []
-
-        for cat_name, cat_data in [('Normal', normal_data), ('Value-based', value_data), ('Pattern-based', pattern_data)]:
-            if len(cat_data) > 0:
-                categories_plot.append(cat_name)
-                recon_means.append(cat_data['reconstruction_loss'].mean())
-                disc_means.append(cat_data['discrepancy_loss'].mean())
-
-        if len(categories_plot) > 0:
-            x = np.arange(len(categories_plot))
-            width = 0.35
-            ax.bar(x - width/2, recon_means, width, label='Reconstruction', color=VIS_COLORS['reconstruction'], alpha=0.8)
-            ax.bar(x + width/2, disc_means, width, label='Discrepancy', color=VIS_COLORS['discrepancy'], alpha=0.8)
-            ax.set_xticks(x)
-            ax.set_xticklabels(categories_plot)
-            ax.set_ylabel('Mean Loss')
-            ax.set_title('Loss Components: Value vs Pattern Anomalies', fontweight='bold')
-            ax.legend()
-
-        # Add annotation explaining the significance
-        fig.text(0.5, 0.02,
-                'Value-based: Anomalies with unusual VALUES (types 1-7: spike, memory_leak, etc.)\n'
-                'Pattern-based: Anomalies with unusual PATTERNS but normal values (types 8-10: correlation_inversion, temporal_flatline, frequency_shift)',
-                ha='center', fontsize=10, style='italic',
-                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
-
-        plt.suptitle('Value-based vs Pattern-based Anomaly Detection', fontsize=14, fontweight='bold', y=0.98)
-        plt.tight_layout(rect=[0, 0.08, 1, 0.96])
-        plt.savefig(os.path.join(self.output_dir, 'value_vs_pattern_comparison.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-        print("  - value_vs_pattern_comparison.png")
-
-    def plot_loss_scatter_by_anomaly_type(self, experiment_dir: str = None):
-        """Scatter plot of reconstruction vs discrepancy loss colored by anomaly type
+        Creates subplots for each pattern type, with each subplot showing both
+        reconstruction score and discrepancy score (with scoring mode applied) as violins.
 
         Args:
             experiment_dir: Path to experiment directory containing best_model_detailed.csv
@@ -770,163 +763,149 @@ Consistency Gap: {avg_pa10 - avg_pa80:.1f}%
                 detailed_csv = pd.read_csv(csv_path)
 
         if detailed_csv is None:
-            print("  ! Skipping loss_scatter_by_anomaly_type (no detailed CSV found)")
+            print("  ! Skipping score_distribution_by_type (no detailed CSV found)")
             return
 
-        # Setup colors dynamically from base module
-        colors = get_anomaly_colors()
+        # Get anomaly type names including normal
+        from mae_anomaly import SLIDING_ANOMALY_TYPE_NAMES
+        anomaly_colors = get_anomaly_colors()
 
-        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        # Prepare data for violin plots
+        # Order: normal first, then anomaly types in SLIDING_ANOMALY_TYPE_NAMES order
+        type_order = ['normal'] + [name for name in SLIDING_ANOMALY_TYPE_NAMES[1:]]
+        type_order = [t for t in type_order if t in detailed_csv['anomaly_type_name'].unique()]
 
-        # Left: All types scatter
-        ax = axes[0]
-        for atype in ANOMALY_TYPE_NAMES:
+        if len(type_order) == 0:
+            print("  ! Skipping score_distribution_by_type (no anomaly types found)")
+            return
+
+        # Get scoring mode and compute weighted scores
+        scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        lambda_disc = getattr(self.config, 'lambda_disc', 0.5)
+
+        # Compute scores based on scoring mode
+        recon_raw = detailed_csv['reconstruction_loss'].values
+        disc_raw = detailed_csv['discrepancy_loss'].values
+
+        if scoring_mode == 'default':
+            # Total score = recon + lambda_disc * disc
+            recon_scores = recon_raw
+            disc_scores = lambda_disc * disc_raw
+        elif scoring_mode == 'adaptive':
+            # Total score = recon + adaptive_lambda * disc
+            # where adaptive_lambda = mean(recon) / mean(disc)
+            recon_mean = recon_raw.mean() + 1e-8
+            disc_mean = disc_raw.mean() + 1e-8
+            adaptive_weight = recon_mean / disc_mean
+            recon_scores = recon_raw
+            disc_scores = adaptive_weight * disc_raw
+        else:  # normalized
+            # Total score = recon_z + disc_z (same as evaluator.py)
+            # Note: z-scores can be negative, which is correct
+            recon_mean, recon_std = recon_raw.mean(), recon_raw.std() + 1e-8
+            disc_mean, disc_std = disc_raw.mean(), disc_raw.std() + 1e-8
+            recon_scores = (recon_raw - recon_mean) / recon_std
+            disc_scores = (disc_raw - disc_mean) / disc_std
+
+        detailed_csv['recon_score'] = recon_scores
+        detailed_csv['disc_score'] = disc_scores
+
+        # Create figure with single horizontal row for easy comparison
+        n_types = len(type_order)
+        fig, axes = plt.subplots(1, n_types, figsize=(3 * n_types, 5), sharey=True)
+        if n_types == 1:
+            axes = [axes]
+
+        # Find global y-axis limits (0.01 ~ 99.99 percentile for near-full range)
+        all_scores = np.concatenate([recon_scores, disc_scores])
+        y_min = np.percentile(all_scores, 0.01)
+        y_max = np.percentile(all_scores, 99.99)
+        y_margin = (y_max - y_min) * 0.05  # 5% margin on each side
+        y_min = y_min - y_margin
+        y_max = y_max + y_margin
+
+        for idx, atype in enumerate(type_order):
+            ax = axes[idx]
             type_data = detailed_csv[detailed_csv['anomaly_type_name'] == atype]
-            if len(type_data) > 0:
-                ax.scatter(type_data['reconstruction_loss'], type_data['discrepancy_loss'],
-                          alpha=0.6, label=atype.replace('_', ' ').title(),
-                          color=colors.get(atype, VIS_COLORS['reference']), s=30)
+            type_color = anomaly_colors.get(atype, VIS_COLORS['reference'])
 
-        ax.set_xlabel('Reconstruction Loss')
-        ax.set_ylabel('Discrepancy Loss')
-        ax.set_title('Loss Components by Anomaly Type', fontweight='bold')
-        ax.legend(loc='upper right', fontsize=8)
+            if len(type_data) == 0:
+                ax.set_visible(False)
+                continue
 
-        # Right: Normal vs All Anomalies
-        ax = axes[1]
-        normal_data = detailed_csv[detailed_csv['anomaly_type_name'] == 'normal']
-        anomaly_data = detailed_csv[detailed_csv['anomaly_type_name'] != 'normal']
+            # Prepare data for violin plot
+            plot_data = pd.DataFrame({
+                'Score': np.concatenate([type_data['recon_score'].values, type_data['disc_score'].values]),
+                'Component': ['Recon'] * len(type_data) + ['Disc'] * len(type_data)
+            })
 
-        ax.scatter(normal_data['reconstruction_loss'], normal_data['discrepancy_loss'],
-                  alpha=0.5, label='Normal', color=VIS_COLORS['normal'], s=30)
-        ax.scatter(anomaly_data['reconstruction_loss'], anomaly_data['discrepancy_loss'],
-                  alpha=0.5, label='Anomaly', color=VIS_COLORS['anomaly'], s=30)
+            # Draw violin plot with both components
+            sns.violinplot(x='Component', y='Score', data=plot_data, ax=ax,
+                          palette={'Recon': VIS_COLORS['normal'], 'Disc': VIS_COLORS['anomaly']},
+                          inner='box', cut=0)
 
-        ax.set_xlabel('Reconstruction Loss')
-        ax.set_ylabel('Discrepancy Loss')
-        ax.set_title('Normal vs Anomaly Loss Distribution', fontweight='bold')
-        ax.legend(loc='upper right')
+            # Set title and labels
+            display_name = atype.replace('_', ' ').title()
+            ax.set_title(f'{display_name}\n(n={len(type_data)})', fontweight='bold', fontsize=10,
+                        color=type_color)
+            ax.set_xlabel('')
+            ax.set_ylabel('Score' if idx == 0 else '')
+            ax.set_ylim(y_min, y_max)
 
-        plt.suptitle('Loss Scatter Analysis', fontsize=14, fontweight='bold', y=1.02)
+            # Add mean values as text (positioned near top of plot)
+            recon_mean = type_data['recon_score'].mean()
+            disc_mean = type_data['disc_score'].mean()
+            text_y = y_max - (y_max - y_min) * 0.05  # 5% from top
+            ax.text(0, text_y, f'{recon_mean:.4f}', ha='center', va='top', fontsize=8, color=VIS_COLORS['normal'])
+            ax.text(1, text_y, f'{disc_mean:.4f}', ha='center', va='top', fontsize=8, color=VIS_COLORS['anomaly'])
+
+        # Add legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor=VIS_COLORS['normal'], label='Recon Score'),
+            Patch(facecolor=VIS_COLORS['anomaly'], label='Disc Score')
+        ]
+        fig.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(0.99, 0.99))
+
+        scoring_label = {'default': 'Default', 'adaptive': 'Adaptive', 'normalized': 'Normalized'}.get(scoring_mode, scoring_mode)
+        plt.suptitle(f'Score Distribution by Anomaly Type ({scoring_label} Scoring)\n'
+                    '(Reconstruction vs Discrepancy Score per Pattern)',
+                    fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'loss_scatter_by_anomaly_type.png'), dpi=150, bbox_inches='tight')
+        plt.savefig(os.path.join(self.output_dir, 'score_distribution_by_type.png'), dpi=150, bbox_inches='tight')
         plt.close()
-        print("  - loss_scatter_by_anomaly_type.png")
-
-    def plot_sample_type_analysis(self, experiment_dir: str = None):
-        """Analyze performance across sample types (pure_normal, disturbing_normal, anomaly)
-
-        Args:
-            experiment_dir: Path to experiment directory containing best_model_detailed.csv
-        """
-        detailed_csv = None
-        if experiment_dir:
-            csv_path = os.path.join(experiment_dir, 'best_model_detailed.csv')
-            if os.path.exists(csv_path):
-                detailed_csv = pd.read_csv(csv_path)
-
-        if detailed_csv is None:
-            print("  ! Skipping sample_type_analysis (no detailed CSV found)")
-            return
-
-        # Use dynamic sample type names and colors from base module
-        sample_type_names = SAMPLE_TYPE_NAMES
-        colors = SAMPLE_TYPE_COLORS
-
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-        # 1. Score distribution by sample type
-        ax = axes[0, 0]
-        for stype in [0, 1, 2]:
-            type_data = detailed_csv[detailed_csv['sample_type'] == stype]
-            if len(type_data) > 0:
-                ax.hist(type_data['total_loss'], bins=30, alpha=0.6,
-                       label=f"{sample_type_names[stype]} (n={len(type_data)})",
-                       color=colors[stype], density=True)
-        ax.set_xlabel('Total Loss (Anomaly Score)')
-        ax.set_ylabel('Density')
-        ax.set_title('Score Distribution by Sample Type', fontweight='bold')
-        ax.legend()
-
-        # 2. Box plot by sample type
-        ax = axes[0, 1]
-        box_data = []
-        box_labels = []
-        for stype in [0, 1, 2]:
-            type_data = detailed_csv[detailed_csv['sample_type'] == stype]
-            if len(type_data) > 0:
-                box_data.append(type_data['total_loss'].values)
-                box_labels.append(sample_type_names[stype])
-
-        if box_data:
-            bp = ax.boxplot(box_data, labels=box_labels, patch_artist=True)
-            for i, patch in enumerate(bp['boxes']):
-                patch.set_facecolor(colors[i])
-                patch.set_alpha(0.7)
-        ax.set_ylabel('Total Loss')
-        ax.set_title('Score Box Plot by Sample Type', fontweight='bold')
-
-        # 3. Reconstruction vs Discrepancy by sample type
-        ax = axes[1, 0]
-        for stype in [0, 1, 2]:
-            type_data = detailed_csv[detailed_csv['sample_type'] == stype]
-            if len(type_data) > 0:
-                ax.scatter(type_data['reconstruction_loss'], type_data['discrepancy_loss'],
-                          alpha=0.5, label=sample_type_names[stype], color=colors[stype], s=30)
-        ax.set_xlabel('Reconstruction Loss')
-        ax.set_ylabel('Discrepancy Loss')
-        ax.set_title('Loss Components by Sample Type', fontweight='bold')
-        ax.legend()
-
-        # 4. Mean losses comparison
-        ax = axes[1, 1]
-        x = np.arange(3)
-        width = 0.35
-
-        recon_means = []
-        disc_means = []
-        labels = []
-
-        for stype in [0, 1, 2]:
-            type_data = detailed_csv[detailed_csv['sample_type'] == stype]
-            if len(type_data) > 0:
-                recon_means.append(type_data['reconstruction_loss'].mean())
-                disc_means.append(type_data['discrepancy_loss'].mean())
-                labels.append(sample_type_names[stype])
-
-        if recon_means:
-            x = np.arange(len(labels))
-            ax.bar(x - width/2, recon_means, width, label='Reconstruction', color=VIS_COLORS['normal'], alpha=0.8)
-            ax.bar(x + width/2, disc_means, width, label='Discrepancy', color=VIS_COLORS['anomaly'], alpha=0.8)
-            ax.set_xticks(x)
-            ax.set_xticklabels(labels)
-        ax.set_ylabel('Mean Loss')
-        ax.set_title('Mean Losses by Sample Type', fontweight='bold')
-        ax.legend()
-
-        plt.suptitle('Sample Type Analysis\n(Pure Normal = completely normal, '
-                    'Disturbing Normal = anomaly outside last patch, Anomaly = anomaly in last patch)',
-                    fontsize=12, fontweight='bold', y=1.02)
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'sample_type_analysis.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-        print("  - sample_type_analysis.png")
+        print("  - score_distribution_by_type.png")
 
     def plot_pure_vs_disturbing_normal(self):
-        """Compare pure normal vs disturbing normal in detail"""
-        pure_normal_mask = self.detailed_data['sample_types'] == 0
-        disturbing_mask = self.detailed_data['sample_types'] == 1
-        anomaly_mask = self.detailed_data['sample_types'] == 2
+        """Compare pure normal vs disturbing normal in detail
 
-        mask_inverse = 1 - self.detailed_data['masks']
+        Uses patch-level data from pred_data for unified analysis across all inference modes.
+        sample_types are computed per-patch:
+        - pure_normal (0): normal patch in normal window
+        - disturbing (1): normal patch in anomaly-containing window
+        - anomaly (2): patch containing anomaly
+        """
+        # Use patch-level sample type masks from pred_data
+        masks = self._get_sample_type_masks()
+        pure_normal_mask = masks['pure_normal']
+        disturbing_mask = masks['disturbing']
+        anomaly_mask = masks['anomaly']
 
-        # Compute scores for each sample type
+        # Use pred_data for patch-level statistics (unified for all inference modes)
+        # recon_errors = teacher reconstruction error (teacher vs original)
+        # student_errors = student reconstruction error (student vs original)
+        # discrepancies = teacher-student difference
+        teacher_errors = self.pred_data['recon_errors']
+        student_errors = self.pred_data['student_errors']
+        discrepancies = self.pred_data['discrepancies']
+
+        # Compute scores for each sample type using pred_data
         def compute_scores(mask):
-            teacher_err = (self.detailed_data['teacher_errors'][mask] * mask_inverse[mask]).sum(axis=1) / (mask_inverse[mask].sum(axis=1) + 1e-8)
-            student_err = (self.detailed_data['student_errors'][mask] * mask_inverse[mask]).sum(axis=1) / (mask_inverse[mask].sum(axis=1) + 1e-8)
-            disc = (self.detailed_data['discrepancies'][mask] * mask_inverse[mask]).sum(axis=1) / (mask_inverse[mask].sum(axis=1) + 1e-8)
-            total = teacher_err + self.config.lambda_disc * disc
-            return teacher_err, student_err, disc, total
+            teacher = teacher_errors[mask]
+            student = student_errors[mask]
+            disc = discrepancies[mask]
+            total = teacher + self.config.lambda_disc * disc
+            return teacher, student, disc, total
 
         pure_teacher, pure_student, pure_disc, pure_total = compute_scores(pure_normal_mask)
         dist_teacher, dist_student, dist_disc, dist_total = compute_scores(disturbing_mask)
@@ -1033,7 +1012,7 @@ Separation Analysis:
                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
 
         plt.suptitle('Pure Normal vs Disturbing Normal Comparison\n'
-                    '(Disturbing Normal = anomaly exists but NOT in last patch)',
+                    '(Disturbing = normal patch in anomaly-containing window)',
                     fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'pure_vs_disturbing_normal.png'), dpi=150, bbox_inches='tight')
@@ -1041,113 +1020,50 @@ Separation Analysis:
         print("  - pure_vs_disturbing_normal.png")
 
     def plot_discrepancy_trend(self):
-        """Plot discrepancy trends across time steps
+        """Plot discrepancy analysis using patch-level data
 
-        Note: Discrepancy is computed on ALL timesteps, but only the last mask_last_n
-        positions are masked during evaluation. At unmasked positions, teacher-student
-        discrepancy should be similar across sample types. The key difference appears
-        in the MASKED region (last patch).
+        Uses patch-level data from pred_data for unified analysis across all inference modes.
+        Each sample is a prediction unit (patch in all_patches mode, window in last_patch mode).
+
+        sample_types are computed per-patch:
+        - pure_normal (0): normal patch in normal window
+        - disturbing (1): normal patch in anomaly-containing window
+        - anomaly (2): patch containing anomaly
         """
-        # Select representative samples
-        pure_normal_mask = self.detailed_data['sample_types'] == 0
-        disturbing_mask = self.detailed_data['sample_types'] == 1
-        anomaly_mask = self.detailed_data['sample_types'] == 2
+        # Use patch-level sample type masks from pred_data
+        masks = self._get_sample_type_masks()
+        pure_normal_mask = masks['pure_normal']
+        disturbing_mask = masks['disturbing']
+        anomaly_mask = masks['anomaly']
 
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-        seq_length = self.detailed_data['discrepancies'].shape[1]
-        mask_last_n = getattr(self.config, 'mask_last_n', 10)
-        t = np.arange(seq_length)
+        # Get patch-level discrepancies from pred_data
+        discrepancies = self.pred_data['discrepancies']
+        pure_disc = discrepancies[pure_normal_mask]
+        dist_disc = discrepancies[disturbing_mask]
+        anom_disc = discrepancies[anomaly_mask]
 
-        # Get data
-        pure_disc = self.detailed_data['discrepancies'][pure_normal_mask]
-        dist_disc = self.detailed_data['discrepancies'][disturbing_mask]
-        anom_disc = self.detailed_data['discrepancies'][anomaly_mask]
-
-        # 1. Mean discrepancy with std bands - FOCUSED ON LAST PATCH
+        # 1. Discrepancy histogram by sample type
         ax = axes[0, 0]
+        bins = np.linspace(0, max(discrepancies.max(), 0.1), 50)
 
-        pure_mean = pure_disc.mean(axis=0)
-        dist_mean = dist_disc.mean(axis=0)
-        anom_mean = anom_disc.mean(axis=0)
+        ax.hist(pure_disc, bins=bins, alpha=0.6, label=f'Pure Normal (n={len(pure_disc)})',
+                color=VIS_COLORS['normal'], density=True)
+        ax.hist(dist_disc, bins=bins, alpha=0.6, label=f'Disturbing (n={len(dist_disc)})',
+                color=VIS_COLORS['disturbing'], density=True)
+        ax.hist(anom_disc, bins=bins, alpha=0.6, label=f'Anomaly (n={len(anom_disc)})',
+                color=VIS_COLORS['anomaly'], density=True)
 
-        pure_std = pure_disc.std(axis=0)
-        dist_std = dist_disc.std(axis=0)
-        anom_std = anom_disc.std(axis=0)
+        ax.set_xlabel('Discrepancy (Teacher-Student)')
+        ax.set_ylabel('Density')
+        ax.set_title('Discrepancy Distribution by Sample Type\n(Per-Patch Level)', fontweight='bold')
+        ax.legend(fontsize=9)
 
-        # Plot with std bands
-        ax.plot(t, pure_mean, label=f'Pure Normal (n={pure_normal_mask.sum()})', color=VIS_COLORS['normal'], lw=2)
-        ax.fill_between(t, pure_mean - pure_std, pure_mean + pure_std, color=VIS_COLORS['normal'], alpha=0.2)
-
-        ax.plot(t, dist_mean, label=f'Disturbing Normal (n={disturbing_mask.sum()})', color=VIS_COLORS['disturbing'], lw=2)
-        ax.fill_between(t, dist_mean - dist_std, dist_mean + dist_std, color=VIS_COLORS['disturbing'], alpha=0.2)
-
-        ax.plot(t, anom_mean, label=f'Anomaly (n={anomaly_mask.sum()})', color=VIS_COLORS['anomaly'], lw=2)
-        ax.fill_between(t, anom_mean - anom_std, anom_mean + anom_std, color=VIS_COLORS['anomaly'], alpha=0.2)
-
-        # Highlight masked region (last patch)
-        ax.axvspan(seq_length - mask_last_n, seq_length, alpha=0.3, color=VIS_COLORS['masked_region'], label='Masked Region')
-
-        ax.set_xlabel('Time Step')
-        ax.set_ylabel('Mean Discrepancy (±1 std)')
-        ax.set_title('Discrepancy Trend by Sample Type\n(Shaded: ±1 std)', fontweight='bold')
-        ax.legend(fontsize=8)
-
-        # 2. ZOOMED IN: Last Patch Region Only
+        # 2. Box plot comparison
         ax = axes[0, 1]
-        t_last = np.arange(seq_length - mask_last_n, seq_length)
-
-        pure_last = pure_disc[:, -mask_last_n:]
-        dist_last = dist_disc[:, -mask_last_n:]
-        anom_last = anom_disc[:, -mask_last_n:]
-
-        # Use consistent colors from VIS_COLORS (Normal=blue, Anomaly=red, Disturbing=orange)
-        ax.plot(t_last, pure_last.mean(axis=0), label='Pure Normal',
-               color=VIS_COLORS['normal'], lw=2, marker='o', ms=4)
-        ax.fill_between(t_last, pure_last.mean(axis=0) - pure_last.std(axis=0),
-                       pure_last.mean(axis=0) + pure_last.std(axis=0), color=VIS_COLORS['normal'], alpha=0.2)
-
-        ax.plot(t_last, dist_last.mean(axis=0), label='Disturbing Normal',
-               color=VIS_COLORS['disturbing'], lw=2, marker='s', ms=4)
-        ax.fill_between(t_last, dist_last.mean(axis=0) - dist_last.std(axis=0),
-                       dist_last.mean(axis=0) + dist_last.std(axis=0), color=VIS_COLORS['disturbing'], alpha=0.2)
-
-        ax.plot(t_last, anom_last.mean(axis=0), label='Anomaly',
-               color=VIS_COLORS['anomaly'], lw=2, marker='^', ms=4)
-        ax.fill_between(t_last, anom_last.mean(axis=0) - anom_last.std(axis=0),
-                       anom_last.mean(axis=0) + anom_last.std(axis=0), color=VIS_COLORS['anomaly'], alpha=0.2)
-
-        ax.set_xlabel('Time Step')
-        ax.set_ylabel('Mean Discrepancy')
-        ax.set_title(f'ZOOMED: Last {mask_last_n} Steps (Masked Region)\nThis is where differences matter!', fontweight='bold')
-        ax.legend()
-
-        # 3. Discrepancy heatmap comparison (side by side: normal vs anomaly)
-        ax = axes[1, 0]
-
-        # Take 25 samples each for comparison
-        n_samples = min(25, pure_normal_mask.sum(), anomaly_mask.sum())
-        combined = np.vstack([pure_disc[:n_samples], anom_disc[:n_samples]])
-        combined_labels = ['Normal'] * n_samples + ['Anomaly'] * n_samples
-
-        sns.heatmap(combined, ax=ax, cmap='Reds', cbar_kws={'label': 'Discrepancy'})
-        ax.axvline(x=seq_length - mask_last_n, color='white', linestyle='--', lw=2)
-        ax.axhline(y=n_samples, color='white', linestyle='-', lw=3)
-        ax.text(seq_length - mask_last_n - 5, n_samples/2, 'Normal', ha='right', va='center', fontsize=10, color='white', fontweight='bold')
-        ax.text(seq_length - mask_last_n - 5, n_samples + n_samples/2, 'Anomaly', ha='right', va='center', fontsize=10, color='white', fontweight='bold')
-        ax.set_xlabel('Time Step')
-        ax.set_ylabel('Sample Index')
-        ax.set_title('Discrepancy Heatmap: Normal vs Anomaly', fontweight='bold')
-
-        # 4. Last patch discrepancy distribution (bar chart for clarity)
-        ax = axes[1, 1]
-        last_patch_pure = pure_disc[:, -mask_last_n:].mean(axis=1)
-        last_patch_dist = dist_disc[:, -mask_last_n:].mean(axis=1)
-        last_patch_anom = anom_disc[:, -mask_last_n:].mean(axis=1)
-
-        # Box plot for better comparison
-        data_to_plot = [last_patch_pure, last_patch_dist, last_patch_anom]
-        labels = ['Pure Normal', 'Disturbing Normal', 'Anomaly']
+        data_to_plot = [pure_disc, dist_disc, anom_disc]
+        labels = ['Pure\nNormal', 'Disturbing\nNormal', 'Anomaly']
         sample_colors = [VIS_COLORS['normal'], VIS_COLORS['disturbing'], VIS_COLORS['anomaly']]
 
         bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True)
@@ -1156,22 +1072,75 @@ Separation Analysis:
             patch.set_alpha(0.6)
 
         # Add mean markers
-        means = [d.mean() for d in data_to_plot]
+        means = [d.mean() if len(d) > 0 else 0 for d in data_to_plot]
         ax.scatter([1, 2, 3], means, color=VIS_COLORS['baseline'], marker='D', s=50, zorder=5, label='Mean')
 
-        ax.set_ylabel('Mean Discrepancy (Last Patch)')
-        ax.set_title('Last Patch Discrepancy Distribution\n(Masked Region Only)', fontweight='bold')
+        ax.set_ylabel('Discrepancy')
+        ax.set_title('Discrepancy Box Plot by Sample Type', fontweight='bold')
+        ax.legend()
 
-        # Add statistics text
-        stats_text = f"Mean ± Std:\n"
-        stats_text += f"Pure Normal: {means[0]:.4f} ± {last_patch_pure.std():.4f}\n"
-        stats_text += f"Disturbing: {means[1]:.4f} ± {last_patch_dist.std():.4f}\n"
-        stats_text += f"Anomaly: {means[2]:.4f} ± {last_patch_anom.std():.4f}"
-        ax.text(0.98, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
-               verticalalignment='top', horizontalalignment='right',
-               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        # 3. Discrepancy CDF comparison
+        ax = axes[1, 0]
 
-        plt.suptitle('Discrepancy Trend Analysis (Teacher-Student Difference)', fontsize=14, fontweight='bold', y=1.02)
+        for data, label, color in [(pure_disc, 'Pure Normal', VIS_COLORS['normal']),
+                                    (dist_disc, 'Disturbing', VIS_COLORS['disturbing']),
+                                    (anom_disc, 'Anomaly', VIS_COLORS['anomaly'])]:
+            if len(data) > 0:
+                sorted_data = np.sort(data)
+                cdf = np.arange(1, len(sorted_data) + 1) / len(sorted_data)
+                ax.plot(sorted_data, cdf, label=label, color=color, lw=2)
+
+        ax.set_xlabel('Discrepancy')
+        ax.set_ylabel('Cumulative Probability')
+        ax.set_title('Discrepancy CDF by Sample Type', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # 4. Statistics summary
+        ax = axes[1, 1]
+        ax.axis('off')
+
+        def safe_stats(arr):
+            if len(arr) == 0:
+                return 0, 0, 0, 0, 0
+            return len(arr), arr.mean(), arr.std(), np.median(arr), arr.max()
+
+        n_pure, mean_pure, std_pure, med_pure, max_pure = safe_stats(pure_disc)
+        n_dist, mean_dist, std_dist, med_dist, max_dist = safe_stats(dist_disc)
+        n_anom, mean_anom, std_anom, med_anom, max_anom = safe_stats(anom_disc)
+
+        stats_text = f"""
+Discrepancy Analysis (Per-Patch Level)
+══════════════════════════════════════════════════════
+
+Sample Counts:
+  • Pure Normal:      {n_pure:>8}
+  • Disturbing:       {n_dist:>8}
+  • Anomaly:          {n_anom:>8}
+
+Mean Discrepancy:
+  • Pure Normal:      {mean_pure:.6f} ± {std_pure:.6f}
+  • Disturbing:       {mean_dist:.6f} ± {std_dist:.6f}
+  • Anomaly:          {mean_anom:.6f} ± {std_anom:.6f}
+
+Median Discrepancy:
+  • Pure Normal:      {med_pure:.6f}
+  • Disturbing:       {med_dist:.6f}
+  • Anomaly:          {med_anom:.6f}
+
+Separation Ratios:
+  • Anom/Pure:        {mean_anom / (mean_pure + 1e-8):.2f}x
+  • Anom/Disturbing:  {mean_anom / (mean_dist + 1e-8):.2f}x
+  • Disturbing/Pure:  {mean_dist / (mean_pure + 1e-8):.2f}x
+        """
+
+        ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
+               verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+
+        mode_str = self.inference_mode
+        plt.suptitle(f'Discrepancy Analysis (Teacher-Student Difference)\nInference Mode: {mode_str}',
+                    fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'discrepancy_trend.png'), dpi=150, bbox_inches='tight')
         plt.close()
@@ -1187,12 +1156,12 @@ Separation Analysis:
         - False Negative (missed anomaly)
         - For each anomaly type (spike, memory_leak, noise, drift, network_congestion)
         """
-        # Get predictions using pred_data (has scores)
+        # Get predictions using pred_data (has scores and patch-level sample_types)
         threshold = self._get_optimal_threshold()
         scores = self._get_scores()
         predictions = (scores >= threshold).astype(int)
         labels = self.pred_data['labels']
-        sample_types = self.detailed_data['sample_types']
+        sample_types = self.pred_data['sample_types']  # patch-level sample_types
 
         # Find examples for each category
         tp_idx = np.where((labels == 1) & (predictions == 1))[0]
@@ -1237,9 +1206,7 @@ Separation Analysis:
             anomaly_region = np.where(point_labels == 1)[0]
             if len(anomaly_region) > 0:
                 ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'], label='Anomaly')
-            if self.inference_mode != 'all_patches':
-                mask_start = len(original) - self.config.mask_last_n
-                ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'], label='Masked')
+            self._highlight_masked_region(ax, patch_idx, len(original), label='Masked')
 
             ax.set_title(f'{cat_name}: Time Series', fontweight='bold', color=color)
             ax.set_xlabel('Time Step')
@@ -1255,10 +1222,13 @@ Separation Analysis:
 
             if len(anomaly_region) > 0:
                 ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-            if self.inference_mode != 'all_patches':
-                ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
-            ax.axhline(y=np.mean(discrepancy[-self.config.mask_last_n:]), color=VIS_COLORS['threshold'], linestyle='--',
-                      label=f'Masked Mean: {np.mean(discrepancy[-self.config.mask_last_n:]):.4f}')
+            self._highlight_masked_region(ax, patch_idx, len(discrepancy), label=None)
+
+            # Get correct masked region for statistics
+            mask_start, mask_end = self._get_masked_region(patch_idx, len(discrepancy))
+            masked_disc_mean = np.mean(discrepancy[mask_start:mask_end])
+            ax.axhline(y=masked_disc_mean, color=VIS_COLORS['threshold'], linestyle='--',
+                      label=f'Masked Mean: {masked_disc_mean:.4f}')
 
             ax.set_title(f'{cat_name}: Discrepancy (|T-S|)', fontweight='bold', color=color)
             ax.set_xlabel('Time Step')
@@ -1270,18 +1240,21 @@ Separation Analysis:
             ax.axis('off')
 
             sample_score = scores[patch_idx]
-            teacher_err = np.mean((original[-self.config.mask_last_n:] - teacher_recon[-self.config.mask_last_n:])**2)
-            student_err = np.mean((original[-self.config.mask_last_n:] - student_recon[-self.config.mask_last_n:])**2)
-            masked_disc = np.mean(discrepancy[-self.config.mask_last_n:])
+            # Compute errors for the correct masked region
+            mask_start, mask_end = self._get_masked_region(patch_idx, len(original))
+            teacher_err = np.mean((original[mask_start:mask_end] - teacher_recon[mask_start:mask_end])**2)
+            student_err = np.mean((original[mask_start:mask_end] - student_recon[mask_start:mask_end])**2)
+            masked_disc = np.mean(discrepancy[mask_start:mask_end])
+            anomaly_in_mask = sum(point_labels[mask_start:mask_end])
 
-            stype = sample_types[window_idx]
+            stype = sample_types[patch_idx]  # Use patch-level sample_type
             stype_name = ['Pure Normal', 'Disturbing Normal', 'Anomaly'][stype]
 
             stats_text = f"""
 {cat_name} Case Study
 ═══════════════════════════════════
 
-Sample Index: {window_idx}
+Patch Index:  {patch_idx} (Window: {window_idx})
 Sample Type:  {stype_name}
 True Label:   {'Anomaly' if labels[patch_idx] == 1 else 'Normal'}
 Prediction:   {'Anomaly' if predictions[patch_idx] == 1 else 'Normal'}
@@ -1291,14 +1264,14 @@ Score Analysis:
   • Threshold:      {threshold:.6f}
   • Margin:         {sample_score - threshold:+.6f}
 
-Masked Region Metrics:
+Masked Region Metrics [{mask_start}:{mask_end}]:
   • Teacher MSE:    {teacher_err:.6f}
   • Student MSE:    {student_err:.6f}
   • Discrepancy:    {masked_disc:.6f}
 
 Anomaly Location:
   • Points: {len(anomaly_region)} / {len(original)}
-  • In Mask: {sum(point_labels[-self.config.mask_last_n:])}
+  • In Mask: {anomaly_in_mask}
             """
 
             ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
@@ -1381,7 +1354,9 @@ Anomaly Location:
                     anomaly_region = np.where(point_labels == 1)[0]
                     if len(anomaly_region) > 0:
                         ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                    ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
+                    # Convert window_idx to patch_idx for masked region
+                    patch_idx_tp = tp_idx * self.num_patches + (self.num_patches - 1) if self.inference_mode == 'all_patches' else tp_idx
+                    self._highlight_masked_region(ax, patch_idx_tp, len(original), label=None)
 
                 ax.set_title(f'{atype.upper()}: TP Example', fontweight='bold', color=VIS_COLORS['teacher'])
             else:
@@ -1398,7 +1373,7 @@ Anomaly Location:
                 ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['teacher'])
                 if len(anomaly_region) > 0:
                     ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                ax.axvspan(len(discrepancy) - self.config.mask_last_n, len(discrepancy), alpha=0.2, color=VIS_COLORS['masked_region'])
+                self._highlight_masked_region(ax, patch_idx_tp, len(discrepancy), label=None)
             ax.set_title(f'{atype.upper()}: TP Discrepancy', fontweight='bold', color=VIS_COLORS['teacher'])
             ax.set_xlabel('Time Step')
 
@@ -1419,7 +1394,9 @@ Anomaly Location:
                     anomaly_region_fn = np.where(point_labels == 1)[0]
                     if len(anomaly_region_fn) > 0:
                         ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                    ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
+                    # Convert window_idx to patch_idx for masked region
+                    patch_idx_fn = fn_idx * self.num_patches + (self.num_patches - 1) if self.inference_mode == 'all_patches' else fn_idx
+                    self._highlight_masked_region(ax, patch_idx_fn, len(original), label=None)
 
                 ax.set_title(f'{atype.upper()}: FN Example', fontweight='bold', color=VIS_COLORS['anomaly'])
             else:
@@ -1434,7 +1411,7 @@ Anomaly Location:
                 ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['anomaly'])
                 if len(anomaly_region_fn) > 0:
                     ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                ax.axvspan(len(discrepancy) - self.config.mask_last_n, len(discrepancy), alpha=0.2, color=VIS_COLORS['masked_region'])
+                self._highlight_masked_region(ax, patch_idx_fn, len(discrepancy), label=None)
             ax.set_title(f'{atype.upper()}: FN Discrepancy', fontweight='bold', color=VIS_COLORS['anomaly'])
             ax.set_xlabel('Time Step')
 
@@ -1519,10 +1496,9 @@ Anomaly Location:
         point_labels = self.detailed_data['point_labels'][window_idx]
         score = self._get_scores()[patch_idx]
         label = self.pred_data['labels'][patch_idx]
-        sample_type = self.detailed_data['sample_types'][window_idx]
+        sample_type = self.pred_data['sample_types'][patch_idx]  # Use patch-level sample_type
 
         anomaly_region = np.where(point_labels == 1)[0]
-        mask_start = len(original) - self.config.mask_last_n
 
         # Column 1: Time series
         ax = axes_row[0]
@@ -1531,8 +1507,7 @@ Anomaly Location:
         ax.plot(student_recon, 'r:', lw=1.5, alpha=0.7, label='Student')
         if len(anomaly_region) > 0:
             ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-        if self.inference_mode != 'all_patches':
-            ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
+        self._highlight_masked_region(ax, patch_idx, len(original), label=None)
         ax.set_title(f'{title_prefix}: Time Series', fontweight='bold', color=color)
         ax.legend(fontsize=7)
 
@@ -1542,8 +1517,7 @@ Anomaly Location:
         ax.plot(discrepancy, color=VIS_COLORS['student_dark'], lw=1)
         if len(anomaly_region) > 0:
             ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-        if self.inference_mode != 'all_patches':
-            ax.axvspan(mask_start, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
+        self._highlight_masked_region(ax, patch_idx, len(discrepancy), label=None)
         ax.set_title(f'{title_prefix}: Discrepancy', fontweight='bold', color=color)
 
         # Column 3: Stats
@@ -1553,11 +1527,17 @@ Anomaly Location:
         stype_name = ['Pure Normal', 'Disturbing Normal', 'Anomaly'][sample_type]
         margin = score - threshold
 
+        # Get correct masked region for statistics
+        mask_start, mask_end = self._get_masked_region(patch_idx, len(point_labels))
+        anomaly_in_mask = sum(point_labels[mask_start:mask_end])
+        mask_size = mask_end - mask_start
+
         stats_text = f"""
 {title_prefix}
 ═══════════════════════════════
 
-Index: {window_idx}
+Patch Idx:  {patch_idx}
+Window Idx: {window_idx}
 Type:  {stype_name}
 Label: {'Anomaly' if label == 1 else 'Normal'}
 
@@ -1565,8 +1545,8 @@ Score:     {score:.6f}
 Threshold: {threshold:.6f}
 Margin:    {margin:+.6f}
 
-Anomaly in masked region:
-  {sum(point_labels[-self.config.mask_last_n:])} / {self.config.mask_last_n} points
+Anomaly in masked region [{mask_start}:{mask_end}]:
+  {anomaly_in_mask} / {mask_size} points
         """
 
         ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
@@ -1992,16 +1972,98 @@ Anomaly in masked region:
                                 'epoch_recon_score_disturbing' in history and
                                 'epoch_recon_score_anomaly' in history)
 
+        # Check for raw score history (for recalculation with current scoring mode)
+        has_raw_score_history = (history is not None and
+                                'epoch_raw_recon_normal' in history and
+                                'epoch_raw_disc_normal' in history)
+
+        # Helper function to recalculate contributions from raw scores
+        def recalculate_contributions_from_raw(history, score_mode, lambda_disc):
+            """Recalculate contribution scores from raw values using current scoring mode.
+
+            This is needed because training history may have been saved with 'default' mode
+            even when experiment config specifies 'adaptive' or 'normalized' mode.
+            """
+            raw_recon_normal = np.array(history['epoch_raw_recon_normal'])
+            raw_recon_disturbing = np.array(history['epoch_raw_recon_disturbing'])
+            raw_recon_anomaly = np.array(history['epoch_raw_recon_anomaly'])
+            raw_disc_normal = np.array(history['epoch_raw_disc_normal'])
+            raw_disc_disturbing = np.array(history['epoch_raw_disc_disturbing'])
+            raw_disc_anomaly = np.array(history['epoch_raw_disc_anomaly'])
+
+            n_epochs = len(raw_recon_normal)
+            result = {
+                'recon_ratio_normal': [], 'disc_ratio_normal': [],
+                'recon_ratio_disturbing': [], 'disc_ratio_disturbing': [],
+                'recon_ratio_anomaly': [], 'disc_ratio_anomaly': [],
+                'recon_score_normal': [], 'disc_score_normal': [],
+                'recon_score_disturbing': [], 'disc_score_disturbing': [],
+                'recon_score_anomaly': [], 'disc_score_anomaly': [],
+            }
+
+            for i in range(n_epochs):
+                # Compute per-epoch raw values
+                raw_recons = [raw_recon_normal[i], raw_recon_disturbing[i], raw_recon_anomaly[i]]
+                raw_discs = [raw_disc_normal[i], raw_disc_disturbing[i], raw_disc_anomaly[i]]
+
+                # Compute overall mean for adaptive lambda (weighted by test set ratios: 65%, 15%, 20%)
+                overall_recon_mean = 0.65 * raw_recon_normal[i] + 0.15 * raw_recon_disturbing[i] + 0.20 * raw_recon_anomaly[i]
+                overall_disc_mean = 0.65 * raw_disc_normal[i] + 0.15 * raw_disc_disturbing[i] + 0.20 * raw_disc_anomaly[i]
+
+                for j, (sample_type, recon, disc) in enumerate(zip(
+                    ['normal', 'disturbing', 'anomaly'], raw_recons, raw_discs
+                )):
+                    if score_mode == 'adaptive':
+                        adaptive_lambda = overall_recon_mean / (overall_disc_mean + 1e-8)
+                        recon_contrib = recon
+                        disc_contrib = adaptive_lambda * disc
+                    elif score_mode == 'normalized':
+                        # For normalized, we need std which we don't have per-epoch
+                        # Use simple scaling based on means as approximation
+                        # This gives equal weight to both components
+                        recon_contrib = recon
+                        disc_contrib = (overall_recon_mean / (overall_disc_mean + 1e-8)) * disc
+                    else:  # default
+                        recon_contrib = recon
+                        disc_contrib = lambda_disc * disc
+
+                    total = recon_contrib + disc_contrib + 1e-8
+                    recon_ratio = (recon_contrib / total) * 100
+                    disc_ratio = (disc_contrib / total) * 100
+
+                    result[f'recon_ratio_{sample_type}'].append(recon_ratio)
+                    result[f'disc_ratio_{sample_type}'].append(disc_ratio)
+                    result[f'recon_score_{sample_type}'].append(recon_contrib)
+                    result[f'disc_score_{sample_type}'].append(disc_contrib)
+
+            # Convert to numpy arrays
+            for key in result:
+                result[key] = np.array(result[key])
+
+            return result
+
         if has_contrib_history:
             epochs = history.get('epoch', list(range(len(history['epoch_recon_ratio_normal']))))
 
-            # Get contribution ratios by sample type
-            recon_ratio_normal = np.array(history['epoch_recon_ratio_normal'])
-            disc_ratio_normal = np.array(history['epoch_disc_ratio_normal'])
-            recon_ratio_disturbing = np.array(history['epoch_recon_ratio_disturbing'])
-            disc_ratio_disturbing = np.array(history['epoch_disc_ratio_disturbing'])
-            recon_ratio_anomaly = np.array(history['epoch_recon_ratio_anomaly'])
-            disc_ratio_anomaly = np.array(history['epoch_disc_ratio_anomaly'])
+            # Recalculate contributions from raw scores if available (fixes scoring mode mismatch)
+            if has_raw_score_history:
+                score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+                lambda_disc = getattr(self.config, 'lambda_disc', 0.5)
+                recalc = recalculate_contributions_from_raw(history, score_mode, lambda_disc)
+                recon_ratio_normal = recalc['recon_ratio_normal']
+                disc_ratio_normal = recalc['disc_ratio_normal']
+                recon_ratio_disturbing = recalc['recon_ratio_disturbing']
+                disc_ratio_disturbing = recalc['disc_ratio_disturbing']
+                recon_ratio_anomaly = recalc['recon_ratio_anomaly']
+                disc_ratio_anomaly = recalc['disc_ratio_anomaly']
+            else:
+                # Fallback to stored values (may not reflect current scoring mode)
+                recon_ratio_normal = np.array(history['epoch_recon_ratio_normal'])
+                disc_ratio_normal = np.array(history['epoch_disc_ratio_normal'])
+                recon_ratio_disturbing = np.array(history['epoch_recon_ratio_disturbing'])
+                disc_ratio_disturbing = np.array(history['epoch_disc_ratio_disturbing'])
+                recon_ratio_anomaly = np.array(history['epoch_recon_ratio_anomaly'])
+                disc_ratio_anomaly = np.array(history['epoch_disc_ratio_anomaly'])
 
             # Common styling
             colors_stack = ['#85C1E9', '#F1948A']  # Light blue for Recon, Light red for Disc
@@ -2050,12 +2112,25 @@ Anomaly in masked region:
             epochs = np.array(history.get('epoch', list(range(len(history['epoch_recon_score_normal'])))))
 
             # Get absolute scores by sample type
-            recon_score_normal = np.array(history['epoch_recon_score_normal'])
-            disc_score_normal = np.array(history['epoch_disc_score_normal'])
-            recon_score_disturbing = np.array(history['epoch_recon_score_disturbing'])
-            disc_score_disturbing = np.array(history['epoch_disc_score_disturbing'])
-            recon_score_anomaly = np.array(history['epoch_recon_score_anomaly'])
-            disc_score_anomaly = np.array(history['epoch_disc_score_anomaly'])
+            # Recalculate from raw scores if available (fixes scoring mode mismatch)
+            if has_raw_score_history:
+                score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+                lambda_disc = getattr(self.config, 'lambda_disc', 0.5)
+                recalc = recalculate_contributions_from_raw(history, score_mode, lambda_disc)
+                recon_score_normal = recalc['recon_score_normal']
+                disc_score_normal = recalc['disc_score_normal']
+                recon_score_disturbing = recalc['recon_score_disturbing']
+                disc_score_disturbing = recalc['disc_score_disturbing']
+                recon_score_anomaly = recalc['recon_score_anomaly']
+                disc_score_anomaly = recalc['disc_score_anomaly']
+            else:
+                # Fallback to stored values (may not reflect current scoring mode)
+                recon_score_normal = np.array(history['epoch_recon_score_normal'])
+                disc_score_normal = np.array(history['epoch_disc_score_normal'])
+                recon_score_disturbing = np.array(history['epoch_recon_score_disturbing'])
+                disc_score_disturbing = np.array(history['epoch_disc_score_disturbing'])
+                recon_score_anomaly = np.array(history['epoch_recon_score_anomaly'])
+                disc_score_anomaly = np.array(history['epoch_disc_score_anomaly'])
 
             # Filter to show only epoch >= 5
             start_epoch = 5
@@ -2173,139 +2248,11 @@ Anomaly in masked region:
         self.plot_hardest_samples()
 
         # Anomaly type analysis (requires detailed results from experiment)
-        self.plot_loss_by_anomaly_type(experiment_dir)
         self.plot_performance_by_anomaly_type(experiment_dir)
-        self.plot_value_vs_pattern_comparison(experiment_dir)  # Value vs pattern anomaly comparison
-        self.plot_loss_scatter_by_anomaly_type(experiment_dir)
-        self.plot_sample_type_analysis(experiment_dir)
+        self.plot_score_distribution_by_type(experiment_dir)
 
         # Anomaly type score trends over epochs (requires history with epoch_anomaly_type_scores)
-        self.plot_anomaly_type_score_trends(experiment_dir, history)
         self.plot_score_contribution_epoch_trends(experiment_dir, history)
-
-    def plot_anomaly_type_score_trends(self, experiment_dir: str = None, history: Dict = None):
-        """Plot epoch-wise score trends for each anomaly type
-
-        Creates a figure showing how reconstruction and discrepancy scores evolve
-        during training for each anomaly type (including normal).
-
-        Args:
-            experiment_dir: Path to experiment directory for loading training history
-            history: Optional pre-loaded history dict
-        """
-        from mae_anomaly import SLIDING_ANOMALY_TYPE_NAMES
-
-        # Load history if not provided
-        if history is None and experiment_dir:
-            history_path = os.path.join(experiment_dir, 'training_histories.json')
-            if os.path.exists(history_path):
-                with open(history_path) as f:
-                    history_data = json.load(f)
-                    history = history_data.get('0', {})
-
-        # Check if epoch_anomaly_type_scores is available
-        if history is None or 'epoch_anomaly_type_scores' not in history:
-            print("  - Skipping anomaly type score trends (no epoch_anomaly_type_scores in history)")
-            return
-
-        epoch_scores = history['epoch_anomaly_type_scores']
-        if not epoch_scores:
-            return
-
-        epochs = history.get('epoch', list(range(1, len(epoch_scores) + 1)))
-
-        # Collect anomaly types that appear in the data
-        all_types = set()
-        for epoch_data in epoch_scores:
-            all_types.update(epoch_data.keys())
-
-        # Order: normal first, then anomaly types in order
-        anomaly_type_order = ['normal'] + [name for name in SLIDING_ANOMALY_TYPE_NAMES if name in all_types and name != 'normal']
-        anomaly_type_order = [t for t in anomaly_type_order if t in all_types]
-
-        n_types = len(anomaly_type_order)
-        if n_types == 0:
-            return
-
-        # Create figure with 2 rows: recon_score, disc_score
-        # Columns: one per anomaly type
-        n_cols = min(4, n_types)  # Max 4 columns
-        n_rows = ((n_types - 1) // n_cols + 1) * 2  # 2 metrics per type group
-
-        fig = plt.figure(figsize=(5 * n_cols, 4 * n_rows))
-
-        # Define colors for each type
-        type_colors = {
-            'normal': VIS_COLORS['normal'],
-            'spike': '#E74C3C',
-            'memory_leak': '#9B59B6',
-            'cpu_saturation': '#3498DB',
-            'network_congestion': '#F39C12',
-            'cascading_failure': '#1ABC9C',
-            'resource_contention': '#34495E',
-            'point_spike': '#E91E63'
-        }
-
-        # Collect data for each type
-        type_data = {t: {'recon': [], 'disc': [], 'count': []} for t in anomaly_type_order}
-
-        for epoch_data in epoch_scores:
-            for atype in anomaly_type_order:
-                if atype in epoch_data:
-                    type_data[atype]['recon'].append(epoch_data[atype].get('recon_score', 0))
-                    type_data[atype]['disc'].append(epoch_data[atype].get('disc_score', 0))
-                    type_data[atype]['count'].append(epoch_data[atype].get('count', 0))
-                else:
-                    type_data[atype]['recon'].append(0)
-                    type_data[atype]['disc'].append(0)
-                    type_data[atype]['count'].append(0)
-
-        # Compute unified y-axis limits
-        all_recon = []
-        all_disc = []
-        for atype in anomaly_type_order:
-            all_recon.extend(type_data[atype]['recon'])
-            all_disc.extend(type_data[atype]['disc'])
-
-        y_min_recon = min(0, min(all_recon) if all_recon else 0) * 1.1
-        y_max_recon = max(all_recon) * 1.1 if all_recon else 1
-        y_min_disc = min(0, min(all_disc) if all_disc else 0) * 1.1
-        y_max_disc = max(all_disc) * 1.1 if all_disc else 1
-
-        # Plot recon scores (odd rows) and disc scores (even rows)
-        for idx, atype in enumerate(anomaly_type_order):
-            col = idx % n_cols
-            row_group = idx // n_cols
-
-            color = type_colors.get(atype, '#95A5A6')
-            count = type_data[atype]['count'][0] if type_data[atype]['count'] else 0
-
-            # Recon score plot
-            ax_recon = fig.add_subplot(n_rows, n_cols, row_group * 2 * n_cols + col + 1)
-            ax_recon.plot(epochs, type_data[atype]['recon'], color=color, linewidth=2, marker='o', markersize=3)
-            ax_recon.set_xlabel('Epoch')
-            ax_recon.set_ylabel('Recon Score')
-            ax_recon.set_ylim(y_min_recon, y_max_recon)
-            ax_recon.set_title(f'{atype}\n(n={count}) - Recon', fontsize=10, fontweight='bold')
-            ax_recon.grid(alpha=0.3)
-            ax_recon.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
-
-            # Disc score plot
-            ax_disc = fig.add_subplot(n_rows, n_cols, (row_group * 2 + 1) * n_cols + col + 1)
-            ax_disc.plot(epochs, type_data[atype]['disc'], color=color, linewidth=2, marker='s', markersize=3)
-            ax_disc.set_xlabel('Epoch')
-            ax_disc.set_ylabel('Disc Score')
-            ax_disc.set_ylim(y_min_disc, y_max_disc)
-            ax_disc.set_title(f'{atype}\n(n={count}) - Disc', fontsize=10, fontweight='bold')
-            ax_disc.grid(alpha=0.3)
-            ax_disc.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
-
-        fig.suptitle('Anomaly Type Score Trends Over Epochs', fontsize=14, fontweight='bold', y=1.01)
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'best_model_anomaly_type_trends.png'),
-                   dpi=150, bbox_inches='tight')
-        plt.close()
-        print("  - best_model_anomaly_type_trends.png")
 
     def plot_score_contribution_epoch_trends(self, experiment_dir: str = None, history: Dict = None):
         """Plot epoch-wise score contribution breakdown for each anomaly type
@@ -2359,19 +2306,82 @@ Anomaly in masked region:
         if n_types == 0:
             return
 
+        # Get scoring mode for title
+        score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        lambda_disc = getattr(self.config, 'lambda_disc', 0.5)
+
         # Collect data for each type
-        type_data = {t: {'recon': [], 'disc': [], 'count': []} for t in anomaly_type_order}
+        # History was saved with 'default' mode (lambda_disc * disc), need to recalculate
+        # for other scoring modes
+        type_data = {t: {'recon': [], 'disc': [], 'raw_disc': [], 'count': []} for t in anomaly_type_order}
 
         for epoch_data in epoch_scores:
             for atype in anomaly_type_order:
                 if atype in epoch_data:
-                    type_data[atype]['recon'].append(epoch_data[atype].get('recon_score', 0))
-                    type_data[atype]['disc'].append(epoch_data[atype].get('disc_score', 0))
+                    recon = epoch_data[atype].get('recon_score', 0)
+                    disc_weighted = epoch_data[atype].get('disc_score', 0)
+                    # Reverse default weighting to get raw disc
+                    raw_disc = disc_weighted / lambda_disc if lambda_disc > 0 else disc_weighted
+                    type_data[atype]['recon'].append(recon)
+                    type_data[atype]['raw_disc'].append(raw_disc)
                     type_data[atype]['count'].append(epoch_data[atype].get('count', 0))
                 else:
                     type_data[atype]['recon'].append(0)
-                    type_data[atype]['disc'].append(0)
+                    type_data[atype]['raw_disc'].append(0)
                     type_data[atype]['count'].append(0)
+
+        # Compute weighted disc based on current scoring mode
+        if score_mode == 'normalized':
+            # Z-score normalization: compute all z-scores first, then shift globally
+            n_epochs = len(epochs)
+            z_scores = {}  # {atype: {'recon_z': [], 'disc_z': []}}
+
+            # First pass: compute z-scores for all types
+            for atype in anomaly_type_order:
+                recon_arr = np.array(type_data[atype]['recon'])
+                raw_disc_arr = np.array(type_data[atype]['raw_disc'])
+                z_scores[atype] = {'recon_z': [], 'disc_z': []}
+
+                for i in range(n_epochs):
+                    all_recon = [type_data[t]['recon'][i] for t in anomaly_type_order]
+                    all_disc = [type_data[t]['raw_disc'][i] for t in anomaly_type_order]
+                    recon_mean, recon_std = np.mean(all_recon), np.std(all_recon) + 1e-8
+                    disc_mean, disc_std = np.mean(all_disc), np.std(all_disc) + 1e-8
+                    recon_z = (recon_arr[i] - recon_mean) / recon_std
+                    disc_z = (raw_disc_arr[i] - disc_mean) / disc_std
+                    z_scores[atype]['recon_z'].append(recon_z)
+                    z_scores[atype]['disc_z'].append(disc_z)
+
+            # Find global minimum across all types and epochs
+            all_z_values = []
+            for atype in anomaly_type_order:
+                all_z_values.extend(z_scores[atype]['recon_z'])
+                all_z_values.extend(z_scores[atype]['disc_z'])
+            global_min = min(all_z_values) if all_z_values else 0
+
+            # Second pass: shift all values by global minimum
+            for atype in anomaly_type_order:
+                type_data[atype]['recon'] = [z - global_min for z in z_scores[atype]['recon_z']]
+                type_data[atype]['disc'] = [z - global_min for z in z_scores[atype]['disc_z']]
+
+        else:
+            # Non-normalized modes: adaptive or default
+            for atype in anomaly_type_order:
+                recon_arr = np.array(type_data[atype]['recon'])
+                raw_disc_arr = np.array(type_data[atype]['raw_disc'])
+
+                if score_mode == 'adaptive':
+                    # Per-epoch adaptive lambda
+                    disc_weighted = []
+                    for i in range(len(recon_arr)):
+                        # Use overall epoch means (approximate from available data)
+                        all_recon = np.mean([type_data[t]['recon'][i] for t in anomaly_type_order if type_data[t]['recon'][i] > 0])
+                        all_disc = np.mean([type_data[t]['raw_disc'][i] for t in anomaly_type_order if type_data[t]['raw_disc'][i] > 0])
+                        adaptive_lambda = all_recon / (all_disc + 1e-8)
+                        disc_weighted.append(adaptive_lambda * raw_disc_arr[i])
+                    type_data[atype]['disc'] = disc_weighted
+                else:  # default
+                    type_data[atype]['disc'] = list(lambda_disc * raw_disc_arr)
 
         # Filter to show only epoch >= 5
         start_epoch = 5
@@ -2443,7 +2453,8 @@ Anomaly in masked region:
             if idx == 0:
                 ax.legend(loc='upper right', fontsize=9)
 
-        fig.suptitle('Score Contribution Trends by Anomaly Type (Epoch ≥ 5)',
+        # Build title with scoring mode info
+        fig.suptitle(f'Score Contribution Trends by Anomaly Type (Epoch ≥ 5)\nScoring Mode: {score_mode}',
                     fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'best_model_score_contribution_trends.png'),

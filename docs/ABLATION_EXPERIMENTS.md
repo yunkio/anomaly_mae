@@ -1,187 +1,207 @@
-# Ablation Study: Architecture and Loss Parameter Experiments
+# Ablation Study Framework
 
-This document describes the ablation study designed to analyze the impact of various architecture and loss parameters on normal vs anomaly discrepancy in the Self-Distilled MAE model.
+This document describes the ablation study framework for the Self-Distilled MAE model.
 
-## Primary Goal
+## Quick Start
 
-**Maximize the anomaly/normal discrepancy ratio (disc_ratio)** and **teacher reconstruction ratio (t_ratio)** while maintaining good detection performance (ROC-AUC, F1).
+```bash
+# Run unified Phase 1 experiments (170 experiments × 12 variants = 2040 results)
+python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py
 
-## Experiment Overview
+# Run specific experiments only
+python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py \
+    --experiments 001_default 022_d_model_128
 
-- **Total Experiments**: 70 configurations
-- **Phases**: Each experiment runs with mask_after_encoder=False, then mask_after_encoder=True
-- **Scoring Modes**: Each model tested with default, adaptive, and normalized scoring
-- **Inference Modes**: Each model tested with last_patch and all_patches
-- **Epochs per Experiment**: 30
-- **Teacher Warmup Epochs**: 3
-- **Normal Data Complexity**: Disabled (simple patterns)
+# Skip existing and disable visualization
+python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py \
+    --no-viz
 
-**Total Output Combinations**: 70 configs × 2 phases × 3 scoring × 2 inference = 840 evaluations
+# Run with background visualization (default)
+python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py
+```
 
-## Base Configuration (Optimized Defaults)
+## Directory Structure
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| force_mask_anomaly | True | Force mask patches containing anomalies |
-| margin_type | dynamic | Use dynamic margin based on batch statistics |
-| masking_ratio | 0.2 | 20% of patches masked |
-| masking_strategy | patch | Mask entire patches |
-| seq_length | 100 | Window size |
-| num_patches | 10 | seq_length / patch_size |
-| patch_size | 10 | Timesteps per patch (fixed) |
-| patch_level_loss | True | Compute loss at patch level |
-| patchify_mode | patch_cnn | Use CNN for patch embedding |
-| shared_mask_token | False | Separate mask tokens for teacher/student |
-| d_model | 64 | Transformer embedding dimension |
-| nhead | 2 | Number of attention heads |
-| num_encoder_layers | 1 | Encoder layers |
-| num_teacher_decoder_layers | 2 | Teacher decoder layers (t2s1) |
-| num_student_decoder_layers | 1 | Student decoder layers |
-| dim_feedforward | 256 | FFN hidden dimension (4x d_model) |
-| cnn_channels | (32, 64) | CNN channels (d_model//2, d_model) |
-| dropout | 0.1 | Dropout rate |
-| learning_rate | 2e-3 | Initial learning rate |
-| weight_decay | 1e-5 | L2 regularization |
-| dynamic_margin_k | 1.5 | k for dynamic margin (mu + k*sigma) |
+```
+scripts/ablation/
+├── run_ablation.py                              # Unified runner (use this)
+├── configs/                                      # Configuration files
+│   └── 20260127_052220_phase1.py               # Unified Phase 1: 170 experiments
+└── run_ablation_experiments_*.py               # [DEPRECATED] Old scripts
+```
 
-## Experiments 1-70
+## Creating New Ablation Configs
 
-### GROUP 1 (01-10): Window Size & Patch Variations
+Create a new Python file in `configs/` with the following structure:
 
-| ID | Name | Description | Key Changes |
-|----|------|-------------|-------------|
-| 01 | default | Optimized baseline | - |
-| 02 | window_200 | Larger window | seq_length=200, num_patches=20 |
-| 03 | window_500 | Much larger window | seq_length=500, num_patches=50 |
-| 04 | window_1000_p20 | Very large window (safe) | seq_length=1000, patch_size=20, num_patches=50 |
-| 05 | window_1000_p10 | Very large window (risky) | seq_length=1000, num_patches=100 |
-| 06 | patch_5 | Finer patches | patch_size=5, num_patches=20 |
-| 07 | patch_20 | Coarser patches | patch_size=20, num_patches=5 |
-| 08 | w500_p5 | Large window + fine patches | seq_length=500, patch_size=5, num_patches=100 |
-| 09 | w500_p20 | Large window + coarse patches | seq_length=500, patch_size=20, num_patches=25 |
-| 10 | window_2000_p20 | Extra large window | seq_length=2000, patch_size=20, num_patches=100 |
+```python
+"""
+Phase N Ablation Study Configuration
+"""
 
-### GROUP 2 (11-20): Encoder/Decoder Depth Variations
+from copy import deepcopy
+from typing import Dict, List
 
-| ID | Name | Description | Key Changes |
-|----|------|-------------|-------------|
-| 11 | encoder_2 | Deeper encoder | num_encoder_layers=2 |
-| 12 | encoder_3 | Much deeper encoder | num_encoder_layers=3 |
-| 13 | encoder_4 | Very deep encoder | num_encoder_layers=4 |
-| 14 | encoder_0 | No encoder | num_encoder_layers=0 |
-| 15 | decoder_t3s1 | Deeper teacher | num_teacher_decoder_layers=3 |
-| 16 | decoder_t4s1 | Much deeper teacher | num_teacher_decoder_layers=4 |
-| 17 | decoder_t2s2 | Equal depth | num_student_decoder_layers=2 |
-| 18 | decoder_t3s2 | Deeper both | teacher=3, student=2 |
-| 19 | decoder_t4s2 | Much deeper both | teacher=4, student=2 |
-| 20 | shared_decoder | Shared + separate | shared=1, teacher=1, student=1 |
+# Phase metadata
+PHASE_NAME = "phase_n"
+PHASE_DESCRIPTION = "Description of this phase"
+CREATED_AT = "2026-01-27 12:00:00"
 
-### GROUP 3 (21-30): Model Capacity
+# Evaluation modes
+SCORING_MODES = ['default', 'adaptive', 'normalized']
+INFERENCE_MODES = ['last_patch', 'all_patches']
 
-| ID | Name | Description | Key Changes |
-|----|------|-------------|-------------|
-| 21 | d_model_32 | Smaller model | d_model=32, FFN=128, cnn=(16,32) |
-| 22 | d_model_128 | Larger model | d_model=128, nhead=4, FFN=512, cnn=(64,128) |
-| 23 | d_model_256 | Very large model | d_model=256, nhead=8, FFN=1024, cnn=(128,256) |
-| 24 | d_model_16 | Very small model | d_model=16, nhead=2, FFN=64, cnn=(8,16) |
-| 25 | nhead_1 | Single head | nhead=1 |
-| 26 | nhead_4 | More heads | nhead=4 |
-| 27 | nhead_8 | Many heads | nhead=8 |
-| 28 | d128_nhead_16 | Large + many heads | d_model=128, nhead=16, FFN=512 |
-| 29 | ffn_128 | Smaller FFN | dim_feedforward=128 |
-| 30 | ffn_512 | Larger FFN | dim_feedforward=512 |
+# Base configuration
+BASE_CONFIG = {
+    'd_model': 64,
+    'nhead': 2,
+    'masking_ratio': 0.2,
+    # ... other settings
+}
 
-### GROUP 4 (31-40): Masking Ratio Variations
+def get_experiments() -> List[Dict]:
+    """Define experiment configurations."""
+    base = deepcopy(BASE_CONFIG)
+    experiments = []
 
-| ID | Name | Description | Key Changes |
-|----|------|-------------|-------------|
-| 31 | mask_0.10 | Ultra-low masking | masking_ratio=0.1 |
-| 32 | mask_0.15 | Very low masking | masking_ratio=0.15 |
-| 33 | mask_0.25 | Slightly above default | masking_ratio=0.25 |
-| 34 | mask_0.30 | Moderate masking | masking_ratio=0.3 |
-| 35 | mask_0.40 | Standard masking | masking_ratio=0.4 |
-| 36 | mask_0.50 | High masking | masking_ratio=0.5 |
-| 37 | mask_0.60 | Higher masking | masking_ratio=0.6 |
-| 38 | mask_0.70 | Very high masking | masking_ratio=0.7 |
-| 39 | mask_0.80 | Ultra-high masking | masking_ratio=0.8 |
-| 40 | feature_wise_mask | Feature-wise masking | masking_strategy='feature_wise' |
+    exp = deepcopy(base)
+    exp['name'] = '01_experiment_name'
+    exp['masking_ratio'] = 0.10
+    experiments.append(exp)
 
-### GROUP 5 (41-50): Loss Parameters
+    # ... more experiments
 
-| ID | Name | Description | Key Changes |
-|----|------|-------------|-------------|
-| 41 | lambda_0.1 | Very weak discrepancy | lambda_disc=0.1 |
-| 42 | lambda_0.25 | Weak discrepancy | lambda_disc=0.25 |
-| 43 | lambda_1.0 | Equal weight | lambda_disc=1.0 |
-| 44 | lambda_2.0 | Strong discrepancy | lambda_disc=2.0 |
-| 45 | lambda_3.0 | Very strong | lambda_disc=3.0 |
-| 46 | k_1.0 | Very tight margin | dynamic_margin_k=1.0 |
-| 47 | k_2.0 | Moderate margin | dynamic_margin_k=2.0 |
-| 48 | k_2.5 | Slightly loose | dynamic_margin_k=2.5 |
-| 49 | k_3.0 | Loose margin | dynamic_margin_k=3.0 |
-| 50 | k_4.0 | Very loose margin | dynamic_margin_k=4.0 |
+    return experiments
 
-### GROUP 6 (51-60): Training Parameters
+EXPERIMENTS = get_experiments()
+```
 
-| ID | Name | Description | Key Changes |
-|----|------|-------------|-------------|
-| 51 | lr_5e-4 | Lower learning rate | learning_rate=5e-4 |
-| 52 | lr_1e-3 | Standard LR | learning_rate=1e-3 |
-| 53 | lr_3e-3 | Higher LR | learning_rate=3e-3 |
-| 54 | lr_5e-3 | Very high LR | learning_rate=5e-3 |
-| 55 | dropout_0.0 | No dropout | dropout=0.0 |
-| 56 | dropout_0.2 | Higher dropout | dropout=0.2 |
-| 57 | dropout_0.3 | Very high dropout | dropout=0.3 |
-| 58 | wd_0 | No weight decay | weight_decay=0 |
-| 59 | wd_1e-4 | Higher weight decay | weight_decay=1e-4 |
-| 60 | anomaly_weight_2.0 | 2x anomaly weight | anomaly_loss_weight=2.0 |
+## Command Line Options
 
-### GROUP 7 (61-70): Combined Optimal Configurations
+| Option | Description |
+|--------|-------------|
+| `--config` | Path to config file (required) |
+| `--output-dir` | Custom output directory |
+| `--no-skip` | Re-run all experiments (don't skip existing) |
+| `--no-viz` | Disable visualization |
+| `--no-background-viz` | Run visualization synchronously |
+| `--experiments` | Run only specific experiments by name |
 
-Focus on maximizing disc_ratio and t_ratio.
+## Unified Phase 1: Comprehensive Ablation Study (170 Experiments)
 
-| ID | Name | Description | Key Changes |
-|----|------|-------------|-------------|
-| 61 | w500_d128 | Large window + capacity | seq_length=500, d_model=128, nhead=4 |
-| 62 | w500_enc2 | Large window + deep encoder | seq_length=500, encoder=2 |
-| 63 | w1000_p20_d128 | Very large window + capacity | seq_length=1000, patch_size=20, d_model=128 |
-| 64 | mask0.15_d128 | Ultra-low mask + capacity | masking_ratio=0.15, d_model=128 |
-| 65 | mask0.1_t3s1 | Ultra-low mask + deep teacher | masking_ratio=0.1, teacher=3 |
-| 66 | nhead1_d128 | Single head + large model | nhead=1, d_model=128 |
-| 67 | anom3_lambda1 | Strong anomaly focus | anomaly_weight=3.0, lambda_disc=1.0 |
-| 68 | w500_mask0.15 | Large window + low mask | seq_length=500, masking_ratio=0.15 |
-| 69 | w1000_p20_mask0.15 | Very large + low mask | seq_length=1000, patch_size=20, mask=0.15 |
-| 70 | d128_enc2_t3s1 | Capacity + depth | d_model=128, encoder=2, teacher=3 |
+The unified Phase 1 combines architecture exploration and focused optimization into a single comprehensive ablation study.
 
-## Key Metrics
+**Total Experiments**: 170
+**Variants per Experiment**: 2 (mask_after_encoder) × 2 (inference_mode) × 3 (scoring_mode) = 12
+**Total Results**: 170 × 12 = **2040**
 
-- **disc_ratio**: discrepancy_anomaly / discrepancy_normal (higher is better)
-- **t_ratio**: teacher_recon_anomaly / teacher_recon_normal (higher is better)
-- **ROC-AUC**: Area under ROC curve
-- **F1 Score**: Harmonic mean of precision and recall
-- **PA%K F1**: Point-Adjust F1 at K% tolerance
+### Base Configuration
+
+```python
+BASE_CONFIG = {
+    'd_model': 64,
+    'nhead': 2,
+    'masking_ratio': 0.2,
+    'num_encoder_layers': 1,
+    'num_teacher_decoder_layers': 2,
+    'num_student_decoder_layers': 1,
+    'dim_feedforward': 256,
+    'cnn_channels': (32, 64),
+    'patchify_mode': 'patch_cnn',
+    'margin_type': 'dynamic',
+    'force_mask_anomaly': True,
+    'shared_mask_token': False,
+    # ... other settings
+}
+```
+
+### Experiment Groups
+
+| Group | Experiments | Focus |
+|-------|-------------|-------|
+| 1 | 001-010 | Window Size & Patch Variations |
+| 2 | 011-020 | Encoder/Decoder Depth |
+| 3 | 021-030 | Model Capacity (d_model, nhead, FFN) |
+| 4 | 031-040 | Masking Ratio |
+| 5 | 041-050 | Loss Parameters |
+| 6 | 051-060 | Training Parameters |
+| 7 | 061-070 | Combined Optimal Configurations |
+| 8 | 071-085 | Maximize disc_ratio with d_model=128 |
+| 9 | 086-100 | Maximize disc_ratio AND t_ratio |
+| 10 | 101-120 | Best Model Variations (Scoring & Window) |
+| 11 | 121-140 | Window Size vs Model Depth Relationship |
+| 12 | 141-155 | PA%80 Optimization Experiments |
+| 13 | 156-170 | Additional Explorations |
+
+### Key Experiments
+
+**Architecture Exploration (001-070)**:
+- Window sizes: 100, 200, 500, 1000, 2000 timesteps
+- Patch sizes: 5, 10, 20 timesteps
+- Encoder layers: 1, 2, 3, 4
+- Decoder configs: t2s1, t3s1, t4s1, t2s2, t3s2, t4s2
+- d_model: 16, 32, 64, 128, 256
+- nhead: 1, 2, 4, 8, 16
+- Masking ratios: 0.1 to 0.8
+
+**Focused Optimization (071-170)**:
+- d_model=128 variations with different nhead, masking_ratio
+- Window 500 with various decoder depths
+- PA%80 optimization with nhead=16, t4s1, masking_ratio=0.10
+- Learning rate and dropout variations
 
 ## Scoring Modes
 
-Each model is evaluated with three scoring methods:
-- **default**: recon + lambda_disc * disc
-- **adaptive**: recon + (mean_recon/mean_disc) * disc
-- **normalized**: z-score normalized (recon_z + disc_z)
+| Mode | Formula | Description |
+|------|---------|-------------|
+| `default` | recon + λ×disc | Fixed weight (λ=0.5) |
+| `adaptive` | recon + (μ_recon/μ_disc)×disc | Dynamic weight |
+| `normalized` | z(recon) + z(disc) | Z-score normalization |
 
 ## Inference Modes
 
-Each model is evaluated with two inference methods:
+| Mode | Method | Speed | Coverage |
+|------|--------|-------|----------|
+| `last_patch` | Mask last patch only | Fast | Window-level |
+| `all_patches` | Mask each patch | N× slower | Patch-level (10× coverage) |
 
-| Mode | Masking | Sample Unit | Coverage |
-|------|---------|-------------|----------|
-| `last_patch` | Last patch only | Window | ~10 windows per timestep |
-| `all_patches` | Each patch (N passes) | Patch | ~100 windows per timestep |
+See [INFERENCE_MODES.md](INFERENCE_MODES.md) for details.
 
-**last_patch**: Fast (1 forward pass), window-level evaluation
-**all_patches**: Thorough (N forward passes), patch-level evaluation with 10× coverage
+## Output Structure
 
-See [INFERENCE_MODES.md](INFERENCE_MODES.md) for detailed documentation.
+```
+results/experiments/{timestamp}_phase1/
+├── summary_results.csv                    # All metrics summary
+├── {exp_name}_mask_before_default_last/
+│   ├── best_model.pt                      # Model checkpoint
+│   ├── best_config.json                   # Config
+│   ├── training_histories.json            # Training history
+│   ├── best_model_detailed.csv            # Per-sample losses
+│   ├── anomaly_type_metrics.json          # Per-type metrics
+│   ├── experiment_metadata.json           # Experiment info
+│   └── visualization/
+│       └── best_model/
+│           ├── best_model_roc_curve.png
+│           ├── best_model_confusion_matrix.png
+│           ├── best_model_score_contribution.png
+│           └── ...
+├── {exp_name}_mask_before_default_all/
+│   └── ...
+├── {exp_name}_mask_before_adaptive_last/
+│   └── ...
+└── ...
+```
+
+## Key Metrics
+
+| Metric | Description | Goal |
+|--------|-------------|------|
+| `disc_ratio` | disc_anomaly / disc_normal | Higher |
+| `t_ratio` | t_recon_anomaly / t_recon_normal | Higher |
+| `roc_auc` | ROC Area Under Curve | Higher |
+| `f1_score` | F1 Score | Higher |
+| `pa_k_f1` | Point-Adjusted F1 at K% | Higher |
 
 ---
 
-**Status**: ✅ Experiment configurations defined
+**Status**: ✅ Framework implemented (170 experiments unified)

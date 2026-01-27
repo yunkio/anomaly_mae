@@ -952,9 +952,6 @@ class SlidingWindowDataset(Dataset):
 
         # For test split, force stride=1 for proper point-level PA%K evaluation
         if split == 'test' and force_stride_1_for_test:
-            if stride != 1:
-                import warnings
-                warnings.warn(f"Test split: stride forced to 1 (was {stride}) for point-level PA%K evaluation")
             self.stride = 1
         else:
             self.stride = stride

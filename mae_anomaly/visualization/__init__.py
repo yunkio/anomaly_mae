@@ -26,6 +26,7 @@ from .base import (
     load_best_model,
     collect_predictions,
     collect_detailed_data,
+    collect_all_visualization_data,
     get_anomaly_colors,
     get_feature_colors,
     get_anomaly_type_info,
@@ -42,6 +43,7 @@ from .experiment_visualizer import ExperimentVisualizer
 from .stage2_visualizer import Stage2Visualizer
 from .best_model_visualizer import BestModelVisualizer
 from .training_visualizer import TrainingProgressVisualizer
+from .parallel import ParallelVisualizer, generate_plots_parallel
 
 __all__ = [
     # Base utilities
@@ -51,6 +53,7 @@ __all__ = [
     'load_best_model',
     'collect_predictions',
     'collect_detailed_data',
+    'collect_all_visualization_data',
     'get_anomaly_colors',
     'get_feature_colors',
     'get_anomaly_type_info',
@@ -66,4 +69,6 @@ __all__ = [
     'Stage2Visualizer',
     'BestModelVisualizer',
     'TrainingProgressVisualizer',
+    'ParallelVisualizer',
+    'generate_plots_parallel',
 ]

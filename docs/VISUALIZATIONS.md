@@ -1,6 +1,6 @@
 # Visualization Documentation
 
-**Last Updated**: 2026-01-25
+**Last Updated**: 2026-01-27
 **Status**: Complete
 
 ---
@@ -26,6 +26,7 @@ The visualization code is organized in `mae_anomaly/visualization/`:
 mae_anomaly/visualization/
 ├── __init__.py                  # Module exports
 ├── base.py                      # Common utilities and color functions
+├── parallel.py                  # Parallel visualization (ParallelVisualizer)
 ├── data_visualizer.py           # DataVisualizer class
 ├── architecture_visualizer.py   # ArchitectureVisualizer class
 ├── experiment_visualizer.py     # ExperimentVisualizer (Stage 1)
@@ -50,6 +51,49 @@ from mae_anomaly.visualization import (
 ```
 
 This ensures consistency when anomaly types or features change.
+
+### Optimized Data Collection
+
+The `collect_all_visualization_data()` function provides ~2x speedup by combining data collection:
+
+```python
+from mae_anomaly.visualization import collect_all_visualization_data
+
+# Single pass collects both prediction and detailed data
+pred_data, detailed_data = collect_all_visualization_data(model, test_loader, config)
+
+# Returns:
+# pred_data: {scores, labels, predictions, threshold, sample_types, (...)}
+# detailed_data: {teacher_errors, student_errors, discrepancies, inputs, (...)}
+```
+
+### Parallel Visualization
+
+The `ParallelVisualizer` class enables multiprocessing-based parallel plot generation:
+
+```python
+from mae_anomaly.visualization import ParallelVisualizer, generate_plots_parallel
+
+# Option 1: Using ParallelVisualizer directly
+parallel_viz = ParallelVisualizer(max_workers=4)
+timings = parallel_viz.generate_parallel(
+    pred_data=pred_data,
+    detailed_data=detailed_data,
+    config=config,
+    output_dir='output/best_model',
+    plot_functions=['plot_roc_curve', 'plot_confusion_matrix', 'plot_summary_statistics']
+)
+
+# Option 2: Using helper function with existing BestModelVisualizer
+from mae_anomaly.visualization import BestModelVisualizer
+visualizer = BestModelVisualizer(model, config, test_loader, output_dir='output')
+timings = generate_plots_parallel(
+    visualizer=visualizer,
+    plot_functions=['plot_roc_curve', 'plot_confusion_matrix'],
+    max_workers=4,
+    experiment_dir=experiment_dir
+)
+```
 
 ### Consistent Visualization Style (Learning Curves)
 
@@ -251,13 +295,9 @@ Detailed analysis of the single best performing model, including qualitative cas
 | `case_study_gallery.png` | Representative TP/TN/FP/FN case studies with detailed analysis |
 | `anomaly_type_case_studies.png` | Per-anomaly-type case studies (TP vs FN) |
 | `hardest_samples.png` | Analysis of hardest-to-detect samples |
-| `loss_by_anomaly_type.png` | Loss distributions by anomaly type |
 | `performance_by_anomaly_type.png` | Detection rate and mean score by anomaly type |
-| `value_vs_pattern_comparison.png` | Value-based vs pattern-based anomaly comparison |
-| `loss_scatter_by_anomaly_type.png` | Recon vs discrepancy scatter colored by anomaly type |
-| `sample_type_analysis.png` | Sample type (pure/disturbing/anomaly) analysis |
-| `anomaly_type_trends.png` | Epoch-wise recon/disc score trends per anomaly type |
-| `score_contribution_trends.png` | **NEW**: Stacked area plots of recon/disc contributions by anomaly type (epoch ≥ 5) |
+| `score_distribution_by_type.png` | **NEW**: Violin charts showing recon/disc score distributions per pattern type (scoring mode applied) |
+| `score_contribution_trends.png` | Stacked area plots of recon/disc contributions by anomaly type over epochs (epoch ≥ 5) |
 
 ### 6. Training Progress Visualizations (`training_progress/`)
 
@@ -289,10 +329,14 @@ from mae_anomaly.visualization import (
     load_best_model,
     collect_predictions,
     collect_detailed_data,
+    collect_all_visualization_data,  # Optimized merged collection (~2x speedup)
     get_anomaly_colors,
     get_feature_colors,
     SAMPLE_TYPE_NAMES,
     SAMPLE_TYPE_COLORS,
+    VIS_COLORS,
+    VIS_MARKERS,
+    VIS_LINESTYLES,
     # Visualizers
     DataVisualizer,
     ArchitectureVisualizer,
@@ -300,6 +344,9 @@ from mae_anomaly.visualization import (
     Stage2Visualizer,
     BestModelVisualizer,
     TrainingProgressVisualizer,
+    # Parallel visualization
+    ParallelVisualizer,
+    generate_plots_parallel,
 )
 ```
 
@@ -401,13 +448,9 @@ best_vis.plot_case_study_gallery(experiment_dir)
 best_vis.plot_anomaly_type_case_studies(experiment_dir)
 best_vis.plot_hardest_samples()
 # Anomaly type analysis
-best_vis.plot_loss_by_anomaly_type(experiment_dir)
 best_vis.plot_performance_by_anomaly_type(experiment_dir)
-best_vis.plot_value_vs_pattern_comparison(experiment_dir)
-best_vis.plot_loss_scatter_by_anomaly_type(experiment_dir)
-best_vis.plot_sample_type_analysis(experiment_dir)
-best_vis.plot_anomaly_type_score_trends(experiment_dir, history)
-best_vis.plot_score_contribution_epoch_trends(experiment_dir, history)  # NEW
+best_vis.plot_score_distribution_by_type(experiment_dir)  # Violin charts with scoring mode
+best_vis.plot_score_contribution_epoch_trends(experiment_dir, history)  # Stacked area trends
 best_vis.generate_all(experiment_dir, history)  # Generate all
 ```
 

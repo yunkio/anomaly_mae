@@ -163,13 +163,9 @@ def main():
             first_key = list(exp_data['histories'].keys())[0]
             history = exp_data['histories'][first_key]
 
-        # Check if student reconstruction loss is enabled
-        use_student_recon = getattr(config, 'use_student_reconstruction_loss', False)
-
         best_vis.generate_all(
             experiment_dir=experiment_dir,
-            history=history,
-            use_student_recon=use_student_recon
+            history=history
         )
 
     # 6. Training Progress Visualizations (requires re-training)

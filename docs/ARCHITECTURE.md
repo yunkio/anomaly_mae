@@ -1,6 +1,6 @@
 # Model Architecture Documentation
 
-**Last Updated**: 2026-01-25
+**Last Updated**: 2026-01-27
 **Model**: 1D-CNN + Transformer Self-Distilled MAE
 
 ---
@@ -583,9 +583,10 @@ anomaly_score = MSE(student_out - original)
 | margin_type | dynamic | Margin loss type (dynamic/hinge/softplus) |
 | dynamic_margin_k | 1.5 | k for dynamic margin (mu + k*sigma) |
 | patch_level_loss | True | Loss computation level |
-| learning_rate | 2e-3 | Learning rate |
+| learning_rate | 5e-3 | Learning rate |
 | weight_decay | 1e-5 | Weight decay |
 | teacher_only_warmup_epochs | 3 | Epochs for teacher-only training |
+| use_amp | True | Mixed Precision Training (1.2x speedup, 40% memory ↓) |
 
 ---
 

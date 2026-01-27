@@ -1,5 +1,104 @@
 # Changelog
 
+## 2026-01-27 (Update 38): Comprehensive Phase 1 Deep Analysis & Strategic Phase 2 Planning
+
+### Summary
+
+Ultra-deep analysis of 1,398 Phase 1 ablation experiments across 10 strategic focus areas. Generated comprehensive insights document and created 150 Phase 2 experiments organized into 8 targeted groups based on critical findings about balancing discrepancy and reconstruction objectives.
+
+### Key Discoveries
+
+1. **Balance Over Extremes**: High disc_ratio (>4.0) models achieve poor ROC-AUC (0.74-0.88) due to sacrificing reconstruction quality. Best models balance moderate disc_cohens_d (0.9-1.2) with high recon_cohens_d (2.5-3.8).
+
+2. **Reconstruction Quality Dominates**: recon_cohens_d correlates more strongly with ROC-AUC (r=+0.518) than disc_cohens_d (r=+0.445), revealing reconstruction as the foundation for anomaly detection.
+
+3. **Configuration Winners**:
+   - Inference: all_patches (+5.9% over last_patch)
+   - Scoring: default (best for tuned models)
+   - Baseline: w500_p20, d_model=128
+   - Teacher-Student: t4s1, t4s2 optimal
+
+4. **Disturbing Normal Challenge**: Best disc_cohens_d_disturbing_vs_anomaly only 0.803 (vs 1.926 for pure normal), identifying this as the key frontier for improvement.
+
+5. **Scarcity of Excellence**: Only 3 models achieved both high disc_d (>1.33) AND high recon_d (>1.73), averaging ROC-AUC 0.942 and PA%80 0.951.
+
+### Analysis Framework (10 Focus Areas)
+
+| Focus Area | Key Finding | Phase 2 Impact |
+|------------|-------------|----------------|
+| 1. High Disc Ratio | Top 50 models (disc_d 1.88-1.93) average only 0.860 ROC-AUC | GROUP 1: Optimize balance |
+| 2. Disc+Recon Balance | Only 3 models meet criteria → GOLDEN ZONE | GROUP 1: Replicate success |
+| 3. Modes & Windows | all_patches +0.047 ROC-AUC; w500_p20 strong baseline | GROUP 2: Scale windows |
+| 4. Disturbing Separation | 009_w500_p20 achieves 0.803 (best) | GROUP 3: Push beyond 0.85 |
+| 5. PA%80 + Disc Ratio | Rare combination, critical for deployment | GROUP 4: Systematic optimization |
+| 6. Window-Depth-Masking | Relationships need systematic exploration | GROUP 2, 6, 7 |
+| 7. Mask After Optimization | Most top models use mask_after=False | GROUP 8: Lambda tuning |
+| 8. Mode Sensitivity | Same model: 0.956 (default) vs 0.928 (adaptive) | GROUP 4: Test systematically |
+| 9. High Perf + Disturbing | Achieving both is rare but valuable | GROUP 3: Targeted approach |
+| 10. Additional Insights | disc_ratio negatively correlated with ROC-AUC (r=-0.124) | All groups: Avoid extremes |
+
+### Phase 2 Strategic Plan (150 Experiments)
+
+| Group | Experiments | Goal | Strategy |
+|-------|-------------|------|----------|
+| **1: Balanced Disc+Recon** | 30 | disc_d > 1.2, recon_d > 2.8 | Build on 028_d128_nhead_16, vary masking/lambda |
+| **2: Window & Capacity** | 25 | Scaling laws | Test w100/500/1000 with matched capacity |
+| **3: Disturbing Separation** | 20 | disc_d_disturbing > 0.85 | Build on 009_w500_p20, vary k/lambda/weight |
+| **4: PA%80 Optimization** | 20 | PA%80 > 0.970 | Large windows, high capacity, mode testing |
+| **5: Teacher-Student Ratios** | 15 | Optimal T:S balance | Systematic t1s1 through t6s1, balanced ratios |
+| **6: Masking Strategy** | 15 | Optimal ratios per d_model | d128: [0.05-0.35], d256: [0.60-0.90] |
+| **7: Architecture Depth** | 15 | Optimal encoder-decoder | Systematic depth combinations |
+| **8: Lambda Discrepancy** | 10 | Optimal loss weighting | Fine-grained [0.5-3.0] |
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `docs/ablation_result/PHASE1_COMPREHENSIVE_ANALYSIS.md` | 📄 Complete analysis report (13KB) |
+| `docs/ablation_result/phase1_analysis_report.md` | 📊 Executive summary with tables |
+| `docs/ablation_result/table1_top10_roc_auc.csv` | 🏆 Top 10 models by ROC-AUC |
+| `docs/ablation_result/table2_top10_disc_ratio.csv` | 📈 Top 10 by discrepancy ratio |
+| `docs/ablation_result/table3_top10_t_ratio.csv` | 🎯 Top 10 by teacher reconstruction ratio |
+| `docs/ablation_result/all_experiments.csv` | 💾 All 1,398 results (1.2MB) |
+| `scripts/ablation/configs/phase2.py` | ⚙️ 150 Phase 2 experiment configs |
+| `scripts/analyze_phase1_results.py` | 🔧 Analysis script |
+| `scripts/generate_phase1_report.py` | 📝 Report generator |
+| `docs/CHANGELOG.md` | 📋 UPDATED (this entry) |
+
+### Usage
+
+```bash
+# Review comprehensive analysis
+cat docs/ablation_result/PHASE1_COMPREHENSIVE_ANALYSIS.md
+
+# Review executive summary
+cat docs/ablation_result/phase1_analysis_report.md
+
+# Verify Phase 2 config
+python scripts/ablation/configs/phase2.py
+
+# Run Phase 2 experiments
+python scripts/ablation/run_ablation.py --config configs/phase2.py
+```
+
+### Expected Phase 2 Outcomes
+
+1. **10+ models with ROC-AUC > 0.960** (vs Phase 1 best: 0.9624)
+2. **5+ models with disc_d > 1.2 AND recon_d > 2.8** (vs Phase 1: only 3)
+3. **disc_cohens_d_disturbing_vs_anomaly > 0.85** (vs Phase 1 best: 0.803)
+4. **PA%80 ROC-AUC > 0.970** (vs Phase 1 best: 0.965)
+5. **Establish scaling laws** for window size vs model capacity
+6. **Identify 2-3 production-ready configurations**
+
+### Documentation Philosophy
+
+- **Insight-Driven**: Each experiment group based on specific Phase 1 insight
+- **Hypothesis-Testing**: Clear hypotheses with verification criteria
+- **Balanced Approach**: Optimize for balance, not single metric extremes
+- **Deployment-Ready**: Focus on PA%80 and disturbing normal separation
+
+---
+
 ## 2026-01-27 (Update 37): Phase 1 Analysis and Phase 2 Experiment Planning
 
 ### Summary

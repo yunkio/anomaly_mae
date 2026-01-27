@@ -12,6 +12,7 @@ from .dataset_sliding import (
     FEATURE_NAMES,
     ANOMALY_TYPE_NAMES as SLIDING_ANOMALY_TYPE_NAMES,
     ANOMALY_TYPE_NAMES,
+    ANOMALY_CATEGORY,
 )
 from .model import PositionalEncoding, SelfDistilledMAEMultivariate
 from .loss import SelfDistillationLoss
@@ -28,6 +29,7 @@ __all__ = [
     'NormalDataComplexity',
     'FEATURE_NAMES',
     'ANOMALY_TYPE_NAMES',
+    'ANOMALY_CATEGORY',  # Category for value-based vs pattern-based anomalies
     'SLIDING_ANOMALY_TYPE_NAMES',  # Alias for backwards compatibility
     # Model
     'PositionalEncoding',
