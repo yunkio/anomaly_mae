@@ -1,6 +1,6 @@
 # Model Architecture Documentation
 
-**Last Updated**: 2026-01-27
+**Last Updated**: 2026-01-28
 **Model**: 1D-CNN + Transformer Self-Distilled MAE
 
 ---
@@ -39,11 +39,11 @@ Output: (batch, d_model=64, seq_length=100)
 
 **Purpose**: Convert input into patch-level representations
 
-The model supports 3 different patchify modes, controlled by `config.patchify_mode`:
+The model supports 2 different patchify modes, controlled by `config.patchify_mode`:
 
 #### 2.1 Linear Mode (`patchify_mode='linear'`)
 
-**Default MAE-style approach**: Patchify first, then linear projection
+**MAE-style approach**: Patchify first, then linear projection
 
 ```
 Input: (batch, 100, 8)
@@ -133,8 +133,8 @@ PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 **Purpose**: Process patches and learn global context
 
 **Structure**:
-- Layers: 3
-- Attention heads: 4
+- Layers: 1
+- Attention heads: 2
 - d_model: 64
 - Feedforward dim: 256
 - Dropout: 0.1
@@ -151,8 +151,8 @@ PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 **Purpose**: Heavy decoder for accurate reconstruction
 
 **Structure**:
-- Layers: 4
-- Attention heads: 4
+- Layers: 2
+- Attention heads: 2
 - d_model: 64
 - Feedforward dim: 256
 - Dropout: 0.1
@@ -170,7 +170,7 @@ PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 
 **Structure**:
 - Layers: 1
-- Attention heads: 4
+- Attention heads: 2
 - d_model: 64
 - Feedforward dim: 256
 - Dropout: 0.1
@@ -205,7 +205,7 @@ Unpatchify: (batch, 100, 8)
 
 The pipeline varies based on `patchify_mode`:
 
-### Linear Mode (default)
+### Linear Mode
 ```
 Input: (batch, 100, 8)
     ↓
@@ -213,13 +213,13 @@ Input: (batch, 100, 8)
     ↓ (batch, 10, 80)
 [Linear Embedding]
     ↓ (batch, 10, 64)
-[Random Patch Masking (40%)]
+[Random Patch Masking (20%)]
     ↓
 [Positional Encoding]
     ↓
-[Transformer Encoder (3 layers)]
+[Transformer Encoder (1 layer)]
     ↓
-[Teacher Decoder (4 layers)] | [Student Decoder (1 layer)]
+[Teacher Decoder (2 layers)] | [Student Decoder (1 layer)]
     ↓                           ↓
 [Output Projection]         [Output Projection]
     ↓                           ↓
@@ -233,20 +233,7 @@ Teacher Output              Student Output
          Anomaly Score
 ```
 
-### CNN First Mode
-```
-Input: (batch, 100, 8)
-    ↓
-[1D-CNN Layers (full sequence)]
-    ↓ (batch, 64, 100)
-[Patchify CNN Features]
-    ↓ (batch, 10, 640)
-[Linear Projection]
-    ↓ (batch, 10, 64)
-[Random Patch Masking → Encoder → Decoders → Output]
-```
-
-### Patch CNN Mode
+### Patch CNN Mode (default)
 ```
 Input: (batch, 100, 8)
     ↓
@@ -433,13 +420,13 @@ if self.config.use_student and self.student_decoder is not None:
 
 **Teacher-only warm-up period**:
 - First N epochs train only the teacher model (no discrepancy/student loss)
-- Controlled by `teacher_only_warmup_epochs` (default=1)
+- Controlled by `teacher_only_warmup_epochs` (default=3)
 - Allows teacher to learn basic reconstruction before introducing discrepancy
 
 **Implementation**:
 ```python
 # In trainer.py train():
-teacher_warmup = getattr(self.config, 'teacher_only_warmup_epochs', 1)
+teacher_warmup = getattr(self.config, 'teacher_only_warmup_epochs', 3)
 for epoch in range(self.config.num_epochs):
     teacher_only = (epoch < teacher_warmup)  # True during warm-up
     epoch_losses = self.train_epoch(epoch, teacher_only=teacher_only)
@@ -454,7 +441,7 @@ L_rec = MSE(teacher_out, original) + MSE(student_out, original)
 
 **Discrepancy Loss** (with margin types):
 
-1. **Hinge (default)**:
+1. **Hinge**:
 ```python
 L_disc = ReLU(margin - |teacher_error - student_error|)
 ```
@@ -464,7 +451,7 @@ L_disc = ReLU(margin - |teacher_error - student_error|)
 L_disc = Softplus(margin - |teacher_error - student_error|)
 ```
 
-3. **Dynamic**:
+3. **Dynamic** (default):
 ```python
 # Margin adapts based on normal samples' discrepancy distribution
 dynamic_margin = mu + k * sigma
@@ -479,13 +466,21 @@ L_total = L_rec + λ_disc * L_disc
 **Hyperparameters**:
 - margin = 0.5 (default)
 - λ_disc = 0.5 (default)
-- masking_ratio = 0.4 (default)
+- masking_ratio = 0.2 (default)
 
 ### Evaluation Metric
 
 **Baseline** (use_discrepancy_loss=True):
 ```python
 anomaly_score = MSE(teacher_out, original) + λ * MSE(teacher_out - student_out)
+```
+
+**Per-Component Scoring** (`evaluate_by_score_type()`):
+```python
+# Individual score components for CSV columns
+disc_only_score = MSE(teacher_out - student_out)
+teacher_recon_score = MSE(teacher_out - original)
+student_recon_score = MSE(student_out - original)
 ```
 
 **TeacherOnly** (use_student=False):
@@ -528,7 +523,7 @@ anomaly_score = MSE(student_out - original)
 ### Why 1D-CNN before Transformer?
 
 1. **Local feature extraction**: CNNs excel at capturing local patterns
-2. **Dimensionality reduction**: Maps 5 features → 64 channels
+2. **Dimensionality reduction**: Maps 8 features → 64 channels
 3. **Translation invariance**: Useful for time series
 4. **Complementary**: CNN captures local, Transformer captures global
 
@@ -573,7 +568,7 @@ anomaly_score = MSE(student_out - original)
 | cnn_channels | (32, 64) | CNN channels (d_model//2, d_model) |
 | masking_strategy | patch | Masking strategy (patch/feature_wise) |
 | masking_ratio | 0.2 | Training masking ratio |
-| mask_after_encoder | False | Standard MAE masking (encode visible only) |
+| mask_after_encoder | False | Mask tokens go through encoder (non-standard) |
 | shared_mask_token | True | Share mask token between teacher/student |
 | num_encoder_layers | 1 | Encoder layers |
 | num_teacher_decoder_layers | 2 | Teacher decoder layers (t2s1) |
@@ -586,6 +581,9 @@ anomaly_score = MSE(student_out - original)
 | learning_rate | 5e-3 | Learning rate |
 | weight_decay | 1e-5 | Weight decay |
 | teacher_only_warmup_epochs | 3 | Epochs for teacher-only training |
+| warmup_epochs | 10 | Learning rate warm-up epochs |
+| num_shared_decoder_layers | 0 | Shared layers between decoders |
+| anomaly_loss_weight | 1.0 | Weight for anomaly samples in loss |
 | use_amp | True | Mixed Precision Training (1.2x speedup, 40% memory ↓) |
 
 ---

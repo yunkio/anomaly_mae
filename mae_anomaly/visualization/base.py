@@ -112,9 +112,9 @@ VIS_COLORS = {
     # Model components
     'teacher': '#27AE60',     # Green for teacher model
     'student': '#9B59B6',     # Purple for student model
-    'discrepancy': '#9B59B6', # Purple for discrepancy (same as student)
+    'discrepancy': '#E67E22', # Orange for discrepancy (distinct from student)
     'reconstruction': '#27AE60',  # Green for reconstruction
-    'total': '#2ECC71',       # Green for totals/combined
+    'total': '#3498DB',       # Blue for totals/combined (distinct from teacher)
     # Region highlighting
     'anomaly_region': '#E74C3C',  # Red for anomaly region highlight
     'masked_region': '#F1C40F',   # Yellow for masked region highlight
@@ -308,21 +308,16 @@ def load_best_model(model_path: str, num_test: int = 2000, use_complexity: bool 
     )
     signals, point_labels, anomaly_regions = generator.generate()
 
-    # Create test dataset
+    # Create test dataset - no downsampling, stride=1 for PA%K evaluation
     test_dataset = SlidingWindowDataset(
         signals=signals,
         point_labels=point_labels,
         anomaly_regions=anomaly_regions,
         window_size=config.seq_length,
-        stride=config.sliding_window_stride,
+        stride=config.sliding_window_test_stride,  # Test stride=1 for PA%K
         mask_last_n=config.mask_last_n,
         split='test',
-        train_ratio=0.5,
-        target_counts={
-            'pure_normal': int(config.num_test_samples * config.test_ratio_pure_normal),
-            'disturbing_normal': int(config.num_test_samples * config.test_ratio_disturbing_normal),
-            'anomaly': int(config.num_test_samples * config.test_ratio_anomaly)
-        },
+        train_ratio=config.sliding_window_train_ratio,
         seed=config.random_seed
     )
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
@@ -367,7 +362,6 @@ def collect_predictions(model, dataloader, config) -> Dict:
     patch_size = getattr(config, 'patch_size', 10)
     num_patches = getattr(config, 'num_patches', 10)
 
-    all_scores = []
     all_labels = []
     all_recon_errors = []      # Teacher reconstruction error (teacher vs original)
     all_student_errors = []    # Student reconstruction error (student vs original)
@@ -437,12 +431,13 @@ def collect_predictions(model, dataloader, config) -> Dict:
                     patch_has_anomaly = point_labels[:, start_pos:end_pos].any(dim=1)
                     patch_labels[:, p_idx] = patch_has_anomaly.long()
 
-                # Flatten to 1D (each patch is a sample)
-                scores = (patch_recon_scores + config.lambda_disc * patch_disc_scores).flatten()
+                # Flatten to 1D (each patch is a sample) and convert to numpy
+                recon_flat = patch_recon_scores.flatten().cpu().numpy()
+                student_flat = patch_student_scores.flatten().cpu().numpy()
+                disc_flat = patch_disc_scores.flatten().cpu().numpy()
                 labels = patch_labels.flatten()
-                recon_flat = patch_recon_scores.flatten()
-                student_flat = patch_student_scores.flatten()
-                disc_flat = patch_disc_scores.flatten()
+
+                # Raw scores collected; scoring formula applied globally after concatenation
 
                 # Compute per-patch sample_types based on patch labels (generalized approach)
                 # sample_type: 2=anomaly (patch has anomaly), 1=disturbing (normal patch in anomaly window), 0=pure_normal
@@ -455,11 +450,10 @@ def collect_predictions(model, dataloader, config) -> Dict:
                 # Remaining (normal patches in normal windows) stay 0 (pure_normal)
                 sample_types_expanded = patch_sample_types.flatten()
 
-                all_scores.append(scores.cpu().numpy())
                 all_labels.append(labels.numpy())
-                all_recon_errors.append(recon_flat.cpu().numpy())
-                all_student_errors.append(student_flat.cpu().numpy())
-                all_discrepancies.append(disc_flat.cpu().numpy())
+                all_recon_errors.append(recon_flat)
+                all_student_errors.append(student_flat)
+                all_discrepancies.append(disc_flat)
                 all_sample_types.append(sample_types_expanded.numpy())
 
             else:
@@ -480,22 +474,46 @@ def collect_predictions(model, dataloader, config) -> Dict:
                 recon = (recon_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
                 student = (student_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
                 disc = (discrepancy * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-8)
-                scores = recon + config.lambda_disc * disc
 
-                all_scores.append(scores.cpu().numpy())
+                # Raw scores collected; scoring formula applied globally after concatenation
+                recon_np = recon.cpu().numpy()
+                disc_np = disc.cpu().numpy()
+
                 all_labels.append(last_patch_labels.numpy())
-                all_recon_errors.append(recon.cpu().numpy())
+                all_recon_errors.append(recon_np)
                 all_student_errors.append(student.cpu().numpy())
-                all_discrepancies.append(disc.cpu().numpy())
+                all_discrepancies.append(disc_np)
                 all_sample_types.append(sample_types.numpy())
 
+    # Concatenate all raw scores
+    recon_all = np.concatenate(all_recon_errors)
+    disc_all = np.concatenate(all_discrepancies)
+    student_all = np.concatenate(all_student_errors)
+    labels_all = np.concatenate(all_labels)
+    sample_types_all = np.concatenate(all_sample_types)
+
+    # Apply scoring formula GLOBALLY (consistent with evaluator._apply_scoring_formula)
+    score_mode = getattr(config, 'anomaly_score_mode', 'default')
+    if score_mode == 'normalized':
+        recon_z = (recon_all - recon_all.mean()) / (recon_all.std() + 1e-4)
+        disc_z = (disc_all - disc_all.mean()) / (disc_all.std() + 1e-4)
+        scores_all = recon_z + disc_z
+    elif score_mode == 'adaptive':
+        adaptive_lambda = recon_all.mean() / (disc_all.mean() + 1e-4)
+        scores_all = recon_all + adaptive_lambda * disc_all
+    elif score_mode == 'ratio_weighted':
+        disc_median = np.median(disc_all) + 1e-4
+        scores_all = recon_all * (1 + disc_all / disc_median)
+    else:  # default
+        scores_all = recon_all + config.lambda_disc * disc_all
+
     return {
-        'scores': np.concatenate(all_scores),
-        'labels': np.concatenate(all_labels),
-        'recon_errors': np.concatenate(all_recon_errors),        # Teacher reconstruction error
-        'student_errors': np.concatenate(all_student_errors),    # Student reconstruction error
-        'discrepancies': np.concatenate(all_discrepancies),      # Teacher-student difference
-        'sample_types': np.concatenate(all_sample_types)
+        'scores': scores_all,
+        'labels': labels_all,
+        'recon_errors': recon_all,           # Teacher reconstruction error
+        'student_errors': student_all,       # Student reconstruction error
+        'discrepancies': disc_all,           # Teacher-student difference
+        'sample_types': sample_types_all
     }
 
 

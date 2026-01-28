@@ -274,10 +274,13 @@ After computing raw `recon` and `disc` scores, final anomaly score is computed:
 
 | Mode | Formula | Description |
 |------|---------|-------------|
-| `default` | `recon + λ * disc` | Fixed lambda weighting |
+| `default` | `recon + λ * disc` | Fixed lambda weighting (config.lambda_disc) |
+| `adaptive` | `recon + (μ_recon/μ_disc) * disc` | Auto-scaled lambda based on normal sample statistics |
+| `disc_only` | `disc` | Discrepancy only (no reconstruction) |
 | `normalized` | `z(recon) + z(disc)` | Z-score normalization |
-| `adaptive` | `recon + (μ_recon/μ_disc) * disc` | Auto-scaled lambda |
 | `ratio_weighted` | `recon * (1 + disc/median_disc)` | Ratio-based |
+
+> **Note**: In ablation experiments, the three primary scoring modes are: `default`, `adaptive`, and `normalized`.
 
 ---
 

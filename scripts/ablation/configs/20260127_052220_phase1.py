@@ -43,6 +43,7 @@ CREATED_AT = "2026-01-27 05:22:20"
 
 SCORING_MODES = ['default', 'adaptive', 'normalized']
 INFERENCE_MODES = ['last_patch', 'all_patches']
+MASK_SETTINGS = [True, False]  # Both mask_after_encoder=True and False
 
 # =============================================================================
 # Base Configurations

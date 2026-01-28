@@ -29,6 +29,19 @@ from scipy.stats import gaussian_kde
 from tqdm import tqdm
 
 from mae_anomaly import Config, ANOMALY_TYPE_NAMES, ANOMALY_CATEGORY
+from mae_anomaly.evaluator import (
+    compute_pa_k_adjusted_predictions,
+    aggregate_scores_to_point_level,
+    aggregate_patch_scores_to_point_level,
+    compute_segment_pa_k_detection_rate,
+    compute_segment_pa_k_adjusted_predictions,
+    compute_segment_pa_k_roc_auc,
+    compute_voting_threshold_pa_k_roc,
+    precompute_point_score_indices,
+    vectorized_voting_for_all_thresholds,
+    _compute_single_pa_k_roc,
+    batch_compute_voting_threshold_pa_k_roc,
+)
 from .base import (
     get_anomaly_colors, SAMPLE_TYPE_NAMES, SAMPLE_TYPE_COLORS,
     VIS_COLORS, VIS_MARKERS, VIS_LINESTYLES,
@@ -190,11 +203,11 @@ class BestModelVisualizer:
         if scoring_mode == 'default':
             scores = recon + lambda_disc * disc
         elif scoring_mode == 'adaptive':
-            adaptive_lambda = recon.mean() / (disc.mean() + 1e-8)
+            adaptive_lambda = recon.mean() / (disc.mean() + 1e-4)
             scores = recon + adaptive_lambda * disc
         elif scoring_mode == 'normalized':
-            recon_z = (recon - recon.mean()) / (recon.std() + 1e-8)
-            disc_z = (disc - disc.mean()) / (disc.std() + 1e-8)
+            recon_z = (recon - recon.mean()) / (recon.std() + 1e-4)
+            disc_z = (disc - disc.mean()) / (disc.std() + 1e-4)
             scores = recon_z + disc_z
         else:
             raise ValueError(f"Unknown scoring_mode: {scoring_mode}")
@@ -613,6 +626,7 @@ class BestModelVisualizer:
         ax.set_ylabel('Detection Rate (%)')
         ax.set_title('Point-wise Detection Rate', fontweight='bold')
         ax.set_ylim(0, 110)
+        plt.setp(ax.get_xticklabels(), fontsize=7, rotation=0, ha='center')
         for bar, rate in zip(bars, detection_rates):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
                    f'{rate:.0f}%', ha='center', va='bottom', fontsize=7)
@@ -623,6 +637,7 @@ class BestModelVisualizer:
         ax.set_ylabel('Detection Rate (%)')
         ax.set_title('PA%10 Detection Rate (lenient)', fontweight='bold')
         ax.set_ylim(0, 110)
+        plt.setp(ax.get_xticklabels(), fontsize=7, rotation=0, ha='center')
         for bar, rate in zip(bars, pa_10_detection_rates):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
                    f'{rate:.0f}%', ha='center', va='bottom', fontsize=7)
@@ -633,6 +648,7 @@ class BestModelVisualizer:
         ax.set_ylabel('Detection Rate (%)')
         ax.set_title('PA%80 Detection Rate (strict)', fontweight='bold')
         ax.set_ylim(0, 110)
+        plt.setp(ax.get_xticklabels(), fontsize=7, rotation=0, ha='center')
         for bar, rate in zip(bars, pa_80_detection_rates):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
                    f'{rate:.0f}%', ha='center', va='bottom', fontsize=7)
@@ -651,7 +667,7 @@ class BestModelVisualizer:
         ax.set_ylabel('Detection Rate (%)')
         ax.set_title('All PA%K Methods Comparison', fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels(anomaly_types_display, fontsize=7)
+        ax.set_xticklabels(anomaly_types_display, fontsize=7, rotation=0, ha='center')
         ax.set_ylim(0, 115)
         ax.legend(loc='upper right', fontsize=7)
 
@@ -665,7 +681,7 @@ class BestModelVisualizer:
         ax.set_ylabel('Detection Rate (%)')
         ax.set_title('PA%10 vs PA%80: Lenient vs Strict', fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels(anomaly_types_display, fontsize=7)
+        ax.set_xticklabels(anomaly_types_display, fontsize=7, rotation=0, ha='center')
         ax.set_ylim(0, 115)
         ax.legend(loc='upper right', fontsize=8)
 
@@ -687,6 +703,7 @@ class BestModelVisualizer:
         ax.set_ylabel('Mean Anomaly Score')
         title_suffix = ' (shifted to 0)' if scoring_mode == 'normalized' else ''
         ax.set_title(f'Mean Score by Sample Type{title_suffix}', fontweight='bold')
+        plt.setp(ax.get_xticklabels(), fontsize=7, rotation=0, ha='center')
         for bar, score in zip(bars, display_scores):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
                    f'{score:.4f}', ha='center', va='bottom', fontsize=6, rotation=45)
@@ -705,9 +722,12 @@ class BestModelVisualizer:
         bars = ax.bar(anomaly_types_display, rate_drop, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
         ax.set_ylabel('Rate Drop (%)')
         ax.set_title('Detection Consistency (PA%10 - PA%80)', fontweight='bold')
+        plt.setp(ax.get_xticklabels(), fontsize=7, rotation=0, ha='center')
         ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
         for bar, drop in zip(bars, rate_drop):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+            # Position text above bar, with minimum height to avoid overlap with x-axis
+            text_y = max(bar.get_height(), 0) + 0.5
+            ax.text(bar.get_x() + bar.get_width()/2, text_y,
                    f'{drop:.0f}%', ha='center', va='bottom', fontsize=7)
 
         # Row 3, Col 2: Sample Distribution (pie chart)
@@ -1614,10 +1634,11 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
             ax.plot(epochs, history['train_rec_loss'],
                    color=c_teacher, ls='-', lw=2, marker=m_teacher, ms=4, label='Teacher Recon')
         ax.set_xlabel('Epoch')
-        ax.set_ylabel('MSE Loss')
+        ax.set_ylabel('MSE Loss (log scale)')
+        ax.set_yscale('log')
         ax.set_title('Teacher Reconstruction Loss (○)', fontweight='bold')
         ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, which='both')
         if warmup_epochs > 0:
             ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
 
@@ -1632,10 +1653,11 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
             ax.plot(epochs, history.get('train_student_recon_loss', [0]*len(epochs)),
                    color=c_student, ls='-', lw=2, marker=m_student, ms=4, label='Student Recon')
         ax.set_xlabel('Epoch')
-        ax.set_ylabel('MSE Loss')
+        ax.set_ylabel('MSE Loss (log scale)')
+        ax.set_yscale('log')
         ax.set_title('Student Reconstruction Loss (△)', fontweight='bold')
         ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, which='both')
         if warmup_epochs > 0:
             ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
 
@@ -1649,10 +1671,11 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
         ax.plot(epochs, history['train_disc_loss'],
                color=c_total, ls='--', lw=1.5, label='Total')
         ax.set_xlabel('Epoch')
-        ax.set_ylabel('Discrepancy Loss')
+        ax.set_ylabel('Discrepancy Loss (log scale)')
+        ax.set_yscale('log')
         ax.set_title('Discrepancy Loss (□)', fontweight='bold')
         ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, which='both')
         if warmup_epochs > 0:
             ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
 
@@ -1664,10 +1687,11 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
             ax.plot(epochs, history['train_student_recon_normal'],
                    color=c_student, ls='--', lw=2, marker=m_student, ms=4, label='Student (△)')
         ax.set_xlabel('Epoch')
-        ax.set_ylabel('MSE Loss')
+        ax.set_ylabel('MSE Loss (log scale)')
+        ax.set_yscale('log')
         ax.set_title('Normal Data: Teacher vs Student', fontweight='bold')
         ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, which='both')
         if warmup_epochs > 0:
             ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
 
@@ -1679,10 +1703,11 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
             ax.plot(epochs, history['train_student_recon_anomaly'],
                    color=c_student, ls='--', lw=2, marker=m_student, ms=4, label='Student (△)')
         ax.set_xlabel('Epoch')
-        ax.set_ylabel('MSE Loss')
+        ax.set_ylabel('MSE Loss (log scale)')
+        ax.set_yscale('log')
         ax.set_title('Anomaly Data: Teacher vs Student', fontweight='bold')
         ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, which='both')
         if warmup_epochs > 0:
             ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'])
 
@@ -1695,10 +1720,11 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
         ax.plot(epochs, history['train_loss'],
                color=VIS_COLORS['baseline'], ls='--', lw=1.5, label='Total Loss')
         ax.set_xlabel('Epoch')
-        ax.set_ylabel('Loss')
+        ax.set_ylabel('Loss (log scale)')
+        ax.set_yscale('log')
         ax.set_title('All Losses Combined', fontweight='bold')
         ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, which='both')
         if warmup_epochs > 0:
             ax.axvspan(0.5, warmup_epochs + 0.5, alpha=0.2, color=VIS_COLORS['masked_region'], label='Warm-up')
 
@@ -2254,6 +2280,13 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
         # Anomaly type score trends over epochs (requires history with epoch_anomaly_type_scores)
         self.plot_score_contribution_epoch_trends(experiment_dir, history)
 
+        # ROC curve comparison (different score types)
+        self.plot_roc_curve_comparison()
+        self.plot_roc_curve_pa80_comparison()
+
+        # Performance by anomaly type comparison (different score types)
+        self.plot_performance_by_anomaly_type_comparison(self.output_dir)
+
     def plot_score_contribution_epoch_trends(self, experiment_dir: str = None, history: Dict = None):
         """Plot epoch-wise score contribution breakdown for each anomaly type
 
@@ -2461,6 +2494,606 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
                    dpi=150, bbox_inches='tight')
         plt.close()
         print("  - best_model_score_contribution_trends.png")
+
+    def plot_roc_curve_comparison(self):
+        """Plot ROC curves comparing different scoring methods.
+
+        Compares:
+        - Anomaly Score (combined): recon + lambda * disc (based on scoring mode)
+        - Discrepancy Only: teacher-student difference
+        - Teacher Recon Only: teacher reconstruction error
+        - Student Recon Only: student reconstruction error
+        """
+        labels = self.pred_data['labels']
+        recon_errors = self.pred_data['recon_errors']  # Teacher reconstruction
+        student_errors = self.pred_data['student_errors']  # Student reconstruction
+        discrepancies = self.pred_data['discrepancies']
+        combined_scores = self.pred_data['scores']  # Already computed with scoring_mode
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+
+        # Define scoring methods and their colors
+        scoring_methods = [
+            ('Anomaly Score (combined)', combined_scores, VIS_COLORS['total']),
+            ('Discrepancy Only', discrepancies, VIS_COLORS['discrepancy']),
+            ('Teacher Recon Only', recon_errors, VIS_COLORS['teacher']),
+            ('Student Recon Only', student_errors, VIS_COLORS['student']),
+        ]
+
+        # Track offset for annotations to avoid overlap
+        annotation_offsets = [
+            (0.02, 0.02),   # Combined
+            (-0.18, -0.08),  # Discrepancy
+            (0.02, -0.08),  # Teacher
+            (-0.18, 0.02),  # Student
+        ]
+
+        # Short names for annotations
+        short_names = ['Anomaly', 'Discr.', 'Teacher', 'Student']
+
+        # Plot ROC curve for each method
+        for idx, (name, scores, color) in enumerate(scoring_methods):
+            if len(np.unique(labels)) > 1:
+                fpr, tpr, thresholds = roc_curve(labels, scores)
+                roc_auc = auc(fpr, tpr)
+                ax.plot(fpr, tpr, color=color, lw=2, label=f'{name} (AUC={roc_auc:.4f})')
+
+                # Find optimal point and compute F1
+                optimal_idx = np.argmax(tpr - fpr)
+                optimal_threshold = thresholds[optimal_idx]
+                predictions = (scores > optimal_threshold).astype(int)
+                f1 = f1_score(labels, predictions)
+
+                # Mark optimal point
+                opt_fpr = fpr[optimal_idx]
+                opt_tpr = tpr[optimal_idx]
+                ax.scatter(opt_fpr, opt_tpr, s=80, color=color, zorder=5, marker='o')
+
+                # Add annotation near optimal point with method name, AUC, and F1
+                offset_x, offset_y = annotation_offsets[idx]
+                short_name = short_names[idx]
+                ax.annotate(f'{short_name}\nAUC={roc_auc:.3f}\nF1={f1:.3f}',
+                           xy=(opt_fpr, opt_tpr),
+                           xytext=(opt_fpr + offset_x, opt_tpr + offset_y),
+                           fontsize=8, color=color, fontweight='bold',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor=color),
+                           arrowprops=dict(arrowstyle='->', color=color, lw=0.5))
+
+        # Reference line
+        ax.plot([0, 1], [0, 1], color=VIS_COLORS['reference'], lw=2, linestyle='--', label='Random')
+
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+
+        scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        ax.set_title(f'ROC Curve Comparison\n(Scoring Mode: {scoring_mode})', fontsize=12, fontweight='bold')
+        ax.legend(loc='lower right', fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'best_model_roc_curve_comparison.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - best_model_roc_curve_comparison.png")
+
+    def plot_roc_curve_pa80_comparison(self):
+        """Plot PA%80 ROC curves comparing different scoring methods.
+
+        Uses voting threshold variation approach: for each threshold T, the voting
+        aggregation converts window scores > T to 1 (vote for anomaly), then majority
+        vote determines the point-level prediction. This directly evaluates the voting
+        mechanism at different operating points.
+
+        Compares:
+        - Anomaly Score (combined): recon + lambda * disc (based on scoring mode)
+        - Discrepancy Only: teacher-student difference
+        - Teacher Recon Only: teacher reconstruction error
+        - Student Recon Only: student reconstruction error
+        """
+        # Check if we can use segment-based PA%K
+        test_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
+        can_use_segment_pa_k = (
+            test_dataset is not None and
+            hasattr(test_dataset, 'anomaly_regions') and
+            hasattr(test_dataset, 'point_labels') and
+            hasattr(test_dataset, 'window_start_indices') and
+            len(test_dataset.anomaly_regions) > 0
+        )
+
+        if not can_use_segment_pa_k:
+            print("  - best_model_roc_curve_PA80_comparison.png (SKIPPED: no segment info)")
+            return
+
+        recon_errors = self.pred_data['recon_errors']
+        student_errors = self.pred_data['student_errors']
+        discrepancies = self.pred_data['discrepancies']
+        combined_scores = self.pred_data['scores']
+
+        # Get point-level data
+        total_length = len(test_dataset.point_labels)
+        point_labels = np.array(test_dataset.point_labels)
+        anomaly_regions = test_dataset.anomaly_regions
+        window_start_indices = np.array(test_dataset.window_start_indices)
+        n_windows = len(window_start_indices)
+
+        # Check inference mode and determine if using patch-level scores
+        inference_mode = getattr(self.config, 'inference_mode', 'last_patch')
+        num_patches = getattr(self.config, 'num_patches', 10)
+
+        # Determine if we're using patch-level scores based on actual data shape
+        first_scores = combined_scores
+        is_patch_scores = (inference_mode == 'all_patches' and
+                          len(first_scores) == n_windows * num_patches)
+
+        # Convert scores to proper shape for voting
+        # For all_patches mode: reshape to 2D (n_windows, num_patches) for patch-level voting
+        # For last_patch mode: keep 1D (n_windows,) for window-level voting
+        def prepare_scores(scores):
+            if is_patch_scores:
+                # Reshape 1D (n_windows * num_patches,) to 2D (n_windows, num_patches)
+                return scores.reshape(n_windows, num_patches)
+            return scores
+
+        # Scoring methods to compare
+        scoring_methods = [
+            ('Anomaly Score (combined)', prepare_scores(combined_scores), VIS_COLORS['total']),
+            ('Discrepancy Only', prepare_scores(discrepancies), VIS_COLORS['discrepancy']),
+            ('Teacher Recon Only', prepare_scores(recon_errors), VIS_COLORS['teacher']),
+            ('Student Recon Only', prepare_scores(student_errors), VIS_COLORS['student']),
+        ]
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+
+        # Track offset for annotations
+        annotation_offsets = [
+            (0.02, 0.02),
+            (-0.18, -0.08),
+            (0.02, -0.08),
+            (-0.18, 0.02),
+        ]
+        short_names = ['Anomaly', 'Discr.', 'Teacher', 'Student']
+
+        # OPTIMIZATION: Precompute point_indices once (shared across all scoring methods)
+        n_thresholds = 100  # High resolution for smooth ROC curves
+        point_indices, point_coverage = precompute_point_score_indices(
+            window_start_indices=window_start_indices,
+            seq_length=self.config.seq_length,
+            patch_size=self.config.patch_size,
+            total_length=total_length,
+            num_patches=num_patches if is_patch_scores else None,
+            is_patch_scores=is_patch_scores
+        )
+
+        # Create evaluation mask (no type filtering for overall PA%80)
+        eval_type_mask = np.ones(total_length, dtype=bool)
+
+        for idx, (name, scores, color) in enumerate(scoring_methods):
+            # OPTIMIZATION: Use vectorized voting with precomputed indices
+            min_score, max_score = scores.min(), scores.max()
+            thresholds = np.linspace(min_score - 0.01, max_score + 0.01, n_thresholds)
+
+            # Vectorized voting for all thresholds at once
+            point_scores_all = vectorized_voting_for_all_thresholds(
+                scores=scores,
+                point_indices=point_indices,
+                point_coverage=point_coverage,
+                thresholds=thresholds,
+                is_patch_scores=is_patch_scores
+            )
+
+            # Compute ROC using the helper function
+            result = _compute_single_pa_k_roc((
+                point_scores_all,
+                point_labels,
+                anomaly_regions,
+                eval_type_mask,
+                80,  # k_percent
+                None,  # anomaly_type (None = all types)
+                True  # return_optimal_f1
+            ))
+
+            fprs_sorted, tprs_sorted, pa80_auc, pa80_f1 = result
+
+            ax.plot(fprs_sorted, tprs_sorted, color=color, lw=2,
+                   label=f'{name} (AUC={pa80_auc:.4f}, F1={pa80_f1:.4f})')
+
+            # Find optimal point (max TPR - FPR)
+            if len(fprs_sorted) > 0:
+                optimal_idx = np.argmax(tprs_sorted - fprs_sorted)
+                opt_fpr = fprs_sorted[optimal_idx]
+                opt_tpr = tprs_sorted[optimal_idx]
+                ax.scatter(opt_fpr, opt_tpr, s=80, color=color, zorder=5, marker='o')
+
+                # Annotation with AUC and F1
+                offset_x, offset_y = annotation_offsets[idx]
+                short_name = short_names[idx]
+                ax.annotate(f'{short_name}\nAUC={pa80_auc:.3f}\nF1={pa80_f1:.3f}',
+                           xy=(opt_fpr, opt_tpr),
+                           xytext=(opt_fpr + offset_x, opt_tpr + offset_y),
+                           fontsize=8, color=color, fontweight='bold',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor=color),
+                           arrowprops=dict(arrowstyle='->', color=color, lw=0.5))
+
+        # Reference line
+        ax.plot([0, 1], [0, 1], color=VIS_COLORS['reference'], lw=2, linestyle='--', label='Random')
+
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate (PA%80 Adjusted)')
+
+        scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        ax.set_title(f'PA%80 ROC Curve Comparison (Voting Threshold)\n(Segment-Based, Scoring Mode: {scoring_mode})', fontsize=12, fontweight='bold')
+        ax.legend(loc='lower right', fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'best_model_roc_curve_PA80_comparison.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - best_model_roc_curve_PA80_comparison.png")
+
+    def plot_performance_by_anomaly_type_comparison(self, experiment_dir: str = None):
+        """Plot detection performance by anomaly type comparing different scoring methods.
+
+        Creates a 4x4 grid:
+        - Rows: 4 scoring methods (Combined, Discrepancy, Teacher Recon, Student Recon)
+        - Cols: Point-wise Detection Rate, All PA%K, PA%80 Detection Rate, Mean Score
+
+        Args:
+            experiment_dir: Path to experiment directory (optional, for compatibility)
+        """
+        labels = self.pred_data['labels']
+        recon_errors = self.pred_data['recon_errors']
+        student_errors = self.pred_data['student_errors']
+        discrepancies = self.pred_data['discrepancies']
+        combined_scores = self.pred_data['scores']
+        sample_types = self.pred_data['sample_types']
+
+        # Get anomaly_types from batches (batch[4] contains anomaly_type)
+        anomaly_types = []
+        try:
+            for batch in self.test_loader:
+                if len(batch) >= 5:
+                    anomaly_types.append(batch[4].numpy())
+            if anomaly_types:
+                anomaly_types = np.concatenate(anomaly_types)
+                # If all_patches mode, need to expand
+                if len(anomaly_types) != len(labels):
+                    num_patches = getattr(self.config, 'num_patches', 10)
+                    anomaly_types = np.repeat(anomaly_types, num_patches)
+            else:
+                anomaly_types = np.zeros_like(labels)
+        except Exception:
+            # Fallback: use zeros (can't distinguish anomaly types)
+            anomaly_types = np.zeros_like(labels)
+
+        # Scoring methods to compare
+        scoring_methods = [
+            ('Anomaly Score', combined_scores),
+            ('Discrepancy', discrepancies),
+            ('Teacher Recon', recon_errors),
+            ('Student Recon', student_errors),
+        ]
+
+        # Check if test_dataset has anomaly_regions for segment-based PA%K
+        test_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
+        can_use_segment_pa_k = (
+            test_dataset is not None and
+            hasattr(test_dataset, 'anomaly_regions') and
+            hasattr(test_dataset, 'point_labels') and
+            hasattr(test_dataset, 'window_start_indices') and
+            len(test_dataset.anomaly_regions) > 0
+        )
+
+        # Pre-compute voting-based PA%K metrics for each scoring method
+        # OPTIMIZATION: Precompute shared components once, reuse for all scoring methods
+        pa_k_metrics_by_method = {}
+        if can_use_segment_pa_k:
+            from concurrent.futures import ThreadPoolExecutor
+
+            total_length = len(test_dataset.point_labels)
+            inference_mode = getattr(self.config, 'inference_mode', 'last_patch')
+            num_patches = getattr(self.config, 'num_patches', 10)
+            n_windows = len(test_dataset.window_start_indices)
+            window_start_indices = np.array(test_dataset.window_start_indices)
+            point_labels = np.array(test_dataset.point_labels)
+            n_thresholds = 100
+            k_values = [10, 20, 50, 80]
+
+            # Collect anomaly type indices that have segments
+            anomaly_type_indices = []
+            for atype_idx in range(1, 10):
+                type_segments = [r for r in test_dataset.anomaly_regions if r.anomaly_type == atype_idx]
+                if len(type_segments) > 0:
+                    anomaly_type_indices.append(atype_idx)
+
+            if anomaly_type_indices:
+                # Determine if scores are patch-level
+                first_scores = scoring_methods[0][1]
+                is_patch_scores = (inference_mode == 'all_patches' and
+                                   len(first_scores) == n_windows * num_patches)
+
+                # OPTIMIZATION 1: Precompute point_indices ONCE (shared across all methods)
+                point_indices, point_coverage = precompute_point_score_indices(
+                    window_start_indices=window_start_indices,
+                    seq_length=self.config.seq_length,
+                    patch_size=self.config.patch_size,
+                    total_length=total_length,
+                    num_patches=num_patches if is_patch_scores else None,
+                    is_patch_scores=is_patch_scores
+                )
+
+                # OPTIMIZATION 2: Precompute type_masks ONCE (shared across all methods)
+                type_masks = {}
+                for atype in anomaly_type_indices:
+                    mask = np.ones(total_length, dtype=bool)
+                    for region in test_dataset.anomaly_regions:
+                        if region.anomaly_type != atype:
+                            start, end = region.start, min(region.end, total_length)
+                            mask[start:end] = False
+                    type_masks[atype] = mask
+
+                # Process each scoring method using shared precomputed data
+                for score_name, sample_scores in scoring_methods:
+                    # Convert to window-level scores if needed
+                    if is_patch_scores:
+                        window_scores = sample_scores.reshape(n_windows, num_patches)
+                    else:
+                        window_scores = sample_scores
+
+                    # Generate thresholds for this method's score distribution
+                    min_score, max_score = window_scores.min(), window_scores.max()
+                    thresholds = np.linspace(min_score - 0.01, max_score + 0.01, n_thresholds)
+
+                    # Vectorized voting using precomputed point_indices
+                    point_scores_all = vectorized_voting_for_all_thresholds(
+                        scores=window_scores,
+                        point_indices=point_indices,
+                        point_coverage=point_coverage,
+                        thresholds=thresholds,
+                        is_patch_scores=is_patch_scores
+                    )
+
+                    # First, compute OVERALL PA%K ROC to find global optimal threshold
+                    # This ensures Detection Rate is consistent with ROC curve visualization
+                    eval_type_mask_overall = np.ones(total_length, dtype=bool)
+                    overall_thresh_idx = {}
+                    for k in k_values:
+                        result = _compute_single_pa_k_roc((
+                            point_scores_all,
+                            point_labels,
+                            test_dataset.anomaly_regions,
+                            eval_type_mask_overall,
+                            k,
+                            None,  # anomaly_type=None means overall (all types)
+                            'all'  # return threshold index and F1
+                        ))
+                        _, _, _, optimal_thresh_idx, _ = result
+                        overall_thresh_idx[k] = optimal_thresh_idx
+
+                    pa_k_metrics_by_method[score_name] = {
+                        'overall_thresh_idx': overall_thresh_idx,  # Use OVERALL threshold
+                        'point_scores_all': point_scores_all
+                    }
+
+        fig, axes = plt.subplots(4, 4, figsize=(24, 20))
+        anomaly_colors = get_anomaly_colors()
+
+        # Store baseline (Anomaly Score) detection rates for reference lines
+        baseline_detection_rates = None
+        baseline_pa_80_rates = None
+        baseline_anomaly_types_list = None
+
+        for row_idx, (score_name, scores) in enumerate(scoring_methods):
+            # Compute optimal threshold for this scoring method
+            if len(np.unique(labels)) > 1:
+                fpr, tpr, thresholds = roc_curve(labels, scores)
+                optimal_idx = np.argmax(tpr - fpr)
+                threshold = thresholds[optimal_idx]
+            else:
+                threshold = np.median(scores)
+
+            predictions = (scores > threshold).astype(int)
+
+            # Collect metrics per anomaly type
+            anomaly_types_list = []
+            detection_rates = []
+            pa_10_rates = []
+            pa_20_rates = []
+            pa_50_rates = []
+            pa_80_rates = []
+            mean_scores_list = []
+            normal_mean_score = 0.0
+            disturbing_mean_score = 0.0
+
+            # Get pure_normal and disturbing_normal mean scores
+            pure_normal_mask = (sample_types == 0)
+            disturbing_mask = (sample_types == 1)
+            if pure_normal_mask.sum() > 0:
+                normal_mean_score = float(scores[pure_normal_mask].mean())
+            if disturbing_mask.sum() > 0:
+                disturbing_mean_score = float(scores[disturbing_mask].mean())
+
+            # Process each anomaly type (skip normal=0)
+            for atype_idx in range(1, 10):  # anomaly types 1-9
+                atype_name = ANOMALY_TYPE_NAMES[atype_idx] if atype_idx < len(ANOMALY_TYPE_NAMES) else f'type_{atype_idx}'
+                type_mask = (anomaly_types == atype_idx)
+
+                if type_mask.sum() == 0:
+                    continue
+
+                type_scores = scores[type_mask]
+                type_labels = labels[type_mask]
+                type_predictions = predictions[type_mask]
+
+                anomaly_types_list.append(atype_name)
+
+                # Detection rate: compute for actual anomaly samples (label==1) only
+                anomaly_sample_mask = (type_labels == 1)
+                if anomaly_sample_mask.sum() > 0:
+                    # Detection rate = fraction of actual anomalies that were predicted as anomalies
+                    det_rate = float(type_predictions[anomaly_sample_mask].mean())
+                    detection_rates.append(det_rate * 100)
+
+                    # PA%K detection rates - use OVERALL optimal threshold for consistency
+                    # This ensures Detection Rate matches the optimal point on the ROC curve
+                    if can_use_segment_pa_k and score_name in pa_k_metrics_by_method:
+                        pa_k_data = pa_k_metrics_by_method[score_name]
+                        overall_thresh_idx = pa_k_data['overall_thresh_idx']  # Use OVERALL threshold
+                        point_scores_all = pa_k_data['point_scores_all']
+
+                        for k, rate_list in [(10, pa_10_rates), (20, pa_20_rates),
+                                             (50, pa_50_rates), (80, pa_80_rates)]:
+                            # Use OVERALL optimal threshold (not per-type) for consistency
+                            optimal_thresh_idx = overall_thresh_idx.get(k, 0)
+                            voting_point_scores = point_scores_all[optimal_thresh_idx]
+                            # Use threshold=0.5 on voting result (binary: 0 or 1)
+                            pa_rate = compute_segment_pa_k_detection_rate(
+                                point_scores=voting_point_scores,
+                                point_labels=test_dataset.point_labels,
+                                anomaly_regions=test_dataset.anomaly_regions,
+                                anomaly_type=atype_idx,
+                                threshold=0.5,
+                                k_percent=k
+                            )
+                            rate_list.append(float(pa_rate) * 100)
+                    else:
+                        # Fallback: sample-level PA%K (approximate)
+                        for k, rate_list in [(10, pa_10_rates), (20, pa_20_rates),
+                                             (50, pa_50_rates), (80, pa_80_rates)]:
+                            adjusted = compute_pa_k_adjusted_predictions(type_predictions, type_labels, k_percent=k)
+                            rate_list.append(float(adjusted[anomaly_sample_mask].mean()) * 100)
+                else:
+                    detection_rates.append(0)
+                    pa_10_rates.append(0)
+                    pa_20_rates.append(0)
+                    pa_50_rates.append(0)
+                    pa_80_rates.append(0)
+
+                mean_scores_list.append(float(type_scores.mean()))
+
+            if len(anomaly_types_list) == 0:
+                continue
+
+            # Store baseline (first row = Anomaly Score) for reference lines
+            if row_idx == 0:
+                baseline_detection_rates = detection_rates.copy()
+                baseline_pa_80_rates = pa_80_rates.copy()
+                baseline_anomaly_types_list = anomaly_types_list.copy()
+
+            colors = [anomaly_colors.get(at, VIS_COLORS['reference']) for at in anomaly_types_list]
+            display_names = [at.replace('_', '\n') for at in anomaly_types_list]
+            x = np.arange(len(display_names))
+
+            # Column 1: Point-wise Detection Rate
+            ax = axes[row_idx, 0]
+            bars = ax.bar(display_names, detection_rates, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
+            ax.set_ylabel('Detection Rate (%)')
+            ax.set_title(f'{score_name}: Point-wise Detection Rate', fontweight='bold', fontsize=10)
+            ax.set_ylim(0, 110)
+            for bar, rate in zip(bars, detection_rates):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2,
+                       f'{rate:.0f}%', ha='center', va='bottom', fontsize=6)
+            ax.tick_params(axis='x', labelsize=7)
+
+            # Add baseline reference markers for rows 1-3 (not row 0)
+            if row_idx > 0 and baseline_detection_rates is not None:
+                for i, (atype_name, baseline_rate) in enumerate(zip(baseline_anomaly_types_list, baseline_detection_rates)):
+                    if atype_name in anomaly_types_list:
+                        idx = anomaly_types_list.index(atype_name)
+                        ax.hlines(y=baseline_rate, xmin=idx-0.4, xmax=idx+0.4,
+                                 colors=VIS_COLORS['total'], linestyles='dashed', linewidth=1.5, alpha=0.7)
+                if row_idx == 1:
+                    ax.plot([], [], color=VIS_COLORS['total'], linestyle='--', linewidth=1.5, label='Anomaly Score')
+                    ax.legend(loc='lower right', fontsize=6)
+
+            # Column 2: All PA%K Methods Comparison
+            ax = axes[row_idx, 1]
+            width = 0.18
+            bars1 = ax.bar(x - 2*width, detection_rates, width, label='Point-wise', color=colors, alpha=0.3)
+            bars2 = ax.bar(x - width, pa_10_rates, width, label='PA%10', color=colors, alpha=0.5)
+            bars3 = ax.bar(x, pa_20_rates, width, label='PA%20', color=colors, alpha=0.7)
+            bars4 = ax.bar(x + width, pa_50_rates, width, label='PA%50', color=colors, alpha=0.85)
+            bars5 = ax.bar(x + 2*width, pa_80_rates, width, label='PA%80', color=colors, alpha=1.0)
+            ax.set_ylabel('Detection Rate (%)')
+            ax.set_title(f'{score_name}: All PA%K Comparison', fontweight='bold', fontsize=10)
+            ax.set_xticks(x)
+            ax.set_xticklabels(display_names, fontsize=6)
+            ax.set_ylim(0, 115)
+            if row_idx == 0:
+                ax.legend(loc='upper right', fontsize=6)
+
+            # Column 3: PA%80 Detection Rate
+            ax = axes[row_idx, 2]
+            bars = ax.bar(display_names, pa_80_rates, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
+            ax.set_ylabel('Detection Rate (%)')
+            ax.set_title(f'{score_name}: PA%80 Detection Rate (strict)', fontweight='bold', fontsize=10)
+            ax.set_ylim(0, 110)
+            for bar, rate in zip(bars, pa_80_rates):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2,
+                       f'{rate:.0f}%', ha='center', va='bottom', fontsize=6)
+            ax.tick_params(axis='x', labelsize=7)
+
+            # Add baseline reference markers for rows 1-3 (not row 0)
+            if row_idx > 0 and baseline_pa_80_rates is not None:
+                for i, (atype_name, baseline_rate) in enumerate(zip(baseline_anomaly_types_list, baseline_pa_80_rates)):
+                    if atype_name in anomaly_types_list:
+                        idx = anomaly_types_list.index(atype_name)
+                        ax.hlines(y=baseline_rate, xmin=idx-0.4, xmax=idx+0.4,
+                                 colors=VIS_COLORS['total'], linestyles='dashed', linewidth=1.5, alpha=0.7)
+                if row_idx == 1:
+                    ax.plot([], [], color=VIS_COLORS['total'], linestyle='--', linewidth=1.5, label='Anomaly Score')
+                    ax.legend(loc='lower right', fontsize=6)
+
+            # Column 4: Mean Score by Sample Type
+            ax = axes[row_idx, 3]
+
+            # Shift for normalized mode - add small padding so minimum is visible
+            scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+            all_scores_for_shift = mean_scores_list + [normal_mean_score, disturbing_mean_score]
+            if scoring_mode == 'normalized':
+                score_min = min(all_scores_for_shift)
+                score_range = max(all_scores_for_shift) - score_min
+                padding = score_range * 0.05  # 5% padding so minimum bar is visible
+            else:
+                score_min = 0
+                padding = 0
+
+            display_scores = [s - score_min + padding for s in mean_scores_list]
+            display_normal = normal_mean_score - score_min + padding
+            display_disturbing = disturbing_mean_score - score_min + padding
+
+            bars = ax.bar(display_names, display_scores, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
+            ax.set_ylabel('Mean Score')
+            title_suffix = ' (shifted)' if scoring_mode == 'normalized' else ''
+            ax.set_title(f'{score_name}: Mean Score{title_suffix}', fontweight='bold', fontsize=10)
+
+            # Fix: Use percentage of y-axis range for text offset
+            y_max = max(display_scores + [display_normal, display_disturbing]) * 1.15
+            text_offset = y_max * 0.02
+            for bar, score in zip(bars, display_scores):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + text_offset,
+                       f'{score:.4f}', ha='center', va='bottom', fontsize=5, rotation=45)
+            ax.tick_params(axis='x', labelsize=7)
+            ax.set_ylim(0, y_max)
+
+            # Reference lines - show original values in legend
+            ax.axhline(y=display_normal, color=VIS_COLORS['pure_normal'], linestyle='--', linewidth=1.5,
+                       label=f'Pure Normal ({normal_mean_score:.4f})')
+            ax.axhline(y=display_disturbing, color=VIS_COLORS['disturbing'], linestyle='--', linewidth=1.5,
+                       label=f'Disturbing ({disturbing_mean_score:.4f})')
+            if row_idx == 0:
+                ax.legend(loc='upper right', fontsize=6)
+
+        scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        plt.suptitle(f'Performance by Anomaly Type - Scoring Method Comparison\n(Scoring Mode: {scoring_mode})',
+                    fontsize=14, fontweight='bold', y=1.01)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'performance_by_anomaly_type_comparison.png'),
+                   dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - performance_by_anomaly_type_comparison.png")
 
 
 # =============================================================================

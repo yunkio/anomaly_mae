@@ -1,7 +1,9 @@
 # Ablation Studies Documentation
 
-**Last Updated**: 2026-01-25
-**Status**: ✅ Verified and Logically Correct
+**Last Updated**: 2026-01-28
+**Status**: ✅ Updated to reflect new ablation framework
+
+> **Note**: For the latest Phase 1/Phase 2 ablation experiment configurations, see [ABLATION_EXPERIMENTS.md](ABLATION_EXPERIMENTS.md).
 
 ---
 
@@ -20,9 +22,9 @@ This document describes the ablation studies used to validate the Self-Distilled
   - Teacher Decoder: 2 layers
   - Student Decoder: 1 layer
 
-**Pipeline**:
-1. Input (batch, 100, 8) → 1D-CNN → (batch, 64, 100)
-2. CNN features → Patch embedding → (batch, 10, 64)
+**Pipeline** (patch_cnn mode):
+1. Input (batch, 100, 8) → Patchify → CNN per patch → (batch, 10, 64)
+2. Patches → Positional encoding → (batch, 10, 64)
 3. Patches + Positional encoding → Transformer encoder
 4. Latent → Teacher/Student decoders → Output projection
 5. Reconstruction (batch, 100, 8)
@@ -41,7 +43,7 @@ This document describes the ablation studies used to validate the Self-Distilled
 
 **Training**:
 - Loss: Reconstruction + Discrepancy
-- Random patch masking during training (40% of patches masked)
+- Random patch masking during training (20% of patches masked)
 - Both teacher and student models trained
 
 **Evaluation**:
@@ -129,8 +131,8 @@ Test whether fine-grained (patch-level) or coarse (window-level) discrepancy los
 
 **Configuration**:
 Two different patchify modes tested:
-- **linear** (default): Patchify first, then linear projection (no CNN)
-- **patch_cnn**: Patchify first, then CNN per patch
+- **linear**: Patchify first, then linear projection (no CNN)
+- **patch_cnn** (default): Patchify first, then CNN per patch
 
 **Structure Comparison**:
 
@@ -267,75 +269,86 @@ Based on the MAE and self-distillation literature:
 
 ## Code Implementation
 
-All ablations are tested via grid search in `scripts/run_experiments.py`:
+All ablations are now tested via the unified ablation framework in `scripts/ablation/run_ablation.py`:
+
+```bash
+# Run Phase 1 ablation experiments
+python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py
+
+# Run specific experiment group
+python scripts/ablation/run_ablation.py --config configs/phase1.py --start-from 50
+```
+
+**Ablation Config Structure** (`scripts/ablation/configs/`):
 
 ```python
-# Parameter grid for ablation experiments
-# Note: margin=0.5, lambda_disc=0.5 are fixed (not in grid)
-DEFAULT_PARAM_GRID = {
-    'masking_ratio': [0.4, 0.7],
-    'masking_strategy': ['patch', 'feature_wise'],
-    'num_patches': [10, 25],
-    'margin_type': ['hinge', 'softplus', 'dynamic'],
-    'force_mask_anomaly': [False, True],
-    'patch_level_loss': [True, False],
-    'patchify_mode': ['patch_cnn', 'linear'],
-    'mask_after_encoder': [False, True],
-    'shared_mask_token': [True, False],
+# Example config file
+BASE_CONFIG = {
+    'd_model': 64,
+    'nhead': 2,
+    'masking_ratio': 0.2,
+    'margin_type': 'dynamic',
+    # ... other defaults
 }
-# Total combinations: 2*2*2*3*2*2*2*2*2 = 768
 
-# Two-stage grid search
-runner = ExperimentRunner(param_grid=DEFAULT_PARAM_GRID)
-results = runner.run_grid_search(
-    quick_epochs=1,       # Stage 1: quick screening
-    full_epochs=2,        # Stage 2: full training (fixed at 2)
-    two_stage=True
-)
+EXPERIMENTS = [
+    {'name': '001_baseline', 'd_model': 64},
+    {'name': '002_d128', 'd_model': 128},
+    {'name': '003_d256', 'd_model': 256},
+    # ... 170 total experiments
+]
+
+# Each experiment is evaluated across 12 variants:
+# - 2 mask_after_encoder: [True, False]
+# - 2 inference_mode: ['last_patch', 'all_patches']
+# - 3 scoring_mode: ['default', 'adaptive', 'normalized']
+# Total: 170 × 12 = 2040 results
 ```
 
 Evaluation logic in `mae_anomaly/evaluator.py`:
 
 ```python
-# Anomaly score: reconstruction error + discrepancy
+# Anomaly score: reconstruction error + discrepancy (with scoring modes)
 recon_error = ((teacher_output - sequences) ** 2).mean(dim=2)
 discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)
-error = recon_error + self.config.lambda_disc * discrepancy
+
+# Scoring modes
+if scoring_mode == 'default':
+    score = recon_error + lambda_disc * discrepancy
+elif scoring_mode == 'adaptive':
+    score = recon_error + adaptive_lambda * discrepancy
+elif scoring_mode == 'normalized':
+    score = z_score(recon_error) + z_score(discrepancy)
 ```
 
 ---
 
-## Grid Search Parameters
+## Ablation Framework
 
-The experiment runner uses a two-stage grid search approach:
+The new ablation framework (`scripts/ablation/run_ablation.py`) provides:
 
-**Stage 1: Quick Screening** (1 epoch default)
-- All 288 parameter combinations evaluated quickly
-- Candidates selected for full training based on diverse criteria
+**Features**:
+- **Config-based experiments**: Define experiments in Python config files
+- **Automatic variant testing**: Each experiment tested across mask_after, inference_mode, and scoring_mode
+- **Progress tracking**: Resume from interruption with `--start-from`
+- **Visualization generation**: Automatic ROC curves and performance charts
+- **Summary results**: CSV export with all metrics
 
-**Stage 2: Full Training** (2 epochs default)
-- ~50-70 diverse candidates from Stage 1 (after deduplication)
-- Full training with all components
+**Phase 1 (Unified) Configuration**:
+- 170 base experiments covering:
+  - d_model: [64, 128, 256]
+  - nhead: [2, 4, 8, 16]
+  - Teacher-Student ratios: t1s1, t2s1, t4s1, t4s2, etc.
+  - masking_ratio: [0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8]
+  - window sizes: [100, 500, 1000]
+  - lambda_disc: [0.25, 0.5, 1.0, 2.0]
 
-**Fixed Parameters** (not in grid search):
-- `margin = 0.5`
-- `lambda_disc = 0.5`
-
-**Default Parameter Grid**:
-```python
-DEFAULT_PARAM_GRID = {
-    'masking_ratio': [0.4, 0.7],
-    'masking_strategy': ['patch', 'feature_wise'],
-    'num_patches': [10, 25],
-    'margin_type': ['hinge', 'softplus', 'dynamic'],
-    'force_mask_anomaly': [False, True],
-    'patch_level_loss': [True, False],
-    'patchify_mode': ['patch_cnn', 'linear'],
-    'mask_after_encoder': [False, True],
-    'shared_mask_token': [True, False],
-}
-# Total combinations: 2*2*2*3*2*2*2*2*2 = 768
+**Result Multiplier**:
 ```
+170 experiments × 2 (mask_after) × 2 (inference) × 3 (scoring) = 2040 total results
+```
+
+See [ABLATION_EXPERIMENTS.md](ABLATION_EXPERIMENTS.md) for detailed experiment descriptions.
 
 ---
 
@@ -376,7 +389,7 @@ Stage 2 uses a 3-phase diverse selection strategy:
 
 3. **Masking Strategies**: Both patch and feature-wise masking are tested.
 
-4. **Dataset Size**: 440,000 timesteps total, ~22,000 train windows, ~2,000 test windows.
+4. **Dataset Size**: 275,000 timesteps total (220K train + 55K test), ~20,000 train windows, ~55,000 test windows (stride=1).
 
 5. **Inference Modes**: Both `last_patch` (fast) and `all_patches` (thorough) evaluated.
 

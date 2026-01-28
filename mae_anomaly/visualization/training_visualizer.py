@@ -105,27 +105,23 @@ class TrainingProgressVisualizer:
             point_labels=point_labels,
             anomaly_regions=anomaly_regions,
             window_size=self.config.seq_length,
-            stride=self.config.sliding_window_stride,
+            stride=self.config.sliding_window_stride,  # Train stride (default 11)
             mask_last_n=10,
             split='train',
-            train_ratio=0.5,
+            train_ratio=self.config.sliding_window_train_ratio,
             seed=self.config.random_seed
         )
 
+        # No downsampling for test - use all windows with stride=1 for PA%K evaluation
         test_dataset = SlidingWindowDataset(
             signals=signals,
             point_labels=point_labels,
             anomaly_regions=anomaly_regions,
             window_size=self.config.seq_length,
-            stride=self.config.sliding_window_stride,
+            stride=self.config.sliding_window_test_stride,  # Test stride=1 for PA%K
             mask_last_n=10,
             split='test',
-            train_ratio=0.5,
-            target_counts={
-                'pure_normal': int(self.config.num_test_samples * self.config.test_ratio_pure_normal),
-                'disturbing_normal': int(self.config.num_test_samples * self.config.test_ratio_disturbing_normal),
-                'anomaly': int(self.config.num_test_samples * self.config.test_ratio_anomaly)
-            },
+            train_ratio=self.config.sliding_window_train_ratio,
             seed=self.config.random_seed
         )
 

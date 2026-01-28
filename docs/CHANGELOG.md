@@ -1,5 +1,113 @@
 # Changelog
 
+## 2026-01-29 (Update 40): evaluate_by_score_type, Documentation Sync & Cleanup
+
+### Summary
+
+Implemented `evaluate_by_score_type()` in evaluator to populate 24 CSV columns (disc_only_*, teacher_recon_*, student_recon_*) that were previously always 0. Added student reconstruction error to evaluator cache. Comprehensive documentation sync across all docs. Removed obsolete scripts and analysis files.
+
+### Evaluator Changes
+
+| Change | Description |
+|--------|-------------|
+| `evaluate_by_score_type(score_type)` | NEW: Evaluate using individual score components ('disc', 'teacher_recon', 'student_recon') |
+| Student recon in cache | `_compute_raw_scores_last_patch()` and `_compute_patch_scores_all_patches()` now return 6-tuple including student_recon |
+| 24 CSV columns | disc_only_*, teacher_recon_*, student_recon_* now have real values |
+
+### Documentation Sync
+
+Fixed inconsistencies across all documentation files:
+
+| Parameter | Old Doc Value | Corrected Value |
+|-----------|--------------|-----------------|
+| Patchify modes | linear/cnn_first/patch_cnn | linear/patch_cnn (cnn_first removed) |
+| Default patchify_mode | linear | patch_cnn |
+| sliding_window_total_length | 440K / 2.2M | 275K |
+| anomaly_interval_scale | 1.5 | 0.75 |
+| Scoring modes (ablation) | default/adaptive/disc_only | default/adaptive/normalized |
+| Anomaly types | 6 / 11 names | 9 types (10 names including normal) |
+| Train/test split | 50/50 | 80/20 |
+| Default margin_type | hinge | dynamic |
+| teacher_only_warmup_epochs | 1 | 3 |
+| Feature count (design doc) | 5 | 8 |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `mae_anomaly/evaluator.py` | Added `evaluate_by_score_type()`, student_recon in cache |
+| `mae_anomaly/model.py` | Minor updates |
+| `mae_anomaly/visualization/base.py` | Optimization updates |
+| `mae_anomaly/visualization/best_model_visualizer.py` | ROC comparison methods |
+| `CLAUDE.md` | Fixed patchify modes, dataset stats, added evaluator mapping |
+| `docs/ARCHITECTURE.md` | Removed cnn_first, fixed defaults, added per-component scoring |
+| `docs/DATASET.md` | Fixed total_length, interval_scale, anomaly type counts |
+| `docs/ABLATION_STUDIES.md` | Fixed masking ratio, scoring modes, dataset size |
+| `docs/INFERENCE_MODES.md` | Fixed scoring mode reference |
+| `docs/VISUALIZATIONS.md` | Updated date, dataset sizes, removed CNN-First reference |
+| `docs/CHANGELOG.md` | This entry |
+
+### Files Removed
+
+| File | Reason |
+|------|--------|
+| `scripts/ablation/configs/phase2.py` | Obsolete (merged into phase1) |
+| `scripts/analyze_phase1_results.py` | One-off analysis script |
+| `scripts/deep_analysis_phase1.py` | One-off analysis script |
+| `scripts/generate_phase1_report.py` | One-off report generator |
+| `docs/ablation_result/phase1/*` | Stale analysis results |
+| `scripts/profile_*.py`, `scripts/benchmark_*.py`, `scripts/verify_*.py` | One-off profiling/verification scripts (moved to .trash/) |
+
+---
+
+## 2026-01-28 (Update 39): Segment-Based PA%K Fix & Documentation Update
+
+### Summary
+
+Fixed critical PA%K (Point-Adjust with K%) metric calculation to use proper segment-based detection rates instead of sample-level approximation. Updated all documentation to match current codebase.
+
+### PA%K Metric Fix
+
+**Problem Identified**:
+- `plot_performance_by_anomaly_type_comparison()` was using sample-level `compute_pa_k_adjusted_predictions()` which breaks segment structure when filtering by anomaly_type
+- This caused incorrect PA%K calculations in visualization
+
+**Solution**:
+- Added segment-based PA%K calculation using `compute_segment_pa_k_detection_rate()` in `best_model_visualizer.py`
+- Pre-computes point-level scores for each scoring method
+- Uses `test_dataset.anomaly_regions` for proper segment-based detection rate
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `mae_anomaly/visualization/best_model_visualizer.py` | Added segment-based PA%K support in `plot_performance_by_anomaly_type_comparison()` |
+| `docs/ARCHITECTURE.md` | Fixed encoder/decoder layer counts, attention heads, masking_ratio (0.2), added missing parameters |
+| `docs/DATASET.md` | Updated sliding_window_total_length (440K), stride (11), window counts |
+| `docs/ABLATION_STUDIES.md` | Updated to reflect new ablation framework (run_ablation.py) |
+| `docs/CHANGELOG.md` | Added this entry |
+
+### Documentation Sync
+
+Updated documentation to match current config.py defaults:
+
+| Parameter | Old Doc Value | New Value |
+|-----------|--------------|-----------|
+| Encoder layers | 3 | 1 |
+| Teacher decoder layers | 4 | 2 |
+| Attention heads | 4 | 2 |
+| masking_ratio | 0.4 | 0.2 |
+| sliding_window_total_length | 2.2M | 440K |
+| sliding_window_stride | 10 | 11 |
+
+### Usage
+
+PA%K metrics are now calculated correctly in all visualizations:
+- `plot_performance_by_anomaly_type()` - reads from JSON (auto-benefits)
+- `plot_performance_by_anomaly_type_comparison()` - now uses segment-based calculation
+
+---
+
 ## 2026-01-27 (Update 38): Comprehensive Phase 1 Deep Analysis & Strategic Phase 2 Planning
 
 ### Summary

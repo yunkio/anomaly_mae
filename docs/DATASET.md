@@ -1,6 +1,6 @@
 # Dataset Documentation
 
-**Last Updated**: 2026-01-25
+**Last Updated**: 2026-01-28
 
 ---
 
@@ -17,19 +17,19 @@ This project uses a **Sliding Window Time Series Dataset** that simulates server
 ## Dataset Generation Process
 
 ```
-1. Generate Long Time Series (2.2M timesteps)
+1. Generate Long Time Series (275K timesteps, configurable)
    ├── 8 correlated features (server metrics)
    └── Inject anomalies at random intervals
 
 2. Sliding Window Extraction
    ├── Window size: 100 timesteps
-   ├── Train stride: Configurable (default 10)
+   ├── Train stride: Configurable (default 11)
    ├── Test stride: Always 1 (for point-level PA%K)
-   └── Total windows: ~220,000 (train), ~110,000 (test)
+   └── Total windows: ~20,000 (train), ~55,000 (test, stride=1)
 
 3. Train/Test Split
-   ├── Train: First 50% (no downsampling, ~5% anomaly)
-   └── Test: Last 50% (stride=1, no downsampling by default)
+   ├── Train: First 80% (220K timesteps, ~5% anomaly)
+   └── Test: Last 20% (55K timesteps, stride=1, no downsampling)
 
 4. Labeling
    ├── Check last 10 timesteps (mask_last_n)
@@ -74,7 +74,7 @@ This represents a challenging case where:
 |--------|-------|
 | Stride | 1 (forced) |
 | Downsampling | Disabled by default |
-| Total windows | ~110,000 (half of time series) |
+| Total windows | ~55,000 (20% of time series) |
 
 **Legacy mode** (downsampled, for backwards compatibility):
 
@@ -714,9 +714,9 @@ config = Config()
 # Key dataset parameters
 config.seq_length = 100                    # Window size
 config.num_features = 8                    # Number of features
-config.sliding_window_total_length = 2200000  # Total time series length
-config.sliding_window_stride = 10          # Stride (90% overlap)
-config.anomaly_interval_scale = 1.5        # Controls anomaly density
+config.sliding_window_total_length = 275000   # Total time series length (220K train + 55K test)
+config.sliding_window_stride = 11             # Train stride (89% overlap)
+config.anomaly_interval_scale = 0.75       # Controls anomaly density (2x frequency, ~13% anomaly)
 config.mask_last_n = 10                    # Last N timesteps for labeling
 
 # Test set target ratios (for downsampling)
@@ -797,7 +797,7 @@ train_dataset = SlidingWindowDataset(
     stride=config.sliding_window_stride,
     mask_last_n=config.mask_last_n,
     split='train',
-    train_ratio=0.5,
+    train_ratio=config.sliding_window_train_ratio,
     seed=config.random_seed
 )
 
@@ -834,7 +834,7 @@ for batch in train_loader:
     # label: (batch,) - 0 or 1
     # point_labels: (batch, 100) - per-timestep labels
     # sample_type: (batch,) - 0, 1, or 2
-    # anomaly_type: (batch,) - 0-6
+    # anomaly_type: (batch,) - 0-9 (0=normal, 1-6=value, 7-9=pattern)
 ```
 
 ### Analyzing Anomaly Distribution
@@ -859,7 +859,7 @@ print(f"Anomaly: {ratios['anomaly']:.1%}")
 mae_anomaly/
 ├── dataset_sliding.py   # Sliding window dataset
 │   ├── FEATURE_NAMES           # 8 feature names
-│   ├── ANOMALY_TYPE_NAMES      # 11 anomaly type names (0=normal, 1-7=value, 8-10=pattern)
+│   ├── ANOMALY_TYPE_NAMES      # 10 anomaly type names (0=normal, 1-6=value, 7-9=pattern)
 │   ├── ANOMALY_CATEGORY        # Category mapping: 'value' or 'pattern'
 │   ├── ANOMALY_TYPE_CONFIGS    # Per-type length/interval configs
 │   ├── SlidingWindowTimeSeriesGenerator  # Long series generator

@@ -418,9 +418,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
         ids_keep_expanded = ids_keep.unsqueeze(-1).expand(-1, -1, d_model)
         x_visible = torch.gather(x_embed, dim=0, index=ids_keep_expanded)  # (num_keep, batch, d_model)
 
-        # Add positional encoding to visible patches
-        # Use the original positions for positional encoding
-        x_visible_with_pos = self.pos_encoder(x_visible)
+        # Add positional encoding using ORIGINAL positions (not sequential 0,1,2,...)
+        # ids_keep contains the original positions of visible patches
+        # Gather the correct positional encodings for those positions
+        pe_for_visible = torch.gather(
+            self.pos_encoder.pe[:seq_len].expand(-1, batch_size, -1),  # (seq_len, batch, d_model)
+            dim=0,
+            index=ids_keep_expanded  # (num_keep, batch, d_model)
+        )
+        x_visible_with_pos = x_visible + pe_for_visible
 
         # Encode only visible patches
         latent = self.encoder(x_visible_with_pos)  # (num_keep, batch, d_model)

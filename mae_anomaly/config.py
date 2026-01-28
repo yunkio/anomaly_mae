@@ -22,9 +22,11 @@ class Config:
 
     # Sliding window dataset parameters
     use_sliding_window_dataset: bool = True  # Use new sliding window dataset
-    sliding_window_total_length: int = 440000  # Total length of long time series (1/5 of original 2.2M)
-    sliding_window_stride: int = 11  # Stride for window extraction (overlapping windows)
-    anomaly_interval_scale: float = 1.5  # Scale factor for anomaly intervals (tuned for ~5% anomaly)
+    sliding_window_total_length: int = 275000  # Total length (220K train + 55K test)
+    sliding_window_stride: int = 11  # Stride for train window extraction (overlapping windows)
+    sliding_window_test_stride: int = 1  # Stride for test window extraction (stride=1 for PA%K)
+    sliding_window_train_ratio: float = 0.8  # Train ratio (220K/275K = 0.8, test = 55K)
+    anomaly_interval_scale: float = 0.75  # Scale factor for anomaly intervals (2x frequency, ~13% anomaly)
 
     # Test set target ratios (for downsampling)
     # Ratios: pure_normal=65%, disturbing_normal=15%, anomaly=25%

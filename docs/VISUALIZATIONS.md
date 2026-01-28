@@ -1,6 +1,6 @@
 # Visualization Documentation
 
-**Last Updated**: 2026-01-27
+**Last Updated**: 2026-01-29
 **Status**: Complete
 
 ---
@@ -182,18 +182,17 @@ results/experiments/YYYYMMDD_HHMMSS/visualization/
 
 ## Experiment Settings Consistency
 
-Visualizations use the **same evaluation method** as `run_experiments.py`:
+Visualizations use the **same evaluation method** as the ablation runner:
 
-| Setting | Stage 1 | Stage 2 | Visualization |
-|---------|---------|---------|---------------|
-| Time Series Length | 200,000 | 440,000 | N/A |
-| Train Ratio | 0.3 | 0.5 | N/A |
-| Train Samples | ~6,000 | ~22,000 | N/A |
-| Test Samples | 2,000 | 2,000 | 2,000 |
-| Test Target | 1200:300:500 | 1200:300:500 | 1200:300:500 |
-| Epochs | 1 | 2 | N/A (uses saved model) |
-| Masking | Respects `inference_mode` | Respects `inference_mode` | Respects `inference_mode` |
-| Error Metric | MSE | MSE | MSE |
+| Setting | Ablation (run_ablation.py) | Visualization |
+|---------|---------------------------|---------------|
+| Time Series Length | 275,000 (configurable) | N/A |
+| Train Ratio | 0.8 (220K train / 55K test) | N/A |
+| Train Samples | ~20,000 windows (stride=11) | N/A |
+| Test Samples | ~55,000 windows (stride=1) | Same (uses saved model) |
+| Epochs | 50 (default) | N/A (uses saved model) |
+| Masking | Respects `inference_mode` | Respects `inference_mode` |
+| Error Metric | MSE | MSE |
 
 ### Inference Mode Handling
 
@@ -234,7 +233,7 @@ Understanding the model architecture and concepts.
 | File | Description |
 |------|-------------|
 | `model_pipeline.png` | Overall Self-Distilled MAE pipeline diagram |
-| `patchify_modes.png` | Conceptual flow diagrams showing processing pipeline differences (CNN-First, Patch-CNN, Linear) |
+| `patchify_modes.png` | Conceptual flow diagrams showing processing pipeline differences (Patch-CNN, Linear) |
 | `masking_visualization.png` | Step-by-step visualization of the masking process |
 | `self_distillation_concept.png` | Teacher vs Student behavior on normal/anomaly data |
 | `margin_types.png` | Hinge, softplus, and dynamic margin loss functions |
@@ -451,6 +450,10 @@ best_vis.plot_hardest_samples()
 best_vis.plot_performance_by_anomaly_type(experiment_dir)
 best_vis.plot_score_distribution_by_type(experiment_dir)  # Violin charts with scoring mode
 best_vis.plot_score_contribution_epoch_trends(experiment_dir, history)  # Stacked area trends
+# ROC comparison across scoring methods
+best_vis.plot_roc_curve_comparison()
+best_vis.plot_roc_curve_pa80_comparison()
+best_vis.plot_performance_by_anomaly_type_comparison(output_dir)
 best_vis.generate_all(experiment_dir, history)  # Generate all
 ```
 

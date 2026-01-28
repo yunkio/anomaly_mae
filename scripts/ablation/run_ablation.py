@@ -55,6 +55,283 @@ from mae_anomaly import (
 
 
 # =============================================================================
+# Dataset Statistics and Documentation
+# =============================================================================
+
+def save_dataset_info(
+    output_dir: str,
+    config: Config,
+    signals: np.ndarray,
+    point_labels: np.ndarray,
+    anomaly_regions: list,
+    train_ratio: float
+):
+    """Save dataset statistics to dataset.md file."""
+    total_length = len(signals)
+    train_end = int(total_length * train_ratio)
+    test_length = total_length - train_end
+
+    # Count anomaly timestamps by type
+    anomaly_type_per_point = np.zeros(total_length, dtype=int)
+    for region in anomaly_regions:
+        atype = region.anomaly_type
+        if isinstance(atype, str):
+            atype_idx = SLIDING_ANOMALY_TYPE_NAMES.index(atype)
+        else:
+            atype_idx = atype
+        anomaly_type_per_point[region.start:region.end] = atype_idx
+
+    # Train/Test timestamp counts by type
+    train_ts_counts = {name: 0 for name in SLIDING_ANOMALY_TYPE_NAMES[1:]}
+    test_ts_counts = {name: 0 for name in SLIDING_ANOMALY_TYPE_NAMES[1:]}
+
+    for t in range(total_length):
+        atype_idx = anomaly_type_per_point[t]
+        if atype_idx > 0:
+            atype = SLIDING_ANOMALY_TYPE_NAMES[atype_idx]
+            if t < train_end:
+                train_ts_counts[atype] += 1
+            else:
+                test_ts_counts[atype] += 1
+
+    train_total_anomaly = sum(train_ts_counts.values())
+    test_total_anomaly = sum(test_ts_counts.values())
+
+    # Region counts by type
+    train_region_counts = {name: 0 for name in SLIDING_ANOMALY_TYPE_NAMES[1:]}
+    test_region_counts = {name: 0 for name in SLIDING_ANOMALY_TYPE_NAMES[1:]}
+
+    for region in anomaly_regions:
+        atype = region.anomaly_type
+        if isinstance(atype, int):
+            atype = SLIDING_ANOMALY_TYPE_NAMES[atype]
+        if region.start < train_end:
+            train_region_counts[atype] += 1
+        else:
+            test_region_counts[atype] += 1
+
+    # Window distribution (train)
+    train_dataset = SlidingWindowDataset(
+        signals=signals,
+        point_labels=point_labels,
+        anomaly_regions=anomaly_regions,
+        window_size=config.seq_length,
+        stride=config.sliding_window_stride,
+        mask_last_n=config.mask_last_n,
+        split='train',
+        train_ratio=train_ratio,
+        seed=config.random_seed
+    )
+
+    train_pure = train_disturb = train_anom = 0
+    for i in range(len(train_dataset)):
+        _, _, _, sample_type, _ = train_dataset[i]
+        if sample_type == 0:
+            train_pure += 1
+        elif sample_type == 1:
+            train_disturb += 1
+        else:
+            train_anom += 1
+
+    # Window distribution (test)
+    test_dataset = SlidingWindowDataset(
+        signals=signals,
+        point_labels=point_labels,
+        anomaly_regions=anomaly_regions,
+        window_size=config.seq_length,
+        stride=config.sliding_window_test_stride,
+        mask_last_n=config.mask_last_n,
+        split='test',
+        train_ratio=train_ratio,
+        seed=config.random_seed
+    )
+
+    test_pure = test_disturb = test_anom = 0
+    for i in range(len(test_dataset)):
+        _, _, _, sample_type, _ = test_dataset[i]
+        if sample_type == 0:
+            test_pure += 1
+        elif sample_type == 1:
+            test_disturb += 1
+        else:
+            test_anom += 1
+
+    # Window distribution for window_size=500 (for comparison)
+    window_size_500 = 500
+    mask_last_n_500 = 50  # 10% of window size
+
+    train_dataset_500 = SlidingWindowDataset(
+        signals=signals,
+        point_labels=point_labels,
+        anomaly_regions=anomaly_regions,
+        window_size=window_size_500,
+        stride=config.sliding_window_stride,
+        mask_last_n=mask_last_n_500,
+        split='train',
+        train_ratio=train_ratio,
+        seed=config.random_seed
+    )
+
+    train_pure_500 = train_disturb_500 = train_anom_500 = 0
+    for i in range(len(train_dataset_500)):
+        _, _, _, sample_type, _ = train_dataset_500[i]
+        if sample_type == 0:
+            train_pure_500 += 1
+        elif sample_type == 1:
+            train_disturb_500 += 1
+        else:
+            train_anom_500 += 1
+
+    test_dataset_500 = SlidingWindowDataset(
+        signals=signals,
+        point_labels=point_labels,
+        anomaly_regions=anomaly_regions,
+        window_size=window_size_500,
+        stride=config.sliding_window_test_stride,
+        mask_last_n=mask_last_n_500,
+        split='test',
+        train_ratio=train_ratio,
+        seed=config.random_seed
+    )
+
+    test_pure_500 = test_disturb_500 = test_anom_500 = 0
+    for i in range(len(test_dataset_500)):
+        _, _, _, sample_type, _ = test_dataset_500[i]
+        if sample_type == 0:
+            test_pure_500 += 1
+        elif sample_type == 1:
+            test_disturb_500 += 1
+        else:
+            test_anom_500 += 1
+
+    # Generate markdown content
+    md_content = f"""# Dataset Information
+
+**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+---
+
+## Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| `sliding_window_total_length` | {config.sliding_window_total_length:,} |
+| `sliding_window_train_ratio` | {train_ratio:.4f} |
+| `sliding_window_stride` (train) | {config.sliding_window_stride} |
+| `sliding_window_test_stride` | {config.sliding_window_test_stride} |
+| `anomaly_interval_scale` | {config.anomaly_interval_scale} |
+| `seq_length` (window_size) | {config.seq_length} |
+| `mask_last_n` | {config.mask_last_n} |
+| `num_features` | {config.num_features} |
+| `random_seed` | {config.random_seed} |
+
+---
+
+## Timestamp Statistics
+
+| Split | Total | Normal | Anomaly | Anomaly % |
+|-------|-------|--------|---------|-----------|
+| **Train** | {train_end:,} | {train_end - train_total_anomaly:,} | {train_total_anomaly:,} | {100*train_total_anomaly/train_end:.2f}% |
+| **Test** | {test_length:,} | {test_length - test_total_anomaly:,} | {test_total_anomaly:,} | {100*test_total_anomaly/test_length:.2f}% |
+
+---
+
+## Train Data
+
+### Anomaly Type별 Timestamp 길이
+
+| Anomaly Type | Timestamps |
+|--------------|------------|
+"""
+
+    for atype, count in train_ts_counts.items():
+        md_content += f"| {atype} | {count:,} |\n"
+    md_content += f"| **Total** | **{train_total_anomaly:,}** |\n"
+
+    md_content += f"""
+### Anomaly Type별 Region 갯수
+
+| Anomaly Type | Regions |
+|--------------|---------|
+"""
+
+    for atype, count in train_region_counts.items():
+        md_content += f"| {atype} | {count} |\n"
+    md_content += f"| **Total** | **{sum(train_region_counts.values())}** |\n"
+
+    md_content += f"""
+### Window 분포 (window_size={config.seq_length}, stride={config.sliding_window_stride})
+
+| Window Type | Count | Ratio |
+|-------------|-------|-------|
+| pure_normal | {train_pure:,} | {100*train_pure/len(train_dataset):.2f}% |
+| disturbing_normal | {train_disturb:,} | {100*train_disturb/len(train_dataset):.2f}% |
+| anomaly | {train_anom:,} | {100*train_anom/len(train_dataset):.2f}% |
+| **Total** | **{len(train_dataset):,}** | 100% |
+
+### Window 분포 (window_size=500, stride={config.sliding_window_stride})
+
+| Window Type | Count | Ratio |
+|-------------|-------|-------|
+| pure_normal | {train_pure_500:,} | {100*train_pure_500/len(train_dataset_500):.2f}% |
+| disturbing_normal | {train_disturb_500:,} | {100*train_disturb_500/len(train_dataset_500):.2f}% |
+| anomaly | {train_anom_500:,} | {100*train_anom_500/len(train_dataset_500):.2f}% |
+| **Total** | **{len(train_dataset_500):,}** | 100% |
+
+---
+
+## Test Data
+
+### Anomaly Type별 Timestamp 길이
+
+| Anomaly Type | Timestamps |
+|--------------|------------|
+"""
+
+    for atype, count in test_ts_counts.items():
+        md_content += f"| {atype} | {count:,} |\n"
+    md_content += f"| **Total** | **{test_total_anomaly:,}** |\n"
+
+    md_content += f"""
+### Anomaly Type별 Region 갯수
+
+| Anomaly Type | Regions |
+|--------------|---------|
+"""
+
+    for atype, count in test_region_counts.items():
+        md_content += f"| {atype} | {count} |\n"
+    md_content += f"| **Total** | **{sum(test_region_counts.values())}** |\n"
+
+    md_content += f"""
+### Window 분포 (window_size={config.seq_length}, stride={config.sliding_window_test_stride})
+
+| Window Type | Count | Ratio |
+|-------------|-------|-------|
+| pure_normal | {test_pure:,} | {100*test_pure/len(test_dataset):.2f}% |
+| disturbing_normal | {test_disturb:,} | {100*test_disturb/len(test_dataset):.2f}% |
+| anomaly | {test_anom:,} | {100*test_anom/len(test_dataset):.2f}% |
+| **Total** | **{len(test_dataset):,}** | 100% |
+
+### Window 분포 (window_size=500, stride={config.sliding_window_test_stride})
+
+| Window Type | Count | Ratio |
+|-------------|-------|-------|
+| pure_normal | {test_pure_500:,} | {100*test_pure_500/len(test_dataset_500):.2f}% |
+| disturbing_normal | {test_disturb_500:,} | {100*test_disturb_500/len(test_dataset_500):.2f}% |
+| anomaly | {test_anom_500:,} | {100*test_anom_500/len(test_dataset_500):.2f}% |
+| **Total** | **{len(test_dataset_500):,}** | 100% |
+"""
+
+    # Save to file
+    dataset_md_path = os.path.join(output_dir, 'dataset.md')
+    with open(dataset_md_path, 'w', encoding='utf-8') as f:
+        f.write(md_content)
+
+    print(f"  Dataset info saved to: {dataset_md_path}")
+
+
+# =============================================================================
 # Loss Statistics and Separation Metrics
 # =============================================================================
 
@@ -328,13 +605,26 @@ def load_config_module(config_path: str):
         raise ValueError("Config must define EXPERIMENTS list")
 
     # Get optional fields with defaults
+    base_config = getattr(module, 'BASE_CONFIG', {})
+
+    # Determine mask_settings: respect config file, don't force both modes
+    if hasattr(module, 'MASK_SETTINGS'):
+        mask_settings = module.MASK_SETTINGS
+    elif 'mask_after_encoder' in base_config:
+        # Use BASE_CONFIG's mask_after_encoder as the single setting
+        mask_settings = [base_config['mask_after_encoder']]
+    else:
+        # Default to False (mask_before) if nothing specified
+        mask_settings = [False]
+
     config = {
         'phase_name': getattr(module, 'PHASE_NAME', 'ablation'),
         'phase_description': getattr(module, 'PHASE_DESCRIPTION', ''),
-        'base_config': getattr(module, 'BASE_CONFIG', {}),
+        'base_config': base_config,
         'experiments': module.EXPERIMENTS,
         'scoring_modes': getattr(module, 'SCORING_MODES', ['default']),
         'inference_modes': getattr(module, 'INFERENCE_MODES', ['last_patch']),
+        'mask_settings': mask_settings,
     }
 
     return config
@@ -354,7 +644,7 @@ class SingleExperimentRunner:
         signals: np.ndarray,
         point_labels: np.ndarray,
         anomaly_regions: list,
-        train_ratio: float = 0.5,
+        train_ratio: float = None,  # None = use config.sliding_window_train_ratio
         point_aggregation_method: str = 'voting',
         scoring_modes: List[str] = None,
         inference_modes: List[str] = None
@@ -364,7 +654,7 @@ class SingleExperimentRunner:
         self.signals = signals
         self.point_labels = point_labels
         self.anomaly_regions = anomaly_regions
-        self.train_ratio = train_ratio
+        self._train_ratio_override = train_ratio  # Store override value
         self.point_aggregation_method = point_aggregation_method
         self.scoring_modes = scoring_modes or ['default']
         self.inference_modes = inference_modes or ['last_patch']
@@ -383,24 +673,26 @@ class SingleExperimentRunner:
 
         return config
 
+    @property
+    def train_ratio(self) -> float:
+        """Get train ratio from override or config default."""
+        if self._train_ratio_override is not None:
+            return self._train_ratio_override
+        return Config().sliding_window_train_ratio
+
     def run(self) -> Dict[str, Dict]:
         """Run the experiment with all scoring/inference mode combinations."""
         config = self._create_config()
         set_seed(config.random_seed)
 
-        total_test = 2000
-        target_counts = {
-            'pure_normal': int(total_test * config.test_ratio_pure_normal),
-            'disturbing_normal': int(total_test * config.test_ratio_disturbing_normal),
-            'anomaly': int(total_test * config.test_ratio_anomaly)
-        }
+        # No downsampling for test - use all windows with stride=1 for PA%K evaluation
 
         train_dataset = SlidingWindowDataset(
             signals=self.signals,
             point_labels=self.point_labels,
             anomaly_regions=self.anomaly_regions,
             window_size=config.seq_length,
-            stride=config.sliding_window_stride,
+            stride=config.sliding_window_stride,  # Train stride (default 11)
             mask_last_n=config.mask_last_n,
             split='train',
             train_ratio=self.train_ratio,
@@ -412,11 +704,10 @@ class SingleExperimentRunner:
             point_labels=self.point_labels,
             anomaly_regions=self.anomaly_regions,
             window_size=config.seq_length,
-            stride=config.sliding_window_stride,
+            stride=config.sliding_window_test_stride,  # Test stride=1 for PA%K
             mask_last_n=config.mask_last_n,
             split='test',
             train_ratio=self.train_ratio,
-            target_counts=target_counts,
             seed=config.random_seed
         )
 
@@ -446,11 +737,17 @@ class SingleExperimentRunner:
 
             for scoring_mode in self.scoring_modes:
                 config.anomaly_score_mode = scoring_mode
-                evaluator.clear_cache()
+                # Note: Don't clear cache here - raw scores (recon, disc) are independent of scoring_mode
+                # Clearing cache would cause redundant forward passes
 
                 eval_start = time.time()
                 metrics = evaluator.evaluate()
                 eval_time = time.time() - eval_start
+
+                # Compute metrics by score type (disc only, teacher recon only, student recon only)
+                disc_metrics = evaluator.evaluate_by_score_type('disc')
+                teacher_recon_metrics = evaluator.evaluate_by_score_type('teacher_recon')
+                student_recon_metrics = evaluator.evaluate_by_score_type('student_recon')
 
                 result_key = f"{scoring_mode}_{inference_suffix}"
                 output_dir = os.path.join(
@@ -514,6 +811,9 @@ class SingleExperimentRunner:
                 all_results[result_key] = {
                     'output_dir': output_dir,
                     'metrics': metrics,
+                    'disc_metrics': disc_metrics,
+                    'teacher_recon_metrics': teacher_recon_metrics,
+                    'student_recon_metrics': student_recon_metrics,
                     'loss_stats': loss_stats,
                     'config': config_dict,
                     'train_time': train_time,
@@ -545,8 +845,8 @@ def run_ablation_study(
     experiments = ablation_config['experiments']
     scoring_modes = ablation_config['scoring_modes']
     inference_modes = ablation_config['inference_modes']
-    # mask_settings: [True, False] means after_mask first, then before_mask
-    mask_settings = ablation_config.get('mask_settings', [True, False])
+    # mask_settings: loaded from config, respects BASE_CONFIG['mask_after_encoder']
+    mask_settings = ablation_config['mask_settings']
 
     print(f"{'='*80}")
     print(f"Ablation Study: {phase_name}")
@@ -572,7 +872,10 @@ def run_ablation_study(
             f'{timestamp}_{phase_name}'
         )
     os.makedirs(output_dir, exist_ok=True)
+    info_dir = os.path.join(output_dir, '000_ablation_info')
+    os.makedirs(info_dir, exist_ok=True)
     print(f"Output directory: {output_dir}")
+    print(f"Info directory: {info_dir}")
     print()
 
     # Generate dataset
@@ -590,6 +893,17 @@ def run_ablation_study(
     )
     signals, point_labels, anomaly_regions = generator.generate()
     print(f"  Signal shape: {signals.shape}")
+
+    # Save dataset information to 000_ablation_info/dataset.md
+    print("Saving dataset info...", flush=True)
+    save_dataset_info(
+        output_dir=info_dir,
+        config=base_config,
+        signals=signals,
+        point_labels=point_labels,
+        anomaly_regions=anomaly_regions,
+        train_ratio=base_config.sliding_window_train_ratio
+    )
     print()
 
     # Run experiments - iterate over mask_settings (before_mask first, then after_mask)
@@ -739,14 +1053,44 @@ def run_ablation_study(
                         'disc_anomaly_std': loss_stats['disc_anomaly_std'],
                         'disc_disturbing_std': loss_stats['disc_disturbing_std'],
 
+                        # Discrepancy-only metrics
+                        'disc_only_roc_auc': result.get('disc_metrics', {}).get('roc_auc', 0),
+                        'disc_only_f1_score': result.get('disc_metrics', {}).get('f1_score', 0),
+                        'disc_only_pa_20_roc_auc': result.get('disc_metrics', {}).get('pa_20_roc_auc', 0),
+                        'disc_only_pa_20_f1': result.get('disc_metrics', {}).get('pa_20_f1', 0),
+                        'disc_only_pa_50_roc_auc': result.get('disc_metrics', {}).get('pa_50_roc_auc', 0),
+                        'disc_only_pa_50_f1': result.get('disc_metrics', {}).get('pa_50_f1', 0),
+                        'disc_only_pa_80_roc_auc': result.get('disc_metrics', {}).get('pa_80_roc_auc', 0),
+                        'disc_only_pa_80_f1': result.get('disc_metrics', {}).get('pa_80_f1', 0),
+
+                        # Teacher recon-only metrics
+                        'teacher_recon_roc_auc': result.get('teacher_recon_metrics', {}).get('roc_auc', 0),
+                        'teacher_recon_f1_score': result.get('teacher_recon_metrics', {}).get('f1_score', 0),
+                        'teacher_recon_pa_20_roc_auc': result.get('teacher_recon_metrics', {}).get('pa_20_roc_auc', 0),
+                        'teacher_recon_pa_20_f1': result.get('teacher_recon_metrics', {}).get('pa_20_f1', 0),
+                        'teacher_recon_pa_50_roc_auc': result.get('teacher_recon_metrics', {}).get('pa_50_roc_auc', 0),
+                        'teacher_recon_pa_50_f1': result.get('teacher_recon_metrics', {}).get('pa_50_f1', 0),
+                        'teacher_recon_pa_80_roc_auc': result.get('teacher_recon_metrics', {}).get('pa_80_roc_auc', 0),
+                        'teacher_recon_pa_80_f1': result.get('teacher_recon_metrics', {}).get('pa_80_f1', 0),
+
+                        # Student recon-only metrics
+                        'student_recon_roc_auc': result.get('student_recon_metrics', {}).get('roc_auc', 0),
+                        'student_recon_f1_score': result.get('student_recon_metrics', {}).get('f1_score', 0),
+                        'student_recon_pa_20_roc_auc': result.get('student_recon_metrics', {}).get('pa_20_roc_auc', 0),
+                        'student_recon_pa_20_f1': result.get('student_recon_metrics', {}).get('pa_20_f1', 0),
+                        'student_recon_pa_50_roc_auc': result.get('student_recon_metrics', {}).get('pa_50_roc_auc', 0),
+                        'student_recon_pa_50_f1': result.get('student_recon_metrics', {}).get('pa_50_f1', 0),
+                        'student_recon_pa_80_roc_auc': result.get('student_recon_metrics', {}).get('pa_80_roc_auc', 0),
+                        'student_recon_pa_80_f1': result.get('student_recon_metrics', {}).get('pa_80_f1', 0),
+
                         # Output directory
                         'output_dir': result['output_dir'],
                     }
                     all_results.append(record)
 
-                # Save summary incrementally (after each experiment)
+                # Save summary incrementally to 000_ablation_info/
                 summary_df = pd.DataFrame(all_results)
-                summary_path = os.path.join(output_dir, 'summary_results.csv')
+                summary_path = os.path.join(info_dir, 'summary_results.csv')
                 summary_df.to_csv(summary_path, index=False)
 
                 # Print summary with separation metrics
@@ -760,10 +1104,10 @@ def run_ablation_study(
                 import traceback
                 traceback.print_exc()
 
-    # Save summary
+    # Save summary to 000_ablation_info/
     if all_results:
         summary_df = pd.DataFrame(all_results)
-        summary_path = os.path.join(output_dir, 'summary_results.csv')
+        summary_path = os.path.join(info_dir, 'summary_results.csv')
         summary_df.to_csv(summary_path, index=False)
         print(f"\nSummary saved to: {summary_path}")
 
