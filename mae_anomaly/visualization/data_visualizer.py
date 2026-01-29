@@ -318,7 +318,7 @@ class DataVisualizer:
             anomaly_regions=anomaly_regions,
             window_size=self.config.seq_length,
             stride=11,
-            mask_last_n=self.config.mask_last_n,
+            mask_last_n=self.config.patch_size,
             split='test',
             train_ratio=0.5,
             seed=42
@@ -383,8 +383,8 @@ class DataVisualizer:
                 ax.plot(x, base, 'gray', alpha=0.5, lw=1, label='No example found')
 
             # Highlight last patch
-            ax.axvspan(self.config.seq_length - self.config.mask_last_n, self.config.seq_length,
-                      alpha=0.2, color=VIS_COLORS['masked_region'], label=f'Last Patch (n={self.config.mask_last_n})')
+            ax.axvspan(self.config.seq_length - self.config.patch_size, self.config.seq_length,
+                      alpha=0.2, color=VIS_COLORS['masked_region'], label=f'Masked Patch (n={self.config.patch_size})')
 
             # Title and labels
             ax.set_title(f'{description}\n({atype})', fontsize=11, fontweight='bold')
@@ -405,7 +405,7 @@ class DataVisualizer:
             axes[idx].axis('off')
 
         plt.suptitle(f'Anomaly Generation Rules ({n_types} types)\n'
-                    f'All anomalies must overlap with last {self.config.mask_last_n} timesteps',
+                    f'All anomalies must overlap with last {self.config.patch_size} timesteps',
                     fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'anomaly_generation_rules.png'), dpi=150, bbox_inches='tight')
@@ -530,7 +530,7 @@ Data Configuration:
 Sliding Window Dataset:
   - Total Length: {self.config.sliding_window_total_length:,}
   - Stride: {self.config.sliding_window_stride}
-  - Mask Last N: {self.config.mask_last_n}
+  - Mask Last N: {self.config.patch_size}
   - Anomaly Interval Scale: {self.config.anomaly_interval_scale}
 
 Test Set Target Composition:

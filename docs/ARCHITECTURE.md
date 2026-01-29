@@ -284,19 +284,11 @@ Each feature independently selects which patches to mask.
 
 ### Inference Time
 
-The model supports two inference modes, controlled by `config.inference_mode`:
-
-**Last Patch Mode** (`inference_mode='last_patch'`, default):
-- Mask only the last patch (time steps 90-99 for patch_size=10)
-- Single forward pass per window
-- Window-level score for sample metrics (ROC-AUC, F1, etc.)
-- Suitable for real-time/streaming scenarios
-
-**All Patches Mode** (`inference_mode='all_patches'`):
-- Mask each patch one at a time (N forward passes per window)
+During inference, each patch is masked one at a time with N forward passes per window:
+- Mask each patch position independently
+- Compute reconstruction error and discrepancy for masked positions
 - Per-patch scores with patch-level labels
-- Each patch is a sample for metrics (N× more samples)
-- More thorough evaluation, 10× coverage per timestep
+- Each patch is evaluated independently for comprehensive coverage
 
 See [INFERENCE_MODES.md](INFERENCE_MODES.md) for detailed flow diagrams.
 

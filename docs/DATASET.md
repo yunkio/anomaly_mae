@@ -32,7 +32,7 @@ This project uses a **Sliding Window Time Series Dataset** that simulates server
    └── Test: Last 20% (55K timesteps, stride=1, no downsampling)
 
 4. Labeling
-   ├── Check last 10 timesteps (mask_last_n)
+   ├── Check last patch_size timesteps
    └── Classify as: pure_normal, disturbing_normal, or anomaly
 ```
 
@@ -717,7 +717,7 @@ config.num_features = 8                    # Number of features
 config.sliding_window_total_length = 275000   # Total time series length (220K train + 55K test)
 config.sliding_window_stride = 11             # Train stride (89% overlap)
 config.anomaly_interval_scale = 0.75       # Controls anomaly density (2x frequency, ~13% anomaly)
-config.mask_last_n = 10                    # Last N timesteps for labeling
+config.patch_size = 10                     # Patch size (also used for window labeling)
 
 # Test set target ratios (for downsampling)
 config.test_ratio_pure_normal = 0.65      # 65%
@@ -795,7 +795,7 @@ train_dataset = SlidingWindowDataset(
     anomaly_regions=anomaly_regions,
     window_size=config.seq_length,
     stride=config.sliding_window_stride,
-    mask_last_n=config.mask_last_n,
+    mask_last_n=config.patch_size,
     split='train',
     train_ratio=config.sliding_window_train_ratio,
     seed=config.random_seed
@@ -808,7 +808,7 @@ test_dataset = SlidingWindowDataset(
     anomaly_regions=anomaly_regions,
     window_size=config.seq_length,
     stride=config.sliding_window_stride,
-    mask_last_n=config.mask_last_n,
+    mask_last_n=config.patch_size,
     split='test',
     train_ratio=0.5,
     target_counts={

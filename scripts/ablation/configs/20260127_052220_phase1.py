@@ -42,7 +42,6 @@ CREATED_AT = "2026-01-27 05:22:20"
 # =============================================================================
 
 SCORING_MODES = ['default', 'adaptive', 'normalized']
-INFERENCE_MODES = ['last_patch', 'all_patches']
 MASK_SETTINGS = [True, False]  # Both mask_after_encoder=True and False
 
 # =============================================================================
@@ -73,7 +72,6 @@ BASE_CONFIG_PHASE1 = {
     'cnn_channels': (32, 64),
     'anomaly_loss_weight': 1.0,
     'num_epochs': 50,
-    'mask_last_n': 10,
     'margin': 0.5,
     'lambda_disc': 0.5,
     'dynamic_margin_k': 1.5,
@@ -107,7 +105,6 @@ BASE_CONFIG_PHASE2 = {
     'cnn_channels': (32, 64),
     'anomaly_loss_weight': 1.0,
     'num_epochs': 50,
-    'mask_last_n': 10,
     'margin': 0.5,
     'lambda_disc': 0.5,
     'dynamic_margin_k': 1.5,
@@ -144,14 +141,12 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '002_window_200'
     exp['seq_length'] = 200
     exp['num_patches'] = 20
-    exp['mask_last_n'] = 10
     experiments.append(exp)
 
     exp = deepcopy(base1)
     exp['name'] = '003_window_500'
     exp['seq_length'] = 500
     exp['num_patches'] = 50
-    exp['mask_last_n'] = 10
     experiments.append(exp)
 
     exp = deepcopy(base1)
@@ -159,28 +154,24 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 1000
     exp['patch_size'] = 20
     exp['num_patches'] = 50
-    exp['mask_last_n'] = 20
     experiments.append(exp)
 
     exp = deepcopy(base1)
     exp['name'] = '005_window_1000_p10'
     exp['seq_length'] = 1000
     exp['num_patches'] = 100
-    exp['mask_last_n'] = 10
     experiments.append(exp)
 
     exp = deepcopy(base1)
     exp['name'] = '006_patch_5'
     exp['patch_size'] = 5
     exp['num_patches'] = 20
-    exp['mask_last_n'] = 5
     experiments.append(exp)
 
     exp = deepcopy(base1)
     exp['name'] = '007_patch_20'
     exp['patch_size'] = 20
     exp['num_patches'] = 5
-    exp['mask_last_n'] = 20
     experiments.append(exp)
 
     exp = deepcopy(base1)
@@ -188,7 +179,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 500
     exp['patch_size'] = 5
     exp['num_patches'] = 100
-    exp['mask_last_n'] = 5
     experiments.append(exp)
 
     exp = deepcopy(base1)
@@ -196,7 +186,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 500
     exp['patch_size'] = 20
     exp['num_patches'] = 25
-    exp['mask_last_n'] = 20
     experiments.append(exp)
 
     exp = deepcopy(base1)
@@ -204,7 +193,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 2000
     exp['patch_size'] = 20
     exp['num_patches'] = 100
-    exp['mask_last_n'] = 20
     experiments.append(exp)
 
     # -------------------------------------------------------------------------
@@ -231,7 +219,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 500
     exp['patch_size'] = 20
     exp['num_patches'] = 25
-    exp['mask_last_n'] = 20
     exp['num_encoder_layers'] = 2
     experiments.append(exp)
 
@@ -423,7 +410,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 500
     exp['patch_size'] = 20
     exp['num_patches'] = 25
-    exp['mask_last_n'] = 20
     exp['d_model'] = 128
     exp['nhead'] = 4
     exp['dim_feedforward'] = 512
@@ -435,7 +421,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 1000
     exp['patch_size'] = 20
     exp['num_patches'] = 50
-    exp['mask_last_n'] = 20
     exp['d_model'] = 128
     exp['nhead'] = 4
     exp['dim_feedforward'] = 512
@@ -468,7 +453,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 500
     exp['patch_size'] = 20
     exp['num_patches'] = 25
-    exp['mask_last_n'] = 20
     exp['d_model'] = 128
     exp['nhead'] = 4
     exp['dim_feedforward'] = 512
@@ -503,7 +487,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 500
     exp['patch_size'] = 20
     exp['num_patches'] = 25
-    exp['mask_last_n'] = 20
     exp['d_model'] = 128
     exp['nhead'] = 4
     exp['dim_feedforward'] = 512
@@ -655,7 +638,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 500
     exp['patch_size'] = 20
     exp['num_patches'] = 25
-    exp['mask_last_n'] = 20
     exp['masking_ratio'] = 0.10
     experiments.append(exp)
 
@@ -665,7 +647,6 @@ def get_experiments() -> List[Dict]:
         exp['seq_length'] = 500
         exp['patch_size'] = 20
         exp['num_patches'] = 25
-        exp['mask_last_n'] = 20
         if config_var == 'nhead1':
             exp['nhead'] = 1
         elif config_var == 'nhead16':
@@ -678,7 +659,6 @@ def get_experiments() -> List[Dict]:
         exp['seq_length'] = 500
         exp['patch_size'] = 20
         exp['num_patches'] = 25
-        exp['mask_last_n'] = 20
         exp['num_teacher_decoder_layers'] = td
         exp['num_student_decoder_layers'] = sd
         experiments.append(exp)
@@ -688,7 +668,6 @@ def get_experiments() -> List[Dict]:
     exp['seq_length'] = 500
     exp['patch_size'] = 20
     exp['num_patches'] = 25
-    exp['mask_last_n'] = 20
     exp['nhead'] = 16
     exp['masking_ratio'] = 0.10
     experiments.append(exp)
@@ -725,7 +704,6 @@ def get_experiments() -> List[Dict]:
         exp['name'] = f'{116+i:03d}_d128_patch{ps}'
         exp['patch_size'] = ps
         exp['num_patches'] = 100 // ps
-        exp['mask_last_n'] = ps
         experiments.append(exp)
 
     exp = deepcopy(base2)

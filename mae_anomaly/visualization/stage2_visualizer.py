@@ -462,7 +462,6 @@ class Stage2Visualizer:
             'force_mask_anomaly': ('Force Mask Anomaly', 'Force masking anomaly regions'),
             'patch_level_loss': ('Patch Level Loss', 'Compute loss per patch'),
             'patchify_mode': ('Patchify Mode', 'CNN/Linear patch embedding'),
-            'mask_last_n': ('Mask Last N', 'Mask last N timesteps'),
         }
 
         # Dynamically get hyperparameters from DataFrame

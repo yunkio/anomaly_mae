@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-01-29 (Update 41): Remove last_patch inference mode
+
+### Summary
+
+Removed `last_patch` inference mode entirely. The system now exclusively uses `all_patches` (iterative per-patch masking with N forward passes). Removed `inference_mode` and `mask_last_n` from Config. Deleted 1020 last_patch result directories. Updated all code, configs, and documentation.
+
+### Code Changes
+
+| File | Changes |
+|------|---------|
+| `config.py` | Removed `inference_mode` and `mask_last_n` fields |
+| `evaluator.py` | Deleted `aggregate_scores_to_point_level()`, `compute_point_level_pa_k()`, `_compute_raw_scores_last_patch()`, `_compute_raw_scores_all_patches()`; simplified all methods to remove branching |
+| `trainer.py` | Renamed `last_patch_labels` → `window_labels`; `mask_last_n` → `patch_size` |
+| `visualization/base.py` | Removed inference_mode branching in all collect functions |
+| `visualization/best_model_visualizer.py` | Removed `self.inference_mode` and all conditional branches |
+| `visualization/training_visualizer.py` | `last_patch_labels` → `window_labels`; `mask_last_n` → `patch_size` |
+| `visualization/data_visualizer.py` | `config.mask_last_n` → `config.patch_size` |
+| `visualization/stage2_visualizer.py` | Removed `mask_last_n` from hyperparameter display |
+| `run_ablation.py` | Removed inference_mode loops, suffixes, and INFERENCE_MODES handling |
+| `configs/phase1.py` | Removed `INFERENCE_MODES` list and `mask_last_n` from experiments |
+
+### Documentation Changes
+
+| File | Changes |
+|------|---------|
+| `INFERENCE_MODES.md` | Rewritten: single inference process (removed last_patch section and comparison) |
+| `ABLATION_EXPERIMENTS.md` | Variants: 12 → 6 per experiment; Total: 2040 → 1020 |
+| `ABLATION_STUDIES.md` | Removed inference modes section; updated variant counts |
+| `ARCHITECTURE.md` | Simplified inference time description |
+| `VISUALIZATIONS.md` | Removed inference mode handling table |
+| `DATASET.md` | `config.mask_last_n` → `config.patch_size` |
+
+### Results Cleanup
+
+Deleted 1020 `*_last` directories from `results/experiments/20260128_012500_phase1/`.
+
+---
+
 ## 2026-01-29 (Update 40): evaluate_by_score_type, Documentation Sync & Cleanup
 
 ### Summary

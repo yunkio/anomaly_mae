@@ -5,7 +5,7 @@ This document describes the ablation study framework for the Self-Distilled MAE 
 ## Quick Start
 
 ```bash
-# Run unified Phase 1 experiments (170 experiments × 12 variants = 2040 results)
+# Run unified Phase 1 experiments (170 experiments × 6 variants = 1020 results)
 python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py
 
 # Run specific experiments only
@@ -49,7 +49,6 @@ CREATED_AT = "2026-01-27 12:00:00"
 
 # Evaluation modes
 SCORING_MODES = ['default', 'adaptive', 'normalized']
-INFERENCE_MODES = ['last_patch', 'all_patches']
 
 # Base configuration
 BASE_CONFIG = {
@@ -92,8 +91,8 @@ EXPERIMENTS = get_experiments()
 The unified Phase 1 combines architecture exploration and focused optimization into a single comprehensive ablation study.
 
 **Total Experiments**: 170
-**Variants per Experiment**: 2 (mask_after_encoder) × 2 (inference_mode) × 3 (scoring_mode) = 12
-**Total Results**: 170 × 12 = **2040**
+**Variants per Experiment**: 2 (mask_after_encoder) × 3 (scoring_mode) = 6
+**Total Results**: 170 × 6 = **1020**
 
 ### Base Configuration
 
@@ -158,21 +157,12 @@ BASE_CONFIG = {
 | `adaptive` | recon + (μ_recon/μ_disc)×disc | Dynamic weight |
 | `normalized` | z(recon) + z(disc) | Z-score normalization |
 
-## Inference Modes
-
-| Mode | Method | Speed | Coverage |
-|------|--------|-------|----------|
-| `last_patch` | Mask last patch only | Fast | Window-level |
-| `all_patches` | Mask each patch | N× slower | Patch-level (10× coverage) |
-
-See [INFERENCE_MODES.md](INFERENCE_MODES.md) for details.
-
 ## Output Structure
 
 ```
 results/experiments/{timestamp}_phase1/
 ├── summary_results.csv                    # All metrics summary
-├── {exp_name}_mask_before_default_last/
+├── {exp_name}_mask_before_default/
 │   ├── best_model.pt                      # Model checkpoint
 │   ├── best_config.json                   # Config
 │   ├── training_histories.json            # Training history
@@ -185,9 +175,9 @@ results/experiments/{timestamp}_phase1/
 │           ├── best_model_confusion_matrix.png
 │           ├── best_model_score_contribution.png
 │           └── ...
-├── {exp_name}_mask_before_default_all/
+├── {exp_name}_mask_before_adaptive/
 │   └── ...
-├── {exp_name}_mask_before_adaptive_last/
+├── {exp_name}_mask_before_normalized/
 │   └── ...
 └── ...
 ```

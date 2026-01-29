@@ -28,10 +28,11 @@ from sklearn.metrics import roc_curve, auc, confusion_matrix, precision_recall_c
 from scipy.stats import gaussian_kde
 from tqdm import tqdm
 
+from torch.utils.data import Subset
+
 from mae_anomaly import Config, ANOMALY_TYPE_NAMES, ANOMALY_CATEGORY
 from mae_anomaly.evaluator import (
     compute_pa_k_adjusted_predictions,
-    aggregate_scores_to_point_level,
     aggregate_patch_scores_to_point_level,
     compute_segment_pa_k_detection_rate,
     compute_segment_pa_k_adjusted_predictions,
@@ -48,6 +49,30 @@ from .base import (
     collect_predictions, collect_detailed_data,
     compute_score_contributions,
 )
+
+def _unwrap_subset(dataset):
+    """Unwrap torch Subset to get the underlying dataset with custom attributes."""
+    while isinstance(dataset, Subset):
+        dataset = dataset.dataset
+    return dataset
+
+
+def _get_subset_window_indices(dataset):
+    """Get window_start_indices respecting Subset filtering.
+
+    Returns:
+        Tuple of (base_dataset, window_start_indices_array)
+        - base_dataset: the unwrapped dataset with anomaly_regions, point_labels, etc.
+        - window_start_indices_array: indices corresponding to actual predictions
+          (filtered by Subset indices if applicable)
+    """
+    base = _unwrap_subset(dataset)
+    all_indices = np.array(base.window_start_indices)
+    if isinstance(dataset, Subset):
+        subset_idx = np.array(dataset.indices)
+        return base, all_indices[subset_idx]
+    return base, all_indices
+
 
 class BestModelVisualizer:
     """Visualize best model analysis"""
@@ -70,8 +95,6 @@ class BestModelVisualizer:
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
 
-        # Check inference mode
-        self.inference_mode = getattr(config, 'inference_mode', 'last_patch')
         self.num_patches = getattr(config, 'num_patches', 10)
 
         # Collect prediction data (or use pre-computed data for efficiency)
@@ -122,8 +145,7 @@ class BestModelVisualizer:
         """Get sample type masks from pred_data (patch-level, unified for all modes).
 
         This is the canonical source for sample_type masks used in statistical visualizations.
-        For all_patches mode: (n_windows × num_patches) samples with per-patch sample_types
-        For last_patch mode: (n_windows) samples with per-window sample_types (equivalent to last-patch)
+        (n_windows × num_patches) samples with per-patch sample_types
         """
         return self._pred_sample_type_masks
 
@@ -219,14 +241,12 @@ class BestModelVisualizer:
         self._compute_threshold()
 
     def _patch_idx_to_window_idx(self, patch_idx: int) -> int:
-        """Convert patch-level index to window-level index for all_patches mode.
+        """Convert patch-level index to window-level index.
 
-        In all_patches mode, pred_data has shape (n_windows * num_patches,)
+        pred_data has shape (n_windows * num_patches,)
         but detailed_data has shape (n_windows,).
         """
-        if self.inference_mode == 'all_patches':
-            return patch_idx // self.num_patches
-        return patch_idx
+        return patch_idx // self.num_patches
 
     def _get_masked_region(self, patch_idx: int, seq_len: int) -> tuple:
         """Get the masked region (start, end) for a given patch_idx.
@@ -240,15 +260,10 @@ class BestModelVisualizer:
         """
         patch_size = self.config.patch_size
 
-        if self.inference_mode == 'all_patches':
-            # In all_patches mode, each patch_idx corresponds to masking a specific patch
-            masked_patch = patch_idx % self.num_patches
-            mask_start = masked_patch * patch_size
-            mask_end = min((masked_patch + 1) * patch_size, seq_len)
-        else:
-            # In last_patch mode, always mask the last mask_last_n points
-            mask_start = seq_len - self.config.mask_last_n
-            mask_end = seq_len
+        # Each patch_idx corresponds to masking a specific patch
+        masked_patch = patch_idx % self.num_patches
+        mask_start = masked_patch * patch_size
+        mask_end = min((masked_patch + 1) * patch_size, seq_len)
 
         return mask_start, mask_end
 
@@ -361,10 +376,8 @@ class BestModelVisualizer:
     def plot_reconstruction_examples(self, num_examples: int = 3):
         """Show reconstruction examples
 
-        For all_patches mode: Shows assembled reconstruction where each position was
+        Shows assembled reconstruction where each position was
         reconstructed when its patch was masked. All patches are shown as reconstructed.
-
-        For last_patch mode: Shows reconstruction of the last patch region only.
         """
         normal_idx = np.where(self.detailed_data['labels'] == 0)[0]
         anomaly_idx = np.where(self.detailed_data['labels'] == 1)[0]
@@ -388,21 +401,18 @@ class BestModelVisualizer:
             x = np.arange(seq_len)
 
             # Determine representative patch_idx for masked region highlighting
-            if self.inference_mode == 'all_patches':
-                # For all_patches mode, find the most relevant patch to highlight
-                # For anomaly samples: find patch containing anomaly
-                # For normal samples: use last patch
-                if label == 'Anomaly' and point_labels.sum() > 0:
-                    # Find first anomaly point and determine its patch
-                    anomaly_start = np.where(point_labels == 1)[0][0]
-                    highlighted_patch = anomaly_start // self.config.patch_size
-                else:
-                    # For normal samples, highlight the last patch
-                    highlighted_patch = self.num_patches - 1
-                # Compute patch_idx for _highlight_masked_region
-                representative_patch_idx = idx * self.num_patches + highlighted_patch
+            # Find the most relevant patch to highlight
+            # For anomaly samples: find patch containing anomaly
+            # For normal samples: use last patch
+            if label == 'Anomaly' and point_labels.sum() > 0:
+                # Find first anomaly point and determine its patch
+                anomaly_start = np.where(point_labels == 1)[0][0]
+                highlighted_patch = anomaly_start // self.config.patch_size
             else:
-                representative_patch_idx = idx  # For last_patch mode, window_idx == patch_idx
+                # For normal samples, highlight the last patch
+                highlighted_patch = self.num_patches - 1
+            # Compute patch_idx for _highlight_masked_region
+            representative_patch_idx = idx * self.num_patches + highlighted_patch
 
             # Original vs Teacher
             ax = axes[row, 0] if len(all_samples) > 1 else axes[0]
@@ -410,10 +420,7 @@ class BestModelVisualizer:
             ax.plot(x, original, 'b-', label='Original', alpha=0.8)
             ax.plot(x, teacher, 'g--', label='Teacher', alpha=0.8)
             self._highlight_masked_region(ax, representative_patch_idx, seq_len, label='Masked')
-            if self.inference_mode == 'all_patches':
-                ax.set_title(f'{label} - Original vs Teacher (Patch {highlighted_patch})')
-            else:
-                ax.set_title(f'{label} - Original vs Teacher')
+            ax.set_title(f'{label} - Original vs Teacher (Patch {highlighted_patch})')
             ax.legend(fontsize=8)
 
             # Original vs Student
@@ -422,10 +429,7 @@ class BestModelVisualizer:
             ax.plot(x, original, 'b-', label='Original', alpha=0.8)
             ax.plot(x, student, 'r--', label='Student', alpha=0.8)
             self._highlight_masked_region(ax, representative_patch_idx, seq_len, label='Masked')
-            if self.inference_mode == 'all_patches':
-                ax.set_title(f'{label} - Original vs Student (Patch {highlighted_patch})')
-            else:
-                ax.set_title(f'{label} - Original vs Student')
+            ax.set_title(f'{label} - Original vs Student (Patch {highlighted_patch})')
             ax.legend(fontsize=8)
 
             # Discrepancy
@@ -433,15 +437,11 @@ class BestModelVisualizer:
             self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly')
             ax.plot(x, disc, color=VIS_COLORS['student'], lw=2)
             self._highlight_masked_region(ax, representative_patch_idx, seq_len, label='Masked')
-            if self.inference_mode == 'all_patches':
-                ax.set_title(f'{label} - Discrepancy Profile (Patch {highlighted_patch})')
-            else:
-                ax.set_title(f'{label} - Discrepancy Profile')
+            ax.set_title(f'{label} - Discrepancy Profile (Patch {highlighted_patch})')
             ax.axhline(y=disc.mean(), color=VIS_COLORS['disturbing'], linestyle='--', label=f'Mean: {disc.mean():.4f}')
             ax.legend(fontsize=8)
 
-        mode_str = 'All Patches' if self.inference_mode == 'all_patches' else 'Last Patch'
-        plt.suptitle(f'Reconstruction Examples (Inference Mode: {mode_str})', fontsize=12, y=1.02)
+        plt.suptitle('Reconstruction Examples', fontsize=12, y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'best_model_reconstruction.png'), dpi=150, bbox_inches='tight')
         plt.close()
@@ -1043,7 +1043,7 @@ Separation Analysis:
         """Plot discrepancy analysis using patch-level data
 
         Uses patch-level data from pred_data for unified analysis across all inference modes.
-        Each sample is a prediction unit (patch in all_patches mode, window in last_patch mode).
+        Each sample is a prediction unit (one patch per masked position).
 
         sample_types are computed per-patch:
         - pure_normal (0): normal patch in normal window
@@ -1158,8 +1158,7 @@ Separation Ratios:
                verticalalignment='top', fontfamily='monospace',
                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
 
-        mode_str = self.inference_mode
-        plt.suptitle(f'Discrepancy Analysis (Teacher-Student Difference)\nInference Mode: {mode_str}',
+        plt.suptitle('Discrepancy Analysis (Teacher-Student Difference)',
                     fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'discrepancy_trend.png'), dpi=150, bbox_inches='tight')
@@ -1375,7 +1374,7 @@ Anomaly Location:
                     if len(anomaly_region) > 0:
                         ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
                     # Convert window_idx to patch_idx for masked region
-                    patch_idx_tp = tp_idx * self.num_patches + (self.num_patches - 1) if self.inference_mode == 'all_patches' else tp_idx
+                    patch_idx_tp = tp_idx * self.num_patches + (self.num_patches - 1)
                     self._highlight_masked_region(ax, patch_idx_tp, len(original), label=None)
 
                 ax.set_title(f'{atype.upper()}: TP Example', fontweight='bold', color=VIS_COLORS['teacher'])
@@ -1415,7 +1414,7 @@ Anomaly Location:
                     if len(anomaly_region_fn) > 0:
                         ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
                     # Convert window_idx to patch_idx for masked region
-                    patch_idx_fn = fn_idx * self.num_patches + (self.num_patches - 1) if self.inference_mode == 'all_patches' else fn_idx
+                    patch_idx_fn = fn_idx * self.num_patches + (self.num_patches - 1)
                     self._highlight_masked_region(ax, patch_idx_fn, len(original), label=None)
 
                 ax.set_title(f'{atype.upper()}: FN Example', fontweight='bold', color=VIS_COLORS['anomaly'])
@@ -2591,14 +2590,15 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
         - Teacher Recon Only: teacher reconstruction error
         - Student Recon Only: student reconstruction error
         """
-        # Check if we can use segment-based PA%K
-        test_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
+        # Check if we can use segment-based PA%K (handle Subset wrapping)
+        raw_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
+        base_dataset = _unwrap_subset(raw_dataset) if raw_dataset is not None else None
         can_use_segment_pa_k = (
-            test_dataset is not None and
-            hasattr(test_dataset, 'anomaly_regions') and
-            hasattr(test_dataset, 'point_labels') and
-            hasattr(test_dataset, 'window_start_indices') and
-            len(test_dataset.anomaly_regions) > 0
+            base_dataset is not None and
+            hasattr(base_dataset, 'anomaly_regions') and
+            hasattr(base_dataset, 'point_labels') and
+            hasattr(base_dataset, 'window_start_indices') and
+            len(base_dataset.anomaly_regions) > 0
         )
 
         if not can_use_segment_pa_k:
@@ -2610,30 +2610,20 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
         discrepancies = self.pred_data['discrepancies']
         combined_scores = self.pred_data['scores']
 
-        # Get point-level data
-        total_length = len(test_dataset.point_labels)
-        point_labels = np.array(test_dataset.point_labels)
-        anomaly_regions = test_dataset.anomaly_regions
-        window_start_indices = np.array(test_dataset.window_start_indices)
+        # Get point-level data (use base dataset for signal-level attrs, subset-aware for window indices)
+        total_length = len(base_dataset.point_labels)
+        point_labels = np.array(base_dataset.point_labels)
+        anomaly_regions = base_dataset.anomaly_regions
+        _, window_start_indices = _get_subset_window_indices(raw_dataset)
         n_windows = len(window_start_indices)
 
-        # Check inference mode and determine if using patch-level scores
-        inference_mode = getattr(self.config, 'inference_mode', 'last_patch')
         num_patches = getattr(self.config, 'num_patches', 10)
 
         # Determine if we're using patch-level scores based on actual data shape
         first_scores = combined_scores
-        is_patch_scores = (inference_mode == 'all_patches' and
-                          len(first_scores) == n_windows * num_patches)
-
-        # Convert scores to proper shape for voting
-        # For all_patches mode: reshape to 2D (n_windows, num_patches) for patch-level voting
-        # For last_patch mode: keep 1D (n_windows,) for window-level voting
+        # Convert scores to 2D (n_windows, num_patches) for patch-level voting
         def prepare_scores(scores):
-            if is_patch_scores:
-                # Reshape 1D (n_windows * num_patches,) to 2D (n_windows, num_patches)
-                return scores.reshape(n_windows, num_patches)
-            return scores
+            return scores.reshape(n_windows, num_patches)
 
         # Scoring methods to compare
         scoring_methods = [
@@ -2661,8 +2651,8 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
             seq_length=self.config.seq_length,
             patch_size=self.config.patch_size,
             total_length=total_length,
-            num_patches=num_patches if is_patch_scores else None,
-            is_patch_scores=is_patch_scores
+            num_patches=num_patches,
+
         )
 
         # Create evaluation mask (no type filtering for overall PA%80)
@@ -2679,7 +2669,7 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
                 point_indices=point_indices,
                 point_coverage=point_coverage,
                 thresholds=thresholds,
-                is_patch_scores=is_patch_scores
+    
             )
 
             # Compute ROC using the helper function
@@ -2776,14 +2766,15 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
             ('Student Recon', student_errors),
         ]
 
-        # Check if test_dataset has anomaly_regions for segment-based PA%K
-        test_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
+        # Check if test_dataset has anomaly_regions for segment-based PA%K (handle Subset)
+        raw_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
+        base_dataset = _unwrap_subset(raw_dataset) if raw_dataset is not None else None
         can_use_segment_pa_k = (
-            test_dataset is not None and
-            hasattr(test_dataset, 'anomaly_regions') and
-            hasattr(test_dataset, 'point_labels') and
-            hasattr(test_dataset, 'window_start_indices') and
-            len(test_dataset.anomaly_regions) > 0
+            base_dataset is not None and
+            hasattr(base_dataset, 'anomaly_regions') and
+            hasattr(base_dataset, 'point_labels') and
+            hasattr(base_dataset, 'window_start_indices') and
+            len(base_dataset.anomaly_regions) > 0
         )
 
         # Pre-compute voting-based PA%K metrics for each scoring method
@@ -2792,43 +2783,37 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
         if can_use_segment_pa_k:
             from concurrent.futures import ThreadPoolExecutor
 
-            total_length = len(test_dataset.point_labels)
-            inference_mode = getattr(self.config, 'inference_mode', 'last_patch')
+            total_length = len(base_dataset.point_labels)
             num_patches = getattr(self.config, 'num_patches', 10)
-            n_windows = len(test_dataset.window_start_indices)
-            window_start_indices = np.array(test_dataset.window_start_indices)
-            point_labels = np.array(test_dataset.point_labels)
+            _, window_start_indices = _get_subset_window_indices(raw_dataset)
+            n_windows = len(window_start_indices)
+            point_labels = np.array(base_dataset.point_labels)
             n_thresholds = 100
             k_values = [10, 20, 50, 80]
 
             # Collect anomaly type indices that have segments
             anomaly_type_indices = []
             for atype_idx in range(1, 10):
-                type_segments = [r for r in test_dataset.anomaly_regions if r.anomaly_type == atype_idx]
+                type_segments = [r for r in base_dataset.anomaly_regions if r.anomaly_type == atype_idx]
                 if len(type_segments) > 0:
                     anomaly_type_indices.append(atype_idx)
 
             if anomaly_type_indices:
-                # Determine if scores are patch-level
-                first_scores = scoring_methods[0][1]
-                is_patch_scores = (inference_mode == 'all_patches' and
-                                   len(first_scores) == n_windows * num_patches)
-
                 # OPTIMIZATION 1: Precompute point_indices ONCE (shared across all methods)
                 point_indices, point_coverage = precompute_point_score_indices(
                     window_start_indices=window_start_indices,
                     seq_length=self.config.seq_length,
                     patch_size=self.config.patch_size,
                     total_length=total_length,
-                    num_patches=num_patches if is_patch_scores else None,
-                    is_patch_scores=is_patch_scores
+                    num_patches=num_patches,
+        
                 )
 
                 # OPTIMIZATION 2: Precompute type_masks ONCE (shared across all methods)
                 type_masks = {}
                 for atype in anomaly_type_indices:
                     mask = np.ones(total_length, dtype=bool)
-                    for region in test_dataset.anomaly_regions:
+                    for region in base_dataset.anomaly_regions:
                         if region.anomaly_type != atype:
                             start, end = region.start, min(region.end, total_length)
                             mask[start:end] = False
@@ -2836,11 +2821,8 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
 
                 # Process each scoring method using shared precomputed data
                 for score_name, sample_scores in scoring_methods:
-                    # Convert to window-level scores if needed
-                    if is_patch_scores:
-                        window_scores = sample_scores.reshape(n_windows, num_patches)
-                    else:
-                        window_scores = sample_scores
+                    # Reshape to (n_windows, num_patches) for voting
+                    window_scores = sample_scores.reshape(n_windows, num_patches)
 
                     # Generate thresholds for this method's score distribution
                     min_score, max_score = window_scores.min(), window_scores.max()
@@ -2852,7 +2834,7 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
                         point_indices=point_indices,
                         point_coverage=point_coverage,
                         thresholds=thresholds,
-                        is_patch_scores=is_patch_scores
+            
                     )
 
                     # First, compute OVERALL PA%K ROC to find global optimal threshold
@@ -2863,7 +2845,7 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
                         result = _compute_single_pa_k_roc((
                             point_scores_all,
                             point_labels,
-                            test_dataset.anomaly_regions,
+                            base_dataset.anomaly_regions,
                             eval_type_mask_overall,
                             k,
                             None,  # anomaly_type=None means overall (all types)
@@ -2951,8 +2933,8 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
                             # Use threshold=0.5 on voting result (binary: 0 or 1)
                             pa_rate = compute_segment_pa_k_detection_rate(
                                 point_scores=voting_point_scores,
-                                point_labels=test_dataset.point_labels,
-                                anomaly_regions=test_dataset.anomaly_regions,
+                                point_labels=base_dataset.point_labels,
+                                anomaly_regions=base_dataset.anomaly_regions,
                                 anomaly_type=atype_idx,
                                 threshold=0.5,
                                 k_percent=k

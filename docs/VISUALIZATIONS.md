@@ -191,19 +191,15 @@ Visualizations use the **same evaluation method** as the ablation runner:
 | Train Samples | ~20,000 windows (stride=11) | N/A |
 | Test Samples | ~55,000 windows (stride=1) | Same (uses saved model) |
 | Epochs | 50 (default) | N/A (uses saved model) |
-| Masking | Respects `inference_mode` | Respects `inference_mode` |
+| Masking | Iterative patch masking (all patches) | Iterative patch masking (all patches) |
 | Error Metric | MSE | MSE |
 
-### Inference Mode Handling
+### Inference Mode
 
-The `collect_predictions()` and `collect_detailed_data()` functions in `base.py` respect the `config.inference_mode` setting:
-
-| Mode | Masking | Labels | Output Shape |
-|------|---------|--------|--------------|
-| `last_patch` | Last patch only | `last_patch_labels` | (n_windows,) |
-| `all_patches` | Each patch one at a time | Patch-level from `point_labels` | (n_windows × num_patches,) |
-
-This ensures visualizations (confusion matrix, ROC curves, etc.) match the evaluation methodology.
+The `collect_predictions()` and `collect_detailed_data()` functions in `base.py` use iterative patch masking (all patches mode):
+- Each patch masked one at a time (N forward passes)
+- Patch-level labels computed from `point_labels`
+- Output shape: (n_windows × num_patches,)
 
 ---
 

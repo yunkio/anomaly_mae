@@ -26,71 +26,6 @@ from sklearn.metrics import (
 from .dataset_sliding import ANOMALY_TYPE_NAMES
 
 
-def aggregate_scores_to_point_level(
-    window_scores: np.ndarray,
-    window_start_indices: np.ndarray,
-    seq_length: int,
-    patch_size: int,
-    total_length: int,
-    method: str = 'voting',
-    threshold: Optional[float] = None
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Aggregate window-level scores to point-level scores (last_patch mode)
-
-    Each timestep may be covered by multiple windows' last patches.
-    This function aggregates the scores from all covering windows.
-
-    Args:
-        window_scores: (n_windows,) window-level anomaly scores
-        window_start_indices: (n_windows,) start index of each window in the time series
-        seq_length: Window size (e.g., 100)
-        patch_size: Size of last patch (e.g., 10)
-        total_length: Total length of the time series
-        method: Aggregation method ('mean', 'median', 'max', 'voting')
-        threshold: Threshold for binary prediction (required for 'voting')
-
-    Returns:
-        point_scores: (total_length,) aggregated scores per timestep (NaN for no coverage)
-        point_coverage: (total_length,) number of windows covering each timestep
-    """
-    point_scores = np.full(total_length, np.nan)
-    point_coverage = np.zeros(total_length, dtype=int)
-
-    # Collect scores for each timestep
-    point_score_lists = [[] for _ in range(total_length)]
-
-    for score, start_idx in zip(window_scores, window_start_indices):
-        # This window's last patch covers timesteps [start_idx + seq_length - patch_size, start_idx + seq_length)
-        last_patch_start = start_idx + seq_length - patch_size
-        last_patch_end = start_idx + seq_length
-
-        for t in range(last_patch_start, min(last_patch_end, total_length)):
-            point_score_lists[t].append(score)
-
-    # Aggregate scores
-    for t in range(total_length):
-        if len(point_score_lists[t]) > 0:
-            scores = np.array(point_score_lists[t])
-            point_coverage[t] = len(scores)
-
-            if method == 'mean':
-                point_scores[t] = scores.mean()
-            elif method == 'median':
-                point_scores[t] = np.median(scores)
-            elif method == 'max':
-                point_scores[t] = scores.max()
-            elif method == 'voting':
-                if threshold is None:
-                    raise ValueError("threshold is required for voting method")
-                votes = (scores > threshold).sum()
-                # Majority vote: if more than half predict anomaly, it's anomaly
-                point_scores[t] = 1.0 if votes > len(scores) / 2 else 0.0
-            else:
-                raise ValueError(f"Unknown aggregation method: {method}")
-
-    return point_scores, point_coverage
-
-
 def aggregate_patch_scores_to_point_level(
     patch_scores: np.ndarray,
     window_start_indices: np.ndarray,
@@ -101,15 +36,10 @@ def aggregate_patch_scores_to_point_level(
     method: str = 'voting',
     threshold: Optional[float] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Aggregate per-patch scores to point-level scores (all_patches mode)
+    """Aggregate per-patch scores to point-level scores
 
     Each window has N patches, and each patch's score is assigned to the timesteps
-    that patch covers. This gives much higher coverage per timestep compared to
-    last_patch mode.
-
-    Coverage comparison:
-    - last_patch: each timestep covered by ~patch_size windows
-    - all_patches: each timestep covered by ~seq_length windows (N times more)
+    that patch covers. Each timestep is covered by ~seq_length windows.
 
     Args:
         patch_scores: (n_windows, num_patches) per-patch anomaly scores
@@ -164,95 +94,6 @@ def aggregate_patch_scores_to_point_level(
                 raise ValueError(f"Unknown aggregation method: {method}")
 
     return point_scores, point_coverage
-
-
-def compute_point_level_pa_k(
-    window_scores: np.ndarray,
-    window_start_indices: np.ndarray,
-    point_labels: np.ndarray,
-    seq_length: int,
-    patch_size: int,
-    method: str = 'voting',
-    threshold: Optional[float] = None,
-    k_values: List[int] = [10, 20, 50, 80]
-) -> Dict[str, float]:
-    """Compute point-level PA%K metrics with window score aggregation
-
-    Args:
-        window_scores: (n_windows,) window-level anomaly scores
-        window_start_indices: (n_windows,) start index of each window
-        point_labels: (total_length,) point-level ground truth labels
-        seq_length: Window size (e.g., 100)
-        patch_size: Size of last patch (e.g., 10)
-        method: Aggregation method ('mean', 'median', 'max', 'voting')
-        threshold: Threshold for binary prediction
-        k_values: List of K% values for PA%K
-
-    Returns:
-        Dict with pa_{k}_f1 and pa_{k}_roc_auc for each k value
-    """
-    total_length = len(point_labels)
-
-    # Aggregate window scores to point level
-    point_scores, point_coverage = aggregate_scores_to_point_level(
-        window_scores=window_scores,
-        window_start_indices=window_start_indices,
-        seq_length=seq_length,
-        patch_size=patch_size,
-        total_length=total_length,
-        method=method,
-        threshold=threshold
-    )
-
-    # Only use timesteps with coverage
-    valid_mask = point_coverage > 0
-    valid_point_scores = point_scores[valid_mask]
-    valid_point_labels = point_labels[valid_mask]
-
-    if len(valid_point_labels) == 0 or len(np.unique(valid_point_labels)) < 2:
-        # No valid data or only one class
-        return {f'pa_{k}_f1': 0.0 for k in k_values} | {f'pa_{k}_roc_auc': 0.0 for k in k_values}
-
-    results = {}
-
-    # For voting method, scores are already binary (0/1)
-    if method == 'voting':
-        valid_predictions = valid_point_scores.astype(int)
-    else:
-        # For mean/median/max, use threshold to binarize
-        if threshold is None:
-            # Use optimal threshold from ROC curve
-            fpr, tpr, thresholds = roc_curve(valid_point_labels, valid_point_scores)
-            optimal_idx = np.argmax(tpr - fpr)
-            threshold = thresholds[optimal_idx]
-        valid_predictions = (valid_point_scores > threshold).astype(int)
-
-    for k in k_values:
-        # Compute PA%K F1
-        pa_metrics = compute_pa_k_metrics(valid_predictions, valid_point_labels, k_percent=k)
-        results[f'pa_{k}_f1'] = pa_metrics['pa_k_f1']
-
-        # Compute PA%K ROC-AUC
-        # For voting, we need continuous scores for ROC-AUC
-        # Re-aggregate with mean for ROC-AUC calculation
-        if method == 'voting':
-            mean_scores, _ = aggregate_scores_to_point_level(
-                window_scores=window_scores,
-                window_start_indices=window_start_indices,
-                seq_length=seq_length,
-                patch_size=patch_size,
-                total_length=total_length,
-                method='mean',
-                threshold=None
-            )
-            valid_mean_scores = mean_scores[valid_mask]
-            pa_roc_auc = compute_pa_k_roc_auc(valid_mean_scores, valid_point_labels, k_percent=k)
-        else:
-            pa_roc_auc = compute_pa_k_roc_auc(valid_point_scores, valid_point_labels, k_percent=k)
-
-        results[f'pa_{k}_roc_auc'] = pa_roc_auc
-
-    return results
 
 
 def compute_point_level_pa_k_all_patches(
@@ -558,7 +399,6 @@ def precompute_point_score_indices(
     patch_size: int,
     total_length: int,
     num_patches: int = None,
-    is_patch_scores: bool = False
 ) -> Tuple[List[List], np.ndarray]:
     """Precompute which (window, patch) indices cover each timestep.
 
@@ -567,8 +407,7 @@ def precompute_point_score_indices(
         seq_length: Window size (e.g., 100)
         patch_size: Size of each patch (e.g., 10)
         total_length: Total length of the time series
-        num_patches: Number of patches per window (required if is_patch_scores=True)
-        is_patch_scores: True for all_patches mode, False for last_patch mode
+        num_patches: Number of patches per window
 
     Returns:
         point_indices: list of length total_length, each element is list of (w_idx, p_idx) tuples
@@ -576,19 +415,12 @@ def precompute_point_score_indices(
     """
     point_indices = [[] for _ in range(total_length)]
 
-    if is_patch_scores and num_patches is not None:
-        for w_idx, start in enumerate(window_start_indices):
-            for p_idx in range(num_patches):
-                p_start = start + p_idx * patch_size
-                p_end = min(p_start + patch_size, total_length)
-                for t in range(max(0, p_start), p_end):
-                    point_indices[t].append((w_idx, p_idx))
-    else:
-        for w_idx, start in enumerate(window_start_indices):
-            p_start = start + seq_length - patch_size
-            p_end = min(start + seq_length, total_length)
+    for w_idx, start in enumerate(window_start_indices):
+        for p_idx in range(num_patches):
+            p_start = start + p_idx * patch_size
+            p_end = min(p_start + patch_size, total_length)
             for t in range(max(0, p_start), p_end):
-                point_indices[t].append((w_idx,))
+                point_indices[t].append((w_idx, p_idx))
 
     point_coverage = np.array([len(indices) for indices in point_indices], dtype=int)
     return point_indices, point_coverage
@@ -599,16 +431,14 @@ def vectorized_voting_for_all_thresholds(
     point_indices: List[List],
     point_coverage: np.ndarray,
     thresholds: np.ndarray,
-    is_patch_scores: bool = False
 ) -> np.ndarray:
     """Compute majority-voted point-level binary scores for all thresholds.
 
     Args:
-        scores: Window or patch scores. Shape (n_windows,) or (n_windows, n_patches).
+        scores: Patch scores. Shape (n_windows, n_patches).
         point_indices: From precompute_point_score_indices
         point_coverage: From precompute_point_score_indices
         thresholds: (n_thresholds,) threshold values
-        is_patch_scores: Whether scores are patch-level
 
     Returns:
         (n_thresholds, total_length) binary voted point scores
@@ -617,34 +447,22 @@ def vectorized_voting_for_all_thresholds(
     total_length = len(point_indices)
     result = np.zeros((n_thresholds, total_length), dtype=np.float64)
 
-    if is_patch_scores:
-        # scores shape: (n_windows, n_patches)
-        flat_scores = scores.ravel()  # (n_windows * n_patches,)
-        n_patches = scores.shape[1]
+    # scores shape: (n_windows, n_patches)
+    flat_scores = scores.ravel()  # (n_windows * n_patches,)
+    n_patches = scores.shape[1]
 
-        for t in range(total_length):
-            indices = point_indices[t]
-            if len(indices) == 0:
-                continue
-            # Gather scores for this timestep
-            score_indices = np.array([w * n_patches + p for w, p in indices])
-            t_scores = flat_scores[score_indices]  # (n_covering,)
-            # For each threshold: count votes
-            # (n_thresholds, n_covering)
-            votes = t_scores[np.newaxis, :] > thresholds[:, np.newaxis]
-            vote_count = votes.sum(axis=1)  # (n_thresholds,)
-            result[:, t] = (vote_count > len(indices) / 2).astype(np.float64)
-    else:
-        # scores shape: (n_windows,)
-        for t in range(total_length):
-            indices = point_indices[t]
-            if len(indices) == 0:
-                continue
-            w_indices = np.array([idx[0] for idx in indices])
-            t_scores = scores[w_indices]
-            votes = t_scores[np.newaxis, :] > thresholds[:, np.newaxis]
-            vote_count = votes.sum(axis=1)
-            result[:, t] = (vote_count > len(indices) / 2).astype(np.float64)
+    for t in range(total_length):
+        indices = point_indices[t]
+        if len(indices) == 0:
+            continue
+        # Gather scores for this timestep
+        score_indices = np.array([w * n_patches + p for w, p in indices])
+        t_scores = flat_scores[score_indices]  # (n_covering,)
+        # For each threshold: count votes
+        # (n_thresholds, n_covering)
+        votes = t_scores[np.newaxis, :] > thresholds[:, np.newaxis]
+        vote_count = votes.sum(axis=1)  # (n_thresholds,)
+        result[:, t] = (vote_count > len(indices) / 2).astype(np.float64)
 
     return result
 
@@ -837,7 +655,6 @@ def compute_voting_threshold_pa_k_roc(
     anomaly_regions,
     thresholds: np.ndarray,
     k_percent: int = 20,
-    is_patch_scores: bool = False,
     eval_type_mask: np.ndarray = None,
     anomaly_type: int = None,
     return_mode=True
@@ -848,7 +665,7 @@ def compute_voting_threshold_pa_k_roc(
         eval_type_mask = np.ones(total_length, dtype=bool)
 
     point_scores_all = vectorized_voting_for_all_thresholds(
-        scores, point_indices, point_coverage, thresholds, is_patch_scores
+        scores, point_indices, point_coverage, thresholds
     )
     return _compute_single_pa_k_roc((
         point_scores_all, point_labels, anomaly_regions,
@@ -864,7 +681,6 @@ def batch_compute_voting_threshold_pa_k_roc(
     anomaly_regions,
     n_thresholds: int = 100,
     k_percent: int = 20,
-    is_patch_scores: bool = False
 ) -> dict:
     """Batch compute PA%K ROC for multiple scoring methods."""
     results = {}
@@ -876,7 +692,7 @@ def batch_compute_voting_threshold_pa_k_roc(
         thresholds = np.linspace(min_s - 0.01, max_s + 0.01, n_thresholds)
         result = compute_voting_threshold_pa_k_roc(
             scores, point_indices, point_coverage, point_labels,
-            anomaly_regions, thresholds, k_percent, is_patch_scores,
+            anomaly_regions, thresholds, k_percent,
             eval_type_mask, None, True
         )
         results[name] = result
@@ -925,87 +741,74 @@ class Evaluator:
         """Clear cached scores (call when model or data changes)"""
         self._cache = {}
 
-    def _get_cached_scores(self, inference_mode: str):
-        """Get cached raw scores for the given inference mode, computing if needed
+    def _get_cached_scores(self):
+        """Get cached raw scores, computing if needed
 
         Returns:
-            For last_patch: dict with 'recon', 'disc', 'labels', 'sample_types', 'anomaly_types'
-                           All are window-level (n_windows,)
-            For all_patches: dict with 'patch_recon', 'patch_disc', 'window_recon', 'window_disc',
-                            'labels', 'sample_types', 'anomaly_types', 'patch_labels',
-                            'patch_sample_types', 'patch_anomaly_types'
-                           Patch arrays are (n_windows, num_patches), window arrays are (n_windows,)
+            dict with 'patch_recon', 'patch_disc', 'window_recon', 'window_disc',
+                 'labels', 'sample_types', 'anomaly_types', 'patch_labels',
+                 'patch_sample_types', 'patch_anomaly_types'
+                Patch arrays are (n_windows, num_patches), window arrays are (n_windows,)
         """
-        cache_key = f'raw_scores_{inference_mode}'
+        cache_key = 'raw_scores'
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        if inference_mode == 'all_patches':
-            # Compute patch-level scores once
-            recon_patches, disc_patches, student_recon_patches, labels, sample_types, anomaly_types = self._compute_patch_scores_all_patches()
+        # Compute patch-level scores once
+        recon_patches, disc_patches, student_recon_patches, labels, sample_types, anomaly_types = self._compute_patch_scores_all_patches()
 
-            # Derive window-level scores by averaging
-            window_recon = recon_patches.mean(axis=1)
-            window_disc = disc_patches.mean(axis=1)
-            window_student_recon = student_recon_patches.mean(axis=1)
+        # Derive window-level scores by averaging
+        window_recon = recon_patches.mean(axis=1)
+        window_disc = disc_patches.mean(axis=1)
+        window_student_recon = student_recon_patches.mean(axis=1)
 
-            # Compute patch labels if possible
-            patch_labels = None
-            if self.can_compute_point_level_pa_k:
-                patch_labels = self._compute_patch_labels()
+        # Compute patch labels if possible
+        patch_labels = None
+        if self.can_compute_point_level_pa_k:
+            patch_labels = self._compute_patch_labels()
 
-            # Compute patch-level sample_types based on patch labels (generalized approach)
-            # sample_type: 2=anomaly (patch has anomaly), 1=disturbing (normal patch in anomaly window), 0=pure_normal
-            n_windows, num_patches = recon_patches.shape
-            patch_sample_types = np.zeros((n_windows, num_patches), dtype=np.int64)
+        # Compute patch-level sample_types based on patch labels (generalized approach)
+        # sample_type: 2=anomaly (patch has anomaly), 1=disturbing (normal patch in anomaly window), 0=pure_normal
+        n_windows, num_patches = recon_patches.shape
+        patch_sample_types = np.zeros((n_windows, num_patches), dtype=np.int64)
 
-            if patch_labels is not None:
-                # Determine which windows contain any anomaly
-                window_has_anomaly = (patch_labels.sum(axis=1) > 0)  # (n_windows,)
+        if patch_labels is not None:
+            # Determine which windows contain any anomaly
+            window_has_anomaly = (patch_labels.sum(axis=1) > 0)  # (n_windows,)
 
-                # Patches with anomaly → type 2
-                patch_sample_types[patch_labels == 1] = 2
+            # Patches with anomaly → type 2
+            patch_sample_types[patch_labels == 1] = 2
 
-                # Normal patches in anomaly-containing windows → type 1 (disturbing)
-                for w_idx in range(n_windows):
-                    if window_has_anomaly[w_idx]:
-                        for p_idx in range(num_patches):
-                            if patch_labels[w_idx, p_idx] == 0:
-                                patch_sample_types[w_idx, p_idx] = 1
-                # Normal patches in normal windows stay 0 (pure_normal)
-
-            # Compute patch-level anomaly_types (inherit from window if patch has anomaly, else 0)
-            patch_anomaly_types = np.zeros((n_windows, num_patches), dtype=np.int64)
-            if patch_labels is not None:
-                for w_idx in range(n_windows):
+            # Normal patches in anomaly-containing windows → type 1 (disturbing)
+            for w_idx in range(n_windows):
+                if window_has_anomaly[w_idx]:
                     for p_idx in range(num_patches):
-                        if patch_labels[w_idx, p_idx] == 1:
-                            patch_anomaly_types[w_idx, p_idx] = anomaly_types[w_idx]
+                        if patch_labels[w_idx, p_idx] == 0:
+                            patch_sample_types[w_idx, p_idx] = 1
+            # Normal patches in normal windows stay 0 (pure_normal)
 
-            result = {
-                'patch_recon': recon_patches,
-                'patch_disc': disc_patches,
-                'patch_student_recon': student_recon_patches,
-                'window_recon': window_recon,
-                'window_disc': window_disc,
-                'window_student_recon': window_student_recon,
-                'labels': labels,
-                'sample_types': sample_types,  # window-level (for backward compatibility)
-                'anomaly_types': anomaly_types,  # window-level
-                'patch_labels': patch_labels,
-                'patch_sample_types': patch_sample_types,  # (n_windows, num_patches)
-                'patch_anomaly_types': patch_anomaly_types,  # (n_windows, num_patches)
-            }
-        else:  # last_patch
-            recon, disc, student_recon, labels, sample_types, anomaly_types = self._compute_raw_scores_last_patch()
-            result = {
-                'recon': recon,
-                'disc': disc,
-                'student_recon': student_recon,
-                'labels': labels,
-                'sample_types': sample_types,
-                'anomaly_types': anomaly_types,
-            }
+        # Compute patch-level anomaly_types (inherit from window if patch has anomaly, else 0)
+        patch_anomaly_types = np.zeros((n_windows, num_patches), dtype=np.int64)
+        if patch_labels is not None:
+            for w_idx in range(n_windows):
+                for p_idx in range(num_patches):
+                    if patch_labels[w_idx, p_idx] == 1:
+                        patch_anomaly_types[w_idx, p_idx] = anomaly_types[w_idx]
+
+        result = {
+            'patch_recon': recon_patches,
+            'patch_disc': disc_patches,
+            'patch_student_recon': student_recon_patches,
+            'window_recon': window_recon,
+            'window_disc': window_disc,
+            'window_student_recon': window_student_recon,
+            'labels': labels,
+            'sample_types': sample_types,  # window-level
+            'anomaly_types': anomaly_types,  # window-level
+            'patch_labels': patch_labels,
+            'patch_sample_types': patch_sample_types,  # (n_windows, num_patches)
+            'patch_anomaly_types': patch_anomaly_types,  # (n_windows, num_patches)
+        }
 
         self._cache[cache_key] = result
         return result
@@ -1035,64 +838,6 @@ class Evaluator:
             return recon * (1 + disc / disc_median)
         else:  # default
             return recon + self.config.lambda_disc * disc
-
-    def _compute_raw_scores_last_patch(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Compute raw recon/disc/student_recon scores using last-patch masking (original method)
-
-        Returns:
-            recon_all, disc_all, student_recon_all, labels, sample_types, anomaly_types
-        """
-        all_recon = []
-        all_disc = []
-        all_student_recon = []
-        all_labels = []
-        all_sample_types = []
-        all_anomaly_types = []
-
-        with torch.no_grad(), autocast('cuda', enabled=self.use_amp):
-            for batch in self.test_loader:
-                if len(batch) == 5:
-                    sequences, last_patch_labels, point_labels, sample_types, anomaly_types = batch
-                elif len(batch) == 4:
-                    sequences, last_patch_labels, point_labels, sample_types = batch
-                    anomaly_types = torch.zeros_like(last_patch_labels)
-                else:
-                    sequences, last_patch_labels, point_labels = batch
-                    sample_types = torch.zeros_like(last_patch_labels)
-                    anomaly_types = torch.zeros_like(last_patch_labels)
-
-                sequences = sequences.to(self.config.device)
-                batch_size, seq_length, num_features = sequences.shape
-
-                mask = torch.ones(batch_size, seq_length, device=self.config.device)
-                mask[:, -self.config.mask_last_n:] = 0
-
-                teacher_output, student_output, _ = self.model(sequences, masking_ratio=0.0, mask=mask)
-
-                recon_error = ((teacher_output - sequences) ** 2).mean(dim=2)
-                student_recon_error = ((student_output - sequences) ** 2).mean(dim=2)
-                discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)
-
-                masked_positions = (mask == 0)
-                recon_scores = (recon_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-4)
-                student_recon_scores = (student_recon_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-4)
-                disc_scores = (discrepancy * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-4)
-
-                all_recon.append(recon_scores.cpu().numpy())
-                all_disc.append(disc_scores.cpu().numpy())
-                all_student_recon.append(student_recon_scores.cpu().numpy())
-                all_labels.append(last_patch_labels.cpu().numpy())
-                all_sample_types.append(sample_types.cpu().numpy())
-                all_anomaly_types.append(anomaly_types.cpu().numpy())
-
-        return (
-            np.concatenate(all_recon),
-            np.concatenate(all_disc),
-            np.concatenate(all_student_recon),
-            np.concatenate(all_labels),
-            np.concatenate(all_sample_types),
-            np.concatenate(all_anomaly_types)
-        )
 
     def _compute_patch_labels(self) -> np.ndarray:
         """Compute patch-level labels from point-level labels
@@ -1137,7 +882,7 @@ class Evaluator:
             recon_patch_scores: (n_windows, num_patches) per-patch reconstruction scores
             disc_patch_scores: (n_windows, num_patches) per-patch discrepancy scores
             student_recon_patch_scores: (n_windows, num_patches) per-patch student reconstruction scores
-            labels: (n_windows,) last_patch labels
+            labels: (n_windows,) window labels
             sample_types: (n_windows,) sample type indicators
             anomaly_types: (n_windows,) anomaly type indicators
         """
@@ -1154,14 +899,14 @@ class Evaluator:
         with torch.no_grad(), autocast('cuda', enabled=self.use_amp):
             for batch in self.test_loader:
                 if len(batch) == 5:
-                    sequences, last_patch_labels, point_labels, sample_types, anomaly_types = batch
+                    sequences, window_labels, point_labels, sample_types, anomaly_types = batch
                 elif len(batch) == 4:
-                    sequences, last_patch_labels, point_labels, sample_types = batch
-                    anomaly_types = torch.zeros_like(last_patch_labels)
+                    sequences, window_labels, point_labels, sample_types = batch
+                    anomaly_types = torch.zeros_like(window_labels)
                 else:
-                    sequences, last_patch_labels, point_labels = batch
-                    sample_types = torch.zeros_like(last_patch_labels)
-                    anomaly_types = torch.zeros_like(last_patch_labels)
+                    sequences, window_labels, point_labels = batch
+                    sample_types = torch.zeros_like(window_labels)
+                    anomaly_types = torch.zeros_like(window_labels)
 
                 sequences = sequences.to(self.config.device)
                 batch_size, seq_length, num_features = sequences.shape
@@ -1214,7 +959,7 @@ class Evaluator:
                 all_recon_patches.append(batch_recon_patches.cpu().numpy())
                 all_disc_patches.append(batch_disc_patches.cpu().numpy())
                 all_student_recon_patches.append(batch_student_recon_patches.cpu().numpy())
-                all_labels.append(last_patch_labels.cpu().numpy())
+                all_labels.append(window_labels.cpu().numpy())
                 all_sample_types.append(sample_types.cpu().numpy())
                 all_anomaly_types.append(anomaly_types.cpu().numpy())
 
@@ -1227,29 +972,10 @@ class Evaluator:
             np.concatenate(all_anomaly_types)
         )
 
-    def _compute_raw_scores_all_patches(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Compute window-level scores from all patches (for backward compatibility)
-
-        Returns window-level scores by averaging all patch scores.
-        For point-level PA%K, use _compute_patch_scores_all_patches() instead.
-
-        Returns:
-            recon_all, disc_all, labels, sample_types, anomaly_types
-        """
-        recon_patches, disc_patches, student_recon_patches, labels, sample_types, anomaly_types = self._compute_patch_scores_all_patches()
-
-        # Aggregate patch scores to window-level
-        recon_all = recon_patches.mean(axis=1)  # (n_windows,)
-        disc_all = disc_patches.mean(axis=1)
-
-        return recon_all, disc_all, labels, sample_types, anomaly_types
-
     def compute_anomaly_scores(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Compute anomaly scores for all samples in test_loader
 
-        Supports different inference modes via config.inference_mode:
-        - 'last_patch': Mask only last patch (faster, original method)
-        - 'all_patches': Mask each patch one at a time, N forward passes (more robust)
+        Masks each patch one at a time (all_patches mode), N forward passes per window.
 
         Supports different scoring modes via config.anomaly_score_mode:
         - 'default': recon + lambda_disc * disc
@@ -1265,24 +991,16 @@ class Evaluator:
             sample_types: (n_samples,) sample type indicators
             anomaly_types: (n_samples,) anomaly type indicators
         """
-        inference_mode = getattr(self.config, 'inference_mode', 'last_patch')
         score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
 
         # Get cached raw scores
-        cached = self._get_cached_scores(inference_mode)
+        cached = self._get_cached_scores()
 
-        if inference_mode == 'all_patches':
-            recon_all = cached['window_recon']
-            disc_all = cached['window_disc']
-            labels = cached['labels']
-            sample_types = cached['sample_types']
-            anomaly_types = cached['anomaly_types']
-        else:
-            recon_all = cached['recon']
-            disc_all = cached['disc']
-            labels = cached['labels']
-            sample_types = cached['sample_types']
-            anomaly_types = cached['anomaly_types']
+        recon_all = cached['window_recon']
+        disc_all = cached['window_disc']
+        labels = cached['labels']
+        sample_types = cached['sample_types']
+        anomaly_types = cached['anomaly_types']
 
         # Apply scoring formula
         scores = self._apply_scoring_formula(recon_all, disc_all, score_mode)
@@ -1292,11 +1010,9 @@ class Evaluator:
     def compute_detailed_losses(self) -> Dict[str, np.ndarray]:
         """Compute detailed losses for all samples in test_loader
 
-        Respects config.inference_mode:
-        - 'last_patch': Returns window-level data (n_windows,)
-        - 'all_patches': Returns patch-level data (n_windows × num_patches,) flattened
+        Returns patch-level data (n_windows x num_patches,) flattened.
 
-        For 'all_patches' mode, sample_types are computed per-patch:
+        Sample_types are computed per-patch:
         - 0 = pure_normal: normal patch in normal window
         - 1 = disturbing: normal patch in anomaly-containing window
         - 2 = anomaly: patch containing anomaly
@@ -1307,25 +1023,17 @@ class Evaluator:
                 discrepancy_loss: (n_samples,) discrepancy loss per sample
                 total_loss: (n_samples,) total loss per sample
                 labels: (n_samples,) true labels
-                sample_types: (n_samples,) sample type indicators (patch-level for all_patches)
+                sample_types: (n_samples,) sample type indicators (patch-level)
                 anomaly_types: (n_samples,) anomaly type indicators
         """
-        inference_mode = getattr(self.config, 'inference_mode', 'last_patch')
-        cached = self._get_cached_scores(inference_mode)
+        cached = self._get_cached_scores()
 
-        if inference_mode == 'all_patches':
-            # Flatten patch-level data to 1D
-            recon_loss = cached['patch_recon'].flatten()
-            disc_loss = cached['patch_disc'].flatten()
-            labels = cached['patch_labels'].flatten() if cached['patch_labels'] is not None else np.zeros_like(recon_loss)
-            sample_types = cached['patch_sample_types'].flatten()
-            anomaly_types = cached['patch_anomaly_types'].flatten()
-        else:  # last_patch
-            recon_loss = cached['recon']
-            disc_loss = cached['disc']
-            labels = cached['labels']
-            sample_types = cached['sample_types']
-            anomaly_types = cached['anomaly_types']
+        # Flatten patch-level data to 1D
+        recon_loss = cached['patch_recon'].flatten()
+        disc_loss = cached['patch_disc'].flatten()
+        labels = cached['patch_labels'].flatten() if cached['patch_labels'] is not None else np.zeros_like(recon_loss)
+        sample_types = cached['patch_sample_types'].flatten()
+        anomaly_types = cached['patch_anomaly_types'].flatten()
 
         return {
             'reconstruction_loss': recon_loss,
@@ -1345,9 +1053,8 @@ class Evaluator:
         Uses caching to avoid redundant computation when called multiple times.
         """
         # Check cache first
-        inference_mode = getattr(self.config, 'inference_mode', 'last_patch')
         score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
-        cache_key = f'anomaly_type_metrics_{inference_mode}_{score_mode}'
+        cache_key = f'anomaly_type_metrics_{score_mode}'
 
         if cache_key in self._cache:
             return self._cache[cache_key]
@@ -1369,26 +1076,21 @@ class Evaluator:
         )
         voting_data = None
         if has_voting_pa_k:
-            is_patch = (inference_mode == 'all_patches')
             ws_indices = np.array(self.test_dataset.window_start_indices)
             pt_labels = np.array(self.test_dataset.point_labels)
             total_len = len(pt_labels)
-            cached = self._get_cached_scores(inference_mode)
+            cached = self._get_cached_scores()
 
-            if is_patch:
-                patch_recon = cached['patch_recon']
-                patch_disc = cached['patch_disc']
-                voting_scores = self._apply_scoring_formula(patch_recon, patch_disc, score_mode)
-            else:
-                voting_scores = scores  # window-level
+            patch_recon = cached['patch_recon']
+            patch_disc = cached['patch_disc']
+            voting_scores = self._apply_scoring_formula(patch_recon, patch_disc, score_mode)
 
             pt_indices, pt_coverage = precompute_point_score_indices(
                 window_start_indices=ws_indices,
                 seq_length=self.config.seq_length,
                 patch_size=self.config.patch_size,
                 total_length=total_len,
-                num_patches=self.config.num_patches if is_patch else None,
-                is_patch_scores=is_patch
+                num_patches=self.config.num_patches,
             )
 
             flat = voting_scores.ravel()
@@ -1400,7 +1102,6 @@ class Evaluator:
                 point_indices=pt_indices,
                 point_coverage=pt_coverage,
                 thresholds=vote_thresholds,
-                is_patch_scores=is_patch
             )
 
             # Compute OVERALL optimal threshold index for each K (for detection rate)
@@ -1505,10 +1206,9 @@ class Evaluator:
     def evaluate(self) -> Dict[str, float]:
         """Evaluate and return metrics including disturbing normal performance
 
-        Sample-level metrics (roc_auc, f1_score, precision, recall):
-        - last_patch mode: computed at window level (n_windows samples)
-        - all_patches mode: computed at patch level (n_windows × num_patches samples)
-          Each patch gets its own label (1 if patch contains anomaly, 0 otherwise)
+        Sample-level metrics (roc_auc, f1_score, precision, recall) are computed at
+        patch level (n_windows x num_patches samples). Each patch gets its own label
+        (1 if patch contains anomaly, 0 otherwise).
 
         PA%K metrics are computed at point-level if test_dataset is provided,
         otherwise falls back to sample-level computation.
@@ -1516,43 +1216,31 @@ class Evaluator:
         Uses caching to avoid redundant forward passes when called multiple times
         with different scoring modes.
         """
-        inference_mode = getattr(self.config, 'inference_mode', 'last_patch')
         score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
 
-        # Get cached raw scores (computes only once per inference_mode)
-        cached = self._get_cached_scores(inference_mode)
+        # Get cached raw scores
+        cached = self._get_cached_scores()
 
         results = {}
 
-        if inference_mode == 'all_patches' and self.can_compute_point_level_pa_k:
-            # All patches mode: use patch-level scores and labels from cache
-            recon_patches = cached['patch_recon']
-            disc_patches = cached['patch_disc']
-            patch_labels = cached['patch_labels']
-            labels = cached['labels']
-            sample_types = cached['sample_types']
+        # Use patch-level scores and labels from cache
+        recon_patches = cached['patch_recon']
+        disc_patches = cached['patch_disc']
+        patch_labels = cached['patch_labels']
+        labels = cached['labels']
+        sample_types = cached['sample_types']
 
-            # Compute patch-level anomaly scores using cached helper
-            patch_scores = self._apply_scoring_formula(recon_patches, disc_patches, score_mode)
+        # Compute patch-level anomaly scores using cached helper
+        patch_scores = self._apply_scoring_formula(recon_patches, disc_patches, score_mode)
 
-            # Flatten for sample-level metrics: (n_windows × num_patches,)
-            sample_scores = patch_scores.flatten()
-            sample_labels = patch_labels.flatten()
+        # Flatten for sample-level metrics: (n_windows × num_patches,)
+        sample_scores = patch_scores.flatten()
+        sample_labels = patch_labels.flatten()
 
-            # Window-level scores for disturbing normal analysis
-            window_scores = self._apply_scoring_formula(
-                cached['window_recon'], cached['window_disc'], score_mode
-            )
-        else:
-            # Last patch mode: use window-level scores and labels from cache
-            recon = cached['recon']
-            disc = cached['disc']
-            labels = cached['labels']
-            sample_types = cached['sample_types']
-
-            sample_scores = self._apply_scoring_formula(recon, disc, score_mode)
-            sample_labels = labels
-            window_scores = sample_scores  # Same as sample_scores for last_patch
+        # Window-level scores for disturbing normal analysis
+        window_scores = self._apply_scoring_formula(
+            cached['window_recon'], cached['window_disc'], score_mode
+        )
 
         # Overall performance (sample-level)
         if len(np.unique(sample_labels)) > 1:
@@ -1580,15 +1268,11 @@ class Evaluator:
             pa_k_values = [10, 20, 50, 80]
 
             if self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions'):
-                is_patch = (inference_mode == 'all_patches')
                 ws_indices = np.array(self.test_dataset.window_start_indices)
                 pt_labels = np.array(self.test_dataset.point_labels)
                 total_len = len(pt_labels)
 
-                if is_patch:
-                    voting_scores = patch_scores  # (n_windows, num_patches)
-                else:
-                    voting_scores = window_scores  # (n_windows,)
+                voting_scores = patch_scores  # (n_windows, num_patches)
 
                 # Precompute point indices (shared across all K values)
                 pt_indices, pt_coverage = precompute_point_score_indices(
@@ -1596,8 +1280,7 @@ class Evaluator:
                     seq_length=self.config.seq_length,
                     patch_size=self.config.patch_size,
                     total_length=total_len,
-                    num_patches=self.config.num_patches if is_patch else None,
-                    is_patch_scores=is_patch
+                    num_patches=self.config.num_patches,
                 )
 
                 # Generate thresholds from score distribution
@@ -1611,7 +1294,6 @@ class Evaluator:
                     point_indices=pt_indices,
                     point_coverage=pt_coverage,
                     thresholds=thresholds_arr,
-                    is_patch_scores=is_patch
                 )
 
                 eval_mask = np.ones(total_len, dtype=bool)
@@ -1691,42 +1373,24 @@ class Evaluator:
             Dict with roc_auc, f1_score, precision, recall, optimal_threshold,
             and pa_K_roc_auc, pa_K_f1 for K in [10, 20, 50, 80]
         """
-        inference_mode = getattr(self.config, 'inference_mode', 'last_patch')
-        cached = self._get_cached_scores(inference_mode)
+        cached = self._get_cached_scores()
 
-        if inference_mode == 'all_patches' and self.can_compute_point_level_pa_k:
-            patch_labels = cached['patch_labels']
-            labels = cached['labels']
+        patch_labels = cached['patch_labels']
+        labels = cached['labels']
 
-            # Select the appropriate patch-level scores
-            if score_type == 'disc':
-                patch_scores = cached['patch_disc']
-            elif score_type == 'teacher_recon':
-                patch_scores = cached['patch_recon']
-            elif score_type == 'student_recon':
-                patch_scores = cached['patch_student_recon']
-            else:
-                raise ValueError(f"Unknown score_type: {score_type}")
-
-            sample_scores = patch_scores.flatten()
-            sample_labels = patch_labels.flatten()
-            voting_scores = patch_scores  # (n_windows, num_patches)
-            is_patch = True
+        # Select the appropriate patch-level scores
+        if score_type == 'disc':
+            patch_scores = cached['patch_disc']
+        elif score_type == 'teacher_recon':
+            patch_scores = cached['patch_recon']
+        elif score_type == 'student_recon':
+            patch_scores = cached['patch_student_recon']
         else:
-            labels = cached['labels']
+            raise ValueError(f"Unknown score_type: {score_type}")
 
-            if score_type == 'disc':
-                sample_scores = cached['disc']
-            elif score_type == 'teacher_recon':
-                sample_scores = cached['recon']
-            elif score_type == 'student_recon':
-                sample_scores = cached['student_recon']
-            else:
-                raise ValueError(f"Unknown score_type: {score_type}")
-
-            sample_labels = labels
-            voting_scores = sample_scores  # (n_windows,)
-            is_patch = False
+        sample_scores = patch_scores.flatten()
+        sample_labels = patch_labels.flatten()
+        voting_scores = patch_scores  # (n_windows, num_patches)
 
         results = {}
 
@@ -1758,8 +1422,7 @@ class Evaluator:
                     seq_length=self.config.seq_length,
                     patch_size=self.config.patch_size,
                     total_length=total_len,
-                    num_patches=self.config.num_patches if is_patch else None,
-                    is_patch_scores=is_patch
+                    num_patches=self.config.num_patches,
                 )
 
                 flat = voting_scores.ravel()
@@ -1771,7 +1434,6 @@ class Evaluator:
                     point_indices=pt_indices,
                     point_coverage=pt_coverage,
                     thresholds=thresholds_arr,
-                    is_patch_scores=is_patch
                 )
 
                 eval_mask = np.ones(total_len, dtype=bool)

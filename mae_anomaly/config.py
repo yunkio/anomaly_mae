@@ -97,12 +97,6 @@ class Config:
     # - True: Use float16 for forward pass, float32 for loss/gradients (faster on Tensor Core GPUs)
     # - False: Use float32 everywhere (more stable, required for older GPUs)
 
-    # Inference parameters
-    mask_last_n: int = 10  # Last 1 patch (= patch_size)
-    inference_mode: str = 'last_patch'  # 'last_patch' or 'all_patches'
-    # - 'last_patch': Mask only last patch (faster, current behavior)
-    # - 'all_patches': Mask each patch one at a time, N forward passes (more robust)
-
     # Point-level PA%K aggregation method
     point_aggregation_method: str = 'voting'  # 'mean', 'median', 'max', 'voting'
     # - 'mean': Average of window scores for each timestep

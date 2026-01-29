@@ -193,13 +193,13 @@ class TrainingProgressVisualizer:
         collected = 0
         with torch.no_grad():
             for batch in test_loader:
-                sequences, last_patch_labels, pt_labels, st, _ = batch
+                sequences, window_labels, pt_labels, st, _ = batch
                 sequences = sequences.to(device)
                 batch_size, seq_length, num_features = sequences.shape
 
-                # Create mask for last n positions
+                # Create mask for last patch
                 mask = torch.ones(batch_size, seq_length, device=device)
-                mask[:, -self.config.mask_last_n:] = 0
+                mask[:, -self.config.patch_size:] = 0
 
                 teacher_output, student_output, _ = model(sequences, masking_ratio=0.0, mask=mask)
 
@@ -209,7 +209,7 @@ class TrainingProgressVisualizer:
                     originals.append(sequences[i].cpu().numpy())
                     teacher_recons.append(teacher_output[i].cpu().numpy())
                     student_recons.append(student_output[i].cpu().numpy())
-                    labels.append(last_patch_labels[i].item())
+                    labels.append(window_labels[i].item())
                     sample_types.append(st[i].item())
                     point_labels.append(pt_labels[i].numpy())
                     collected += 1
@@ -746,11 +746,11 @@ Performance Improvement:
                     ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.15, color=VIS_COLORS['anomaly_region'])
 
                 # Highlight last patch (masked region)
-                ax.axvspan(len(original) - self.config.mask_last_n, len(original),
+                ax.axvspan(len(original) - self.config.patch_size, len(original),
                           alpha=0.15, color=VIS_COLORS['masked_region'])
 
                 # Compute metrics in masked region
-                masked_region = slice(-self.config.mask_last_n, None)
+                masked_region = slice(-self.config.patch_size, None)
                 teacher_mse = np.mean((original[masked_region] - teacher_recon[masked_region])**2)
                 student_mse = np.mean((original[masked_region] - student_recon[masked_region])**2)
 
@@ -771,7 +771,7 @@ Performance Improvement:
                 # Highlight regions
                 if len(anomaly_region) > 0:
                     ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.15, color=VIS_COLORS['anomaly_region'])
-                ax.axvspan(len(original) - self.config.mask_last_n, len(original),
+                ax.axvspan(len(original) - self.config.patch_size, len(original),
                           alpha=0.15, color=VIS_COLORS['masked_region'])
 
                 # Compute discrepancy in masked region
@@ -929,7 +929,7 @@ Performance Improvement:
 
                 if len(anomaly_region) > 0:
                     ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
+                ax.axvspan(len(original) - self.config.patch_size, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
 
                 pred_color = VIS_COLORS['true_positive'] if epoch_pred == 'Detected' else VIS_COLORS['false_negative']
                 ax.set_title(f'Epoch {epoch}: {epoch_pred}\nScore: {epoch_score:.4f} (Thresh: {epoch_thresh:.4f})',
@@ -947,9 +947,9 @@ Performance Improvement:
 
                 if len(anomaly_region) > 0:
                     ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
+                ax.axvspan(len(original) - self.config.patch_size, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
 
-                masked_disc = np.mean(discrepancy[-self.config.mask_last_n:])
+                masked_disc = np.mean(discrepancy[-self.config.patch_size:])
                 ax.set_title(f'Discrepancy (Masked Mean: {masked_disc:.4f})', fontsize=9)
                 if col == 0:
                     ax.set_ylabel(f'Late Bloomer #{sample_num+1}\n|T-S|', fontsize=9)
@@ -964,7 +964,7 @@ Performance Improvement:
 
                 if len(anomaly_region) > 0:
                     ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                ax.axvspan(len(original) - self.config.mask_last_n, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
+                ax.axvspan(len(original) - self.config.patch_size, len(original), alpha=0.2, color=VIS_COLORS['masked_region'])
 
                 if col == 0:
                     ax.set_ylabel(f'Late Bloomer #{sample_num+1}\nRecon Error', fontsize=9)

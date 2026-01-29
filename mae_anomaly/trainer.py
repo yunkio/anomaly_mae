@@ -111,11 +111,11 @@ class Trainer:
         for batch in iterator:
             # Support 3-tuple, 4-tuple, and 5-tuple returns from dataset
             if len(batch) == 5:
-                sequences, last_patch_labels, point_labels, sample_types, anomaly_types = batch
+                sequences, window_labels, point_labels, sample_types, anomaly_types = batch
             elif len(batch) == 4:
-                sequences, last_patch_labels, point_labels, sample_types = batch
+                sequences, window_labels, point_labels, sample_types = batch
             else:
-                sequences, last_patch_labels, point_labels = batch
+                sequences, window_labels, point_labels = batch
 
             sequences = sequences.to(self.config.device)
             point_labels = point_labels.to(self.config.device)
@@ -181,21 +181,21 @@ class Trainer:
         with torch.no_grad(), autocast('cuda', enabled=self.use_amp):
             for batch in self.test_loader:
                 if len(batch) == 5:
-                    sequences, last_patch_labels, point_labels, sample_types, anomaly_types = batch
+                    sequences, window_labels, point_labels, sample_types, anomaly_types = batch
                 elif len(batch) == 4:
-                    sequences, last_patch_labels, point_labels, sample_types = batch
-                    anomaly_types = torch.zeros_like(last_patch_labels)
+                    sequences, window_labels, point_labels, sample_types = batch
+                    anomaly_types = torch.zeros_like(window_labels)
                 else:
-                    sequences, last_patch_labels, point_labels = batch
-                    sample_types = torch.zeros_like(last_patch_labels)
-                    anomaly_types = torch.zeros_like(last_patch_labels)
+                    sequences, window_labels, point_labels = batch
+                    sample_types = torch.zeros_like(window_labels)
+                    anomaly_types = torch.zeros_like(window_labels)
 
                 sequences = sequences.to(self.config.device)
                 batch_size, seq_length, num_features = sequences.shape
 
-                # Create mask for last n positions (evaluation mode)
+                # Create mask for last patch (quick evaluation during training)
                 mask = torch.ones(batch_size, seq_length, device=self.config.device)
-                mask[:, -self.config.mask_last_n:] = 0
+                mask[:, -self.config.patch_size:] = 0
 
                 teacher_output, student_output, _ = self.model(sequences, masking_ratio=0.0, mask=mask)
 

@@ -48,7 +48,7 @@ This document describes the ablation studies used to validate the Self-Distilled
 
 **Evaluation**:
 - Metric: Teacher-Student Discrepancy
-- Mask last patch and compute difference between teacher and student outputs
+- Mask each patch iteratively and compute difference between teacher and student outputs
 
 **Purpose**:
 Full model with all components. This is the proposed architecture.
@@ -202,7 +202,7 @@ Test whether independent mask representations help differentiate teacher/student
 
 | Configuration | Num Patches | Patch Size | Purpose |
 |--------------|-------------|------------|---------|
-| **10 patches (Default)** | 10 | 10 | Balanced granularity (seq_length=100), matches mask_last_n |
+| **10 patches (Default)** | 10 | 10 | Balanced granularity (seq_length=100) |
 | **25 patches** | 25 | 4 | Fine granularity, precise localization |
 | **50 patches** | 50 | 2 | Very fine granularity |
 
@@ -213,22 +213,10 @@ Test whether independent mask representations help differentiate teacher/student
 **All ablations use the same evaluation protocol**:
 
 1. **Data**: Same test dataset with 25% anomaly ratio
-2. **Masking**: Depends on `inference_mode` (see below)
+2. **Masking**: All patches are masked iteratively (N forward passes per window) for comprehensive evaluation
 3. **Anomaly Score**: Compute error metric on masked positions
-4. **Label**: Binary label (window-level or patch-level depending on mode)
+4. **Label**: Binary label (patch-level)
 5. **Metrics**: ROC-AUC, Precision, Recall, F1-Score, PA%K
-
-### Inference Modes
-
-| Mode | Masking | Sample Unit | Use Case |
-|------|---------|-------------|----------|
-| `last_patch` | Last patch only | Window | Fast, streaming detection |
-| `all_patches` | Each patch (N passes) | Patch | Thorough evaluation |
-
-- **last_patch**: 1 forward pass per window, window-level labels
-- **all_patches**: N forward passes per window, patch-level labels (10× more samples)
-
-See [INFERENCE_MODES.md](INFERENCE_MODES.md) for detailed flow diagrams.
 
 **Key Point**: Only the training configuration differs. Evaluation is consistent across all ablations for fair comparison.
 
@@ -298,11 +286,10 @@ EXPERIMENTS = [
     # ... 170 total experiments
 ]
 
-# Each experiment is evaluated across 12 variants:
+# Each experiment is evaluated across 6 variants:
 # - 2 mask_after_encoder: [True, False]
-# - 2 inference_mode: ['last_patch', 'all_patches']
 # - 3 scoring_mode: ['default', 'adaptive', 'normalized']
-# Total: 170 × 12 = 2040 results
+# Total: 170 × 6 = 1020 results
 ```
 
 Evaluation logic in `mae_anomaly/evaluator.py`:
@@ -329,7 +316,7 @@ The new ablation framework (`scripts/ablation/run_ablation.py`) provides:
 
 **Features**:
 - **Config-based experiments**: Define experiments in Python config files
-- **Automatic variant testing**: Each experiment tested across mask_after, inference_mode, and scoring_mode
+- **Automatic variant testing**: Each experiment tested across mask_after and scoring_mode
 - **Progress tracking**: Resume from interruption with `--start-from`
 - **Visualization generation**: Automatic ROC curves and performance charts
 - **Summary results**: CSV export with all metrics
@@ -345,7 +332,7 @@ The new ablation framework (`scripts/ablation/run_ablation.py`) provides:
 
 **Result Multiplier**:
 ```
-170 experiments × 2 (mask_after) × 2 (inference) × 3 (scoring) = 2040 total results
+170 experiments × 2 (mask_after) × 3 (scoring) = 1020 total results
 ```
 
 See [ABLATION_EXPERIMENTS.md](ABLATION_EXPERIMENTS.md) for detailed experiment descriptions.
@@ -391,9 +378,7 @@ Stage 2 uses a 3-phase diverse selection strategy:
 
 4. **Dataset Size**: 275,000 timesteps total (220K train + 55K test), ~20,000 train windows, ~55,000 test windows (stride=1).
 
-5. **Inference Modes**: Both `last_patch` (fast) and `all_patches` (thorough) evaluated.
-
-6. **Same Random Seed**: All experiments use the same random seed (42) for reproducibility.
+5. **Same Random Seed**: All experiments use the same random seed (42) for reproducibility.
 
 ---
 
