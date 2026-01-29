@@ -214,9 +214,10 @@ Test whether independent mask representations help differentiate teacher/student
 
 1. **Data**: Same test dataset with 25% anomaly ratio
 2. **Masking**: All patches are masked iteratively (N forward passes per window) for comprehensive evaluation
-3. **Anomaly Score**: Compute error metric on masked positions
-4. **Label**: Binary label (patch-level)
-5. **Metrics**: ROC-AUC, Precision, Recall, F1-Score, PA%K
+3. **Anomaly Score**: Compute error metric on masked positions → patch-level scores
+4. **Point-level aggregation**: Patch scores mean-aggregated to physical timestamps
+5. **Labels**: Point-level binary labels from dataset
+6. **Metrics**: ROC-AUC, Precision, Recall, F1-Score (point-level); PA%K (voting with point-level threshold)
 
 **Key Point**: Only the training configuration differs. Evaluation is consistent across all ablations for fair comparison.
 

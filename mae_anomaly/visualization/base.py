@@ -33,6 +33,7 @@ from mae_anomaly import (
     ANOMALY_TYPE_NAMES, FEATURE_NAMES,
 )
 from mae_anomaly.dataset_sliding import ANOMALY_TYPE_CONFIGS
+from mae_anomaly.evaluator import aggregate_patch_scores_to_point_level
 
 
 # =============================================================================
@@ -446,7 +447,7 @@ def collect_predictions(model, dataloader, config) -> Dict:
             all_discrepancies.append(disc_flat)
             all_sample_types.append(sample_types_expanded.numpy())
 
-    # Concatenate all raw scores
+    # Concatenate all raw scores (patch-level, flattened)
     recon_all = np.concatenate(all_recon_errors)
     disc_all = np.concatenate(all_discrepancies)
     student_all = np.concatenate(all_student_errors)
@@ -468,14 +469,78 @@ def collect_predictions(model, dataloader, config) -> Dict:
     else:  # default
         scores_all = recon_all + config.lambda_disc * disc_all
 
-    return {
-        'scores': scores_all,
-        'labels': labels_all,
-        'recon_errors': recon_all,           # Teacher reconstruction error
-        'student_errors': student_all,       # Student reconstruction error
-        'discrepancies': disc_all,           # Teacher-student difference
-        'sample_types': sample_types_all
+    n_windows = len(scores_all) // num_patches
+
+    result = {
+        'patch_scores': scores_all,
+        'patch_labels': labels_all,
+        'recon_errors': recon_all,
+        'student_errors': student_all,
+        'discrepancies': disc_all,
+        'sample_types': sample_types_all,
+        'n_windows': n_windows,
+        'num_patches': num_patches,
+        'patch_size': patch_size,
+        'seq_length': config.seq_length,
     }
+
+    # Point-level aggregation
+    dataset = dataloader.dataset
+    from torch.utils.data import Subset
+    base_dataset = dataset
+    while isinstance(base_dataset, Subset):
+        base_dataset = base_dataset.dataset
+
+    if hasattr(base_dataset, 'window_start_indices') and hasattr(base_dataset, 'point_labels'):
+        ws_indices = np.array(base_dataset.window_start_indices)
+        pt_labels_full = np.array(base_dataset.point_labels)
+        total_len = len(pt_labels_full)
+
+        if isinstance(dataset, Subset):
+            ws_indices = ws_indices[np.array(dataset.indices)]
+
+        patch_scores_2d = scores_all.reshape(n_windows, num_patches)
+        patch_recon_2d = recon_all.reshape(n_windows, num_patches)
+        patch_disc_2d = disc_all.reshape(n_windows, num_patches)
+
+        point_scores, _ = aggregate_patch_scores_to_point_level(
+            patch_scores_2d, ws_indices, config.seq_length,
+            patch_size, num_patches, total_len, method='mean'
+        )
+        point_recon, _ = aggregate_patch_scores_to_point_level(
+            patch_recon_2d, ws_indices, config.seq_length,
+            patch_size, num_patches, total_len, method='mean'
+        )
+        point_disc, _ = aggregate_patch_scores_to_point_level(
+            patch_disc_2d, ws_indices, config.seq_length,
+            patch_size, num_patches, total_len, method='mean'
+        )
+        patch_student_2d = student_all.reshape(n_windows, num_patches)
+        point_student, _ = aggregate_patch_scores_to_point_level(
+            patch_student_2d, ws_indices, config.seq_length,
+            patch_size, num_patches, total_len, method='mean'
+        )
+        point_scores = np.nan_to_num(point_scores, nan=0.0)
+        point_recon = np.nan_to_num(point_recon, nan=0.0)
+        point_disc = np.nan_to_num(point_disc, nan=0.0)
+        point_student = np.nan_to_num(point_student, nan=0.0)
+
+        result['point_scores'] = point_scores
+        result['point_labels'] = pt_labels_full
+        result['point_recon'] = point_recon
+        result['point_disc'] = point_disc
+        result['point_student'] = point_student
+        result['scores'] = point_scores
+        result['labels'] = pt_labels_full
+        result['window_start_indices'] = ws_indices
+        result['total_length'] = total_len
+        result['patch_recon_2d'] = patch_recon_2d
+        result['patch_disc_2d'] = patch_disc_2d
+    else:
+        result['scores'] = scores_all
+        result['labels'] = labels_all
+
+    return result
 
 
 def compute_score_contributions(
@@ -864,14 +929,94 @@ def collect_all_visualization_data(model, dataloader, config) -> Tuple[Dict, Dic
             all_student_recons.append(student_recon_final.cpu().numpy())
             all_sample_types_det.append(sample_types.numpy())
 
+    # Patch-level arrays (flattened: n_windows * num_patches)
+    scores_flat = np.concatenate(all_scores)
+    labels_flat = np.concatenate(all_pred_labels)
+    recon_flat = np.concatenate(all_recon_errors)
+    student_flat = np.concatenate(all_student_errors_pred)
+    disc_flat = np.concatenate(all_discrepancies_pred)
+    sample_types_flat = np.concatenate(all_sample_types_pred)
+
+    # Compute n_windows for reshaping
+    n_windows = len(scores_flat) // num_patches
+
     pred_data = {
-        'scores': np.concatenate(all_scores),
-        'labels': np.concatenate(all_pred_labels),
-        'recon_errors': np.concatenate(all_recon_errors),
-        'student_errors': np.concatenate(all_student_errors_pred),
-        'discrepancies': np.concatenate(all_discrepancies_pred),
-        'sample_types': np.concatenate(all_sample_types_pred)
+        # Patch-level (flattened) — kept for recompute_scores and loss stats
+        'patch_scores': scores_flat,
+        'patch_labels': labels_flat,
+        'recon_errors': recon_flat,
+        'student_errors': student_flat,
+        'discrepancies': disc_flat,
+        'sample_types': sample_types_flat,
+        # Metadata for re-aggregation
+        'n_windows': n_windows,
+        'num_patches': num_patches,
+        'patch_size': patch_size,
+        'seq_length': config.seq_length,
     }
+
+    # Point-level aggregation (if dataset has window_start_indices)
+    dataset = dataloader.dataset
+    # Unwrap Subset if needed
+    from torch.utils.data import Subset
+    base_dataset = dataset
+    while isinstance(base_dataset, Subset):
+        base_dataset = base_dataset.dataset
+
+    if hasattr(base_dataset, 'window_start_indices') and hasattr(base_dataset, 'point_labels'):
+        ws_indices = np.array(base_dataset.window_start_indices)
+        pt_labels_full = np.array(base_dataset.point_labels)
+        total_len = len(pt_labels_full)
+
+        # Handle Subset: only use the subset's window indices
+        if isinstance(dataset, Subset):
+            ws_indices = ws_indices[np.array(dataset.indices)]
+
+        # Reshape patch scores to (n_windows, num_patches) for aggregation
+        patch_scores_2d = scores_flat.reshape(n_windows, num_patches)
+        patch_recon_2d = recon_flat.reshape(n_windows, num_patches)
+        patch_disc_2d = disc_flat.reshape(n_windows, num_patches)
+
+        point_scores, _ = aggregate_patch_scores_to_point_level(
+            patch_scores_2d, ws_indices, config.seq_length,
+            patch_size, num_patches, total_len, method='mean'
+        )
+        point_scores = np.nan_to_num(point_scores, nan=0.0)
+
+        # Also aggregate component scores to point-level
+        point_recon, _ = aggregate_patch_scores_to_point_level(
+            patch_recon_2d, ws_indices, config.seq_length,
+            patch_size, num_patches, total_len, method='mean'
+        )
+        point_disc, _ = aggregate_patch_scores_to_point_level(
+            patch_disc_2d, ws_indices, config.seq_length,
+            patch_size, num_patches, total_len, method='mean'
+        )
+        patch_student_2d = student_flat.reshape(n_windows, num_patches)
+        point_student, _ = aggregate_patch_scores_to_point_level(
+            patch_student_2d, ws_indices, config.seq_length,
+            patch_size, num_patches, total_len, method='mean'
+        )
+        point_recon = np.nan_to_num(point_recon, nan=0.0)
+        point_disc = np.nan_to_num(point_disc, nan=0.0)
+        point_student = np.nan_to_num(point_student, nan=0.0)
+
+        pred_data['point_scores'] = point_scores
+        pred_data['point_labels'] = pt_labels_full
+        pred_data['point_recon'] = point_recon
+        pred_data['point_disc'] = point_disc
+        pred_data['point_student'] = point_student
+        pred_data['scores'] = point_scores          # Primary: point-level
+        pred_data['labels'] = pt_labels_full         # Primary: point-level
+        pred_data['window_start_indices'] = ws_indices
+        pred_data['total_length'] = total_len
+        # Store 2D patch arrays for recompute_scores re-aggregation
+        pred_data['patch_recon_2d'] = patch_recon_2d
+        pred_data['patch_disc_2d'] = patch_disc_2d
+    else:
+        # Fallback: use patch-level as scores/labels
+        pred_data['scores'] = scores_flat
+        pred_data['labels'] = labels_flat
 
     detailed_data = {
         'teacher_errors': np.concatenate(all_teacher_errors_det),

@@ -560,6 +560,95 @@ def _compute_single_pa_k_roc(args: tuple):
     return fprs_sorted, tprs_sorted, auc, best_f1
 
 
+def _compute_voted_point_predictions(
+    patch_scores: np.ndarray,
+    point_indices: List[List],
+    point_coverage: np.ndarray,
+    threshold: float,
+    total_length: int,
+) -> np.ndarray:
+    """Compute majority-voted binary point predictions at a single threshold.
+
+    For each timestamp, collect all patch scores covering it,
+    count how many exceed threshold, and predict anomaly if majority votes yes.
+
+    Args:
+        patch_scores: (n_windows, num_patches) patch-level scores
+        point_indices: list of (w_idx, p_idx) tuples per timestamp
+        point_coverage: (total_length,) coverage count per timestamp
+        threshold: decision threshold
+        total_length: total number of timestamps
+
+    Returns:
+        (total_length,) binary predictions
+    """
+    preds = np.zeros(total_length, dtype=np.float64)
+    flat_scores = patch_scores.ravel()
+    n_patches = patch_scores.shape[1]
+
+    for t in range(total_length):
+        indices = point_indices[t]
+        if len(indices) == 0:
+            continue
+        score_indices = np.array([w * n_patches + p for w, p in indices])
+        t_scores = flat_scores[score_indices]
+        votes = (t_scores > threshold).sum()
+        preds[t] = 1.0 if votes > len(indices) / 2 else 0.0
+
+    return preds
+
+
+def _compute_pa_k_f1_at_threshold(
+    voted_preds: np.ndarray,
+    point_labels: np.ndarray,
+    anomaly_regions,
+    k_percent: int,
+    eval_mask: np.ndarray,
+) -> float:
+    """Compute PA%K F1 score from voted binary predictions at a fixed threshold.
+
+    Args:
+        voted_preds: (total_length,) binary predictions from voting
+        point_labels: (total_length,) ground truth
+        anomaly_regions: list of anomaly region objects
+        k_percent: PA%K threshold percentage
+        eval_mask: (total_length,) bool mask for which points to evaluate
+
+    Returns:
+        PA%K F1 score
+    """
+    preds = voted_preds.copy()
+    total_length = len(preds)
+    k_ratio = k_percent / 100.0
+
+    # Apply PA%K segment adjustment
+    for region in anomaly_regions:
+        start = region.start
+        end = min(region.end, total_length)
+        if end <= start:
+            continue
+        detection_ratio = preds[start:end].mean()
+        if detection_ratio >= k_ratio:
+            preds[start:end] = 1.0
+        else:
+            preds[start:end] = 0.0
+
+    # Apply eval mask
+    preds[~eval_mask] = 0
+    masked_labels = point_labels.copy()
+    masked_labels[~eval_mask] = 0
+
+    tp = float((preds * masked_labels).sum())
+    fp = float((preds * (eval_mask & (point_labels == 0))).sum())
+    fn = float(masked_labels.sum() - tp)
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return f1
+
+
 def compute_segment_pa_k_detection_rate(
     point_scores: np.ndarray,
     point_labels,
@@ -1045,173 +1134,168 @@ class Evaluator:
         }
 
     def get_performance_by_anomaly_type(self) -> Dict[str, Dict[str, float]]:
-        """Compute performance metrics for each anomaly type
+        """Compute performance metrics for each anomaly type at point-level.
+
+        Uses mean-aggregated point-level scores and point-level threshold.
+        PA%K uses voting with the point-level threshold.
 
         Returns:
             Dictionary with anomaly type names as keys, containing metrics for each type
-
-        Uses caching to avoid redundant computation when called multiple times.
         """
-        # Check cache first
         score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
         cache_key = f'anomaly_type_metrics_{score_mode}'
 
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        scores, labels, sample_types, anomaly_types = self.compute_anomaly_scores()
+        if not (self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions')):
+            return {}
 
-        # Get optimal threshold from overall performance
-        if len(np.unique(labels)) > 1:
-            fpr, tpr, thresholds_arr = roc_curve(labels, scores)
+        # Get point-level scores and threshold
+        cached = self._get_cached_scores()
+        patch_recon = cached['patch_recon']
+        patch_disc = cached['patch_disc']
+        patch_scores = self._apply_scoring_formula(patch_recon, patch_disc, score_mode)
+
+        ws_indices = np.array(self.test_dataset.window_start_indices)
+        pt_labels = np.array(self.test_dataset.point_labels)
+        total_len = len(pt_labels)
+
+        # Point-level scores via mean aggregation
+        point_scores, _ = aggregate_patch_scores_to_point_level(
+            patch_scores, ws_indices,
+            self.config.seq_length, self.config.patch_size,
+            self.config.num_patches, total_len, method='mean'
+        )
+        point_scores = np.nan_to_num(point_scores, nan=0.0)
+
+        # Point-level threshold
+        if len(np.unique(pt_labels)) > 1:
+            fpr, tpr, thresholds_arr = roc_curve(pt_labels, point_scores)
             optimal_idx = np.argmax(tpr - fpr)
             threshold = thresholds_arr[optimal_idx]
         else:
-            threshold = np.median(scores)
+            threshold = np.median(point_scores)
 
-        # Precompute voting-threshold PA%K data if available
-        has_voting_pa_k = (
-            self.can_compute_point_level_pa_k and
-            hasattr(self.test_dataset, 'anomaly_regions')
+        point_predictions = (point_scores > threshold).astype(int)
+
+        # Precompute voting data for PA%K
+        pt_indices, pt_coverage = precompute_point_score_indices(
+            window_start_indices=ws_indices,
+            seq_length=self.config.seq_length,
+            patch_size=self.config.patch_size,
+            total_length=total_len,
+            num_patches=self.config.num_patches,
         )
-        voting_data = None
-        if has_voting_pa_k:
-            ws_indices = np.array(self.test_dataset.window_start_indices)
-            pt_labels = np.array(self.test_dataset.point_labels)
-            total_len = len(pt_labels)
-            cached = self._get_cached_scores()
 
-            patch_recon = cached['patch_recon']
-            patch_disc = cached['patch_disc']
-            voting_scores = self._apply_scoring_formula(patch_recon, patch_disc, score_mode)
+        # For PA%K AUROC: threshold sweep with voting
+        flat = patch_scores.ravel()
+        n_thresh = 100
+        vote_thresholds = np.linspace(flat.min() - 0.01, flat.max() + 0.01, n_thresh)
+        point_scores_all = vectorized_voting_for_all_thresholds(
+            scores=patch_scores,
+            point_indices=pt_indices,
+            point_coverage=pt_coverage,
+            thresholds=vote_thresholds,
+        )
 
-            pt_indices, pt_coverage = precompute_point_score_indices(
-                window_start_indices=ws_indices,
-                seq_length=self.config.seq_length,
-                patch_size=self.config.patch_size,
-                total_length=total_len,
-                num_patches=self.config.num_patches,
-            )
+        # For PA%K F1: voted predictions at point-level threshold
+        voted_preds = _compute_voted_point_predictions(
+            patch_scores, pt_indices, pt_coverage, threshold, total_len
+        )
 
-            flat = voting_scores.ravel()
-            n_thresh = 100
-            vote_thresholds = np.linspace(flat.min() - 0.01, flat.max() + 0.01, n_thresh)
-
-            point_scores_all = vectorized_voting_for_all_thresholds(
-                scores=voting_scores,
-                point_indices=pt_indices,
-                point_coverage=pt_coverage,
-                thresholds=vote_thresholds,
-            )
-
-            # Compute OVERALL optimal threshold index for each K (for detection rate)
-            eval_mask_all = np.ones(total_len, dtype=bool)
-            overall_optimal_idx = {}
-            for k in [10, 20, 50, 80]:
-                roc_result = _compute_single_pa_k_roc((
-                    point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
-                    eval_mask_all, k, None, 'all'
-                ))
-                _, _, _, opt_idx, _ = roc_result
-                overall_optimal_idx[k] = opt_idx
-
-            voting_data = {
-                'point_scores_all': point_scores_all,
-                'pt_labels': pt_labels,
-                'total_len': total_len,
-                'overall_optimal_idx': overall_optimal_idx,
-            }
+        # Build per-point anomaly_type array from anomaly_regions
+        point_anomaly_types = np.full(total_len, -1, dtype=int)  # -1 = normal
+        for region in self.test_dataset.anomaly_regions:
+            start = region.start
+            end = min(region.end, total_len)
+            point_anomaly_types[start:end] = region.anomaly_type
 
         results = {}
 
         for atype_idx, atype_name in enumerate(ANOMALY_TYPE_NAMES):
-            type_mask = (anomaly_types == atype_idx)
-            if type_mask.sum() == 0:
+            # Points belonging to this anomaly type (or normal points)
+            type_anomaly_mask = (point_anomaly_types == atype_idx)
+            normal_mask = (pt_labels == 0)
+
+            # For per-type evaluation: include all normal points + only this type's anomaly points
+            eval_mask = normal_mask | type_anomaly_mask
+            if eval_mask.sum() == 0:
                 continue
 
-            type_scores = scores[type_mask]
-            type_labels = labels[type_mask]
-            type_predictions = (type_scores > threshold).astype(int)
+            type_scores = point_scores[eval_mask]
+            type_labels = pt_labels[eval_mask]
+            type_predictions = point_predictions[eval_mask]
 
             type_results = {
-                'count': int(type_mask.sum()),
-                'mean_score': float(type_scores.mean()),
-                'std_score': float(type_scores.std()),
+                'count': int(type_anomaly_mask.sum()),
+                'mean_score': float(point_scores[type_anomaly_mask].mean()) if type_anomaly_mask.any() else 0.0,
+                'std_score': float(point_scores[type_anomaly_mask].std()) if type_anomaly_mask.any() else 0.0,
             }
 
-            # Compute metrics if both classes exist
             if len(np.unique(type_labels)) > 1:
                 type_results['roc_auc'] = float(roc_auc_score(type_labels, type_scores))
                 type_results['precision'] = float(precision_score(type_labels, type_predictions, zero_division=0))
                 type_results['recall'] = float(recall_score(type_labels, type_predictions, zero_division=0))
                 type_results['f1_score'] = float(f1_score(type_labels, type_predictions, zero_division=0))
 
-                # PA%K metrics using voting-threshold approach
-                if has_voting_pa_k:
-                    # Create type mask for evaluation (exclude other anomaly types)
-                    eval_type_mask = np.ones(voting_data['total_len'], dtype=bool)
-                    for region in self.test_dataset.anomaly_regions:
-                        if region.anomaly_type != atype_idx:
-                            start, end = region.start, min(region.end, voting_data['total_len'])
-                            eval_type_mask[start:end] = False
+                # PA%K metrics
+                # Create eval_type_mask: exclude other anomaly types
+                eval_type_mask = np.ones(total_len, dtype=bool)
+                for region in self.test_dataset.anomaly_regions:
+                    if region.anomaly_type != atype_idx:
+                        start, end = region.start, min(region.end, total_len)
+                        eval_type_mask[start:end] = False
 
-                    for k in [10, 20, 50, 80]:
-                        roc_result = _compute_single_pa_k_roc((
-                            voting_data['point_scores_all'],
-                            voting_data['pt_labels'],
-                            self.test_dataset.anomaly_regions,
-                            eval_type_mask, k, atype_idx, True
-                        ))
-                        _, _, pa_auc, pa_f1 = roc_result
-                        type_results[f'pa_{k}_f1'] = float(pa_f1)
-                        type_results[f'pa_{k}_roc_auc'] = float(pa_auc)
-                else:
-                    for k in [10, 20, 50, 80]:
-                        pa_metrics = compute_pa_k_metrics(type_predictions, type_labels, k_percent=k)
-                        pa_roc_auc = compute_pa_k_roc_auc(type_scores, type_labels, k_percent=k)
-                        type_results[f'pa_{k}_f1'] = float(pa_metrics['pa_k_f1'])
-                        type_results[f'pa_{k}_roc_auc'] = float(pa_roc_auc)
+                for k in [10, 20, 50, 80]:
+                    # PA%K AUROC: sweep
+                    roc_result = _compute_single_pa_k_roc((
+                        point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
+                        eval_type_mask, k, atype_idx, True
+                    ))
+                    _, _, pa_auc, _ = roc_result
+                    type_results[f'pa_{k}_roc_auc'] = float(pa_auc)
+
+                    # PA%K F1: fixed threshold + voting
+                    pa_f1 = _compute_pa_k_f1_at_threshold(
+                        voted_preds, pt_labels, self.test_dataset.anomaly_regions,
+                        k, eval_type_mask
+                    )
+                    type_results[f'pa_{k}_f1'] = float(pa_f1)
             else:
-                # For anomaly types (all labels are 1), compute detection rate
-                if type_labels.sum() == len(type_labels):  # All anomalies
+                if type_labels.sum() == len(type_labels):
                     type_results['detection_rate'] = float(type_predictions.mean())
 
-                    # PA%K detection rate using voting approach with OVERALL optimal threshold
-                    if has_voting_pa_k:
-                        for k in [10, 20, 50, 80]:
-                            opt_idx = voting_data['overall_optimal_idx'][k]
-                            voting_point_scores = voting_data['point_scores_all'][opt_idx]
-                            pa_rate = compute_segment_pa_k_detection_rate(
-                                point_scores=voting_point_scores,
-                                point_labels=voting_data['pt_labels'],
-                                anomaly_regions=self.test_dataset.anomaly_regions,
-                                anomaly_type=atype_idx,
-                                threshold=0.5,
-                                k_percent=k
-                            )
-                            type_results[f'pa_{k}_detection_rate'] = float(pa_rate)
-                    else:
-                        for k in [10, 20, 50, 80]:
-                            adjusted = compute_pa_k_adjusted_predictions(type_predictions, type_labels, k_percent=k)
-                            type_results[f'pa_{k}_detection_rate'] = float(adjusted.mean())
-                else:  # All normal
+                    for k in [10, 20, 50, 80]:
+                        pa_rate = compute_segment_pa_k_detection_rate(
+                            point_scores=voted_preds,
+                            point_labels=pt_labels,
+                            anomaly_regions=self.test_dataset.anomaly_regions,
+                            anomaly_type=atype_idx,
+                            threshold=0.5,
+                            k_percent=k
+                        )
+                        type_results[f'pa_{k}_detection_rate'] = float(pa_rate)
+                else:
                     type_results['false_positive_rate'] = float(type_predictions.mean())
 
             results[atype_name] = type_results
 
-        # Store in cache before returning
         self._cache[cache_key] = results
         return results
 
     def evaluate(self) -> Dict[str, float]:
-        """Evaluate and return metrics including disturbing normal performance
+        """Evaluate and return metrics at point-level.
 
-        Sample-level metrics (roc_auc, f1_score, precision, recall) are computed at
-        patch level (n_windows x num_patches samples). Each patch gets its own label
-        (1 if patch contains anomaly, 0 otherwise).
+        All primary metrics (roc_auc, f1_score, precision, recall) are computed at
+        point-level: patch scores are mean-aggregated to physical timestamps, and
+        ground-truth point_labels are used directly.
 
-        PA%K metrics are computed at point-level if test_dataset is provided,
-        otherwise falls back to sample-level computation.
+        PA%K metrics use the point-level optimal threshold with majority voting
+        for patch→point binary aggregation, then PA%K segment adjustment.
+
+        PA%K AUROC sweeps thresholds (threshold-free metric) with voting.
+        PA%K F1 uses the single point-level threshold.
 
         Uses caching to avoid redundant forward passes when called multiple times
         with different scoring modes.
@@ -1223,36 +1307,51 @@ class Evaluator:
 
         results = {}
 
-        # Use patch-level scores and labels from cache
+        # Use patch-level scores from cache
         recon_patches = cached['patch_recon']
         disc_patches = cached['patch_disc']
-        patch_labels = cached['patch_labels']
-        labels = cached['labels']
         sample_types = cached['sample_types']
 
         # Compute patch-level anomaly scores using cached helper
         patch_scores = self._apply_scoring_formula(recon_patches, disc_patches, score_mode)
 
-        # Flatten for sample-level metrics: (n_windows × num_patches,)
-        sample_scores = patch_scores.flatten()
-        sample_labels = patch_labels.flatten()
+        # === Point-level aggregation ===
+        if not (self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions')):
+            # Cannot compute point-level: return zeros
+            return {
+                'roc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
+                'f1_score': 0.0, 'optimal_threshold': 0.0,
+                'pa_10_f1': 0.0, 'pa_10_roc_auc': 0.0,
+                'pa_20_f1': 0.0, 'pa_20_roc_auc': 0.0,
+                'pa_50_f1': 0.0, 'pa_50_roc_auc': 0.0,
+                'pa_80_f1': 0.0, 'pa_80_roc_auc': 0.0,
+            }
 
-        # Window-level scores for disturbing normal analysis
-        window_scores = self._apply_scoring_formula(
-            cached['window_recon'], cached['window_disc'], score_mode
+        ws_indices = np.array(self.test_dataset.window_start_indices)
+        pt_labels = np.array(self.test_dataset.point_labels)
+        total_len = len(pt_labels)
+
+        # Aggregate patch scores to point-level via mean
+        point_scores, _ = aggregate_patch_scores_to_point_level(
+            patch_scores, ws_indices,
+            self.config.seq_length, self.config.patch_size,
+            self.config.num_patches, total_len, method='mean'
         )
 
-        # Overall performance (sample-level)
-        if len(np.unique(sample_labels)) > 1:
-            roc_auc = roc_auc_score(sample_labels, sample_scores)
-            fpr, tpr, thresholds = roc_curve(sample_labels, sample_scores)
+        # Handle NaN (uncovered timestamps) — treat as 0 score
+        point_scores = np.nan_to_num(point_scores, nan=0.0)
+
+        # === Point-level ROC and threshold ===
+        if len(np.unique(pt_labels)) > 1:
+            roc_auc = roc_auc_score(pt_labels, point_scores)
+            fpr, tpr, thresholds = roc_curve(pt_labels, point_scores)
             optimal_idx = np.argmax(tpr - fpr)
             threshold = thresholds[optimal_idx]
 
-            predictions = (sample_scores > threshold).astype(int)
-            precision = precision_score(sample_labels, predictions, zero_division=0)
-            recall = recall_score(sample_labels, predictions, zero_division=0)
-            f1 = f1_score(sample_labels, predictions, zero_division=0)
+            predictions = (point_scores > threshold).astype(int)
+            precision = precision_score(pt_labels, predictions, zero_division=0)
+            recall = recall_score(pt_labels, predictions, zero_division=0)
+            f1 = f1_score(pt_labels, predictions, zero_division=0)
 
             results = {
                 'roc_auc': roc_auc,
@@ -1262,90 +1361,72 @@ class Evaluator:
                 'optimal_threshold': threshold,
             }
 
-            # PA%K metrics: voting-threshold approach
-            # Vary threshold T at window/patch level → majority vote to point level
-            # → PA%K segment adjustment → TPR/FPR → ROC curve
+            # === PA%K metrics ===
             pa_k_values = [10, 20, 50, 80]
 
-            if self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions'):
-                ws_indices = np.array(self.test_dataset.window_start_indices)
-                pt_labels = np.array(self.test_dataset.point_labels)
-                total_len = len(pt_labels)
+            # Precompute point indices for voting
+            pt_indices, pt_coverage = precompute_point_score_indices(
+                window_start_indices=ws_indices,
+                seq_length=self.config.seq_length,
+                patch_size=self.config.patch_size,
+                total_length=total_len,
+                num_patches=self.config.num_patches,
+            )
 
-                voting_scores = patch_scores  # (n_windows, num_patches)
+            # PA%K AUROC: sweep thresholds with voting (threshold-free metric)
+            flat = patch_scores.ravel()
+            n_thresholds = 100
+            thresholds_arr = np.linspace(flat.min() - 0.01, flat.max() + 0.01, n_thresholds)
 
-                # Precompute point indices (shared across all K values)
-                pt_indices, pt_coverage = precompute_point_score_indices(
-                    window_start_indices=ws_indices,
-                    seq_length=self.config.seq_length,
-                    patch_size=self.config.patch_size,
-                    total_length=total_len,
-                    num_patches=self.config.num_patches,
+            point_scores_all = vectorized_voting_for_all_thresholds(
+                scores=patch_scores,
+                point_indices=pt_indices,
+                point_coverage=pt_coverage,
+                thresholds=thresholds_arr,
+            )
+
+            eval_mask = np.ones(total_len, dtype=bool)
+            for k in pa_k_values:
+                # PA%K AUROC via threshold sweep
+                roc_result = _compute_single_pa_k_roc((
+                    point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
+                    eval_mask, k, None, True
+                ))
+                _, _, pa_auc, _ = roc_result
+                results[f'pa_{k}_roc_auc'] = float(pa_auc)
+
+                # PA%K F1: use point-level threshold with voting
+                voted_preds = _compute_voted_point_predictions(
+                    patch_scores, pt_indices, pt_coverage, threshold, total_len
                 )
-
-                # Generate thresholds from score distribution
-                flat = voting_scores.ravel()
-                n_thresholds = 100
-                thresholds_arr = np.linspace(flat.min() - 0.01, flat.max() + 0.01, n_thresholds)
-
-                # Vectorized voting for all thresholds
-                point_scores_all = vectorized_voting_for_all_thresholds(
-                    scores=voting_scores,
-                    point_indices=pt_indices,
-                    point_coverage=pt_coverage,
-                    thresholds=thresholds_arr,
+                pa_f1 = _compute_pa_k_f1_at_threshold(
+                    voted_preds, pt_labels, self.test_dataset.anomaly_regions,
+                    k, eval_mask
                 )
-
-                eval_mask = np.ones(total_len, dtype=bool)
-                for k in pa_k_values:
-                    roc_result = _compute_single_pa_k_roc((
-                        point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
-                        eval_mask, k, None, True  # return (fprs, tprs, auc, f1)
-                    ))
-                    _, _, pa_auc, pa_f1 = roc_result
-                    results[f'pa_{k}_roc_auc'] = float(pa_auc)
-                    results[f'pa_{k}_f1'] = float(pa_f1)
-            else:
-                # Fallback to sample-level PA%K
-                for k in pa_k_values:
-                    f1_metrics = compute_pa_k_metrics(predictions, sample_labels, k_percent=k)
-                    roc_auc_k = compute_pa_k_roc_auc(sample_scores, sample_labels, k_percent=k)
-                    results[f'pa_{k}_f1'] = f1_metrics['pa_k_f1']
-                    results[f'pa_{k}_roc_auc'] = roc_auc_k
+                results[f'pa_{k}_f1'] = float(pa_f1)
         else:
             results = {
-                'roc_auc': 0.0,
-                'precision': 0.0,
-                'recall': 0.0,
-                'f1_score': 0.0,
-                'optimal_threshold': 0.0,
-                'pa_10_f1': 0.0,
-                'pa_10_roc_auc': 0.0,
-                'pa_20_f1': 0.0,
-                'pa_20_roc_auc': 0.0,
-                'pa_50_f1': 0.0,
-                'pa_50_roc_auc': 0.0,
-                'pa_80_f1': 0.0,
-                'pa_80_roc_auc': 0.0,
+                'roc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
+                'f1_score': 0.0, 'optimal_threshold': 0.0,
+                'pa_10_f1': 0.0, 'pa_10_roc_auc': 0.0,
+                'pa_20_f1': 0.0, 'pa_20_roc_auc': 0.0,
+                'pa_50_f1': 0.0, 'pa_50_roc_auc': 0.0,
+                'pa_80_f1': 0.0, 'pa_80_roc_auc': 0.0,
             }
 
-        # Disturbing normal performance
+        # Disturbing normal performance (window-level, descriptive)
         # sample_type: 0=pure_normal, 1=disturbing_normal, 2=anomaly
-        # IMPORTANT: Use the GLOBAL threshold (from entire dataset), not a separate threshold
+        window_scores = self._apply_scoring_formula(
+            cached['window_recon'], cached['window_disc'], score_mode
+        )
         disturbing_mask = (sample_types == 0) | (sample_types == 1)
-        if disturbing_mask.sum() > 0:
+        if disturbing_mask.sum() > 0 and 'optimal_threshold' in results:
             disturbing_scores = window_scores[disturbing_mask]
             disturbing_labels = sample_types[disturbing_mask]
 
             if len(np.unique(disturbing_labels)) > 1:
-                # ROC-AUC is threshold-free, so compute it normally
                 disturbing_roc_auc = roc_auc_score(disturbing_labels, disturbing_scores)
-
-                # Use GLOBAL threshold (from entire dataset) for predictions
-                # This ensures fair comparison - we evaluate how well the model
-                # distinguishes disturbing normal from pure normal using the same
-                # threshold that was chosen for overall anomaly detection
-                d_predictions = (disturbing_scores > threshold).astype(int)
+                d_predictions = (disturbing_scores > results['optimal_threshold']).astype(int)
                 disturbing_precision = precision_score(disturbing_labels, d_predictions, zero_division=0)
                 disturbing_recall = recall_score(disturbing_labels, d_predictions, zero_division=0)
                 disturbing_f1 = f1_score(disturbing_labels, d_predictions, zero_division=0)
@@ -1361,10 +1442,9 @@ class Evaluator:
         return results
 
     def evaluate_by_score_type(self, score_type: str) -> Dict[str, float]:
-        """Evaluate using a single score component instead of the combined score.
+        """Evaluate using a single score component at point-level.
 
-        Uses the same logic as evaluate() (sample-level ROC + PA%K voting-threshold)
-        but with an individual score component as the anomaly score.
+        Same point-level logic as evaluate() but with an individual score component.
 
         Args:
             score_type: One of 'disc', 'teacher_recon', 'student_recon'
@@ -1375,10 +1455,6 @@ class Evaluator:
         """
         cached = self._get_cached_scores()
 
-        patch_labels = cached['patch_labels']
-        labels = cached['labels']
-
-        # Select the appropriate patch-level scores
         if score_type == 'disc':
             patch_scores = cached['patch_disc']
         elif score_type == 'teacher_recon':
@@ -1388,69 +1464,85 @@ class Evaluator:
         else:
             raise ValueError(f"Unknown score_type: {score_type}")
 
-        sample_scores = patch_scores.flatten()
-        sample_labels = patch_labels.flatten()
-        voting_scores = patch_scores  # (n_windows, num_patches)
+        if not (self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions')):
+            return {
+                'roc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
+                'f1_score': 0.0, 'optimal_threshold': 0.0,
+                'pa_10_f1': 0.0, 'pa_10_roc_auc': 0.0,
+                'pa_20_f1': 0.0, 'pa_20_roc_auc': 0.0,
+                'pa_50_f1': 0.0, 'pa_50_roc_auc': 0.0,
+                'pa_80_f1': 0.0, 'pa_80_roc_auc': 0.0,
+            }
+
+        ws_indices = np.array(self.test_dataset.window_start_indices)
+        pt_labels = np.array(self.test_dataset.point_labels)
+        total_len = len(pt_labels)
+
+        # Aggregate to point-level via mean
+        point_scores, _ = aggregate_patch_scores_to_point_level(
+            patch_scores, ws_indices,
+            self.config.seq_length, self.config.patch_size,
+            self.config.num_patches, total_len, method='mean'
+        )
+        point_scores = np.nan_to_num(point_scores, nan=0.0)
 
         results = {}
 
-        if len(np.unique(sample_labels)) > 1:
-            roc_auc_val = roc_auc_score(sample_labels, sample_scores)
-            fpr, tpr, thresholds = roc_curve(sample_labels, sample_scores)
+        if len(np.unique(pt_labels)) > 1:
+            roc_auc_val = roc_auc_score(pt_labels, point_scores)
+            fpr, tpr, thresholds = roc_curve(pt_labels, point_scores)
             optimal_idx = np.argmax(tpr - fpr)
             threshold = thresholds[optimal_idx]
 
-            predictions = (sample_scores > threshold).astype(int)
+            predictions = (point_scores > threshold).astype(int)
             results = {
                 'roc_auc': float(roc_auc_val),
-                'precision': float(precision_score(sample_labels, predictions, zero_division=0)),
-                'recall': float(recall_score(sample_labels, predictions, zero_division=0)),
-                'f1_score': float(f1_score(sample_labels, predictions, zero_division=0)),
+                'precision': float(precision_score(pt_labels, predictions, zero_division=0)),
+                'recall': float(recall_score(pt_labels, predictions, zero_division=0)),
+                'f1_score': float(f1_score(pt_labels, predictions, zero_division=0)),
                 'optimal_threshold': float(threshold),
             }
 
             # PA%K metrics
             pa_k_values = [10, 20, 50, 80]
+            pt_indices, pt_coverage = precompute_point_score_indices(
+                window_start_indices=ws_indices,
+                seq_length=self.config.seq_length,
+                patch_size=self.config.patch_size,
+                total_length=total_len,
+                num_patches=self.config.num_patches,
+            )
 
-            if self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions'):
-                ws_indices = np.array(self.test_dataset.window_start_indices)
-                pt_labels = np.array(self.test_dataset.point_labels)
-                total_len = len(pt_labels)
+            # PA%K AUROC: threshold sweep with voting
+            flat = patch_scores.ravel()
+            n_thresholds = 100
+            thresholds_arr = np.linspace(flat.min() - 0.01, flat.max() + 0.01, n_thresholds)
 
-                pt_indices, pt_coverage = precompute_point_score_indices(
-                    window_start_indices=ws_indices,
-                    seq_length=self.config.seq_length,
-                    patch_size=self.config.patch_size,
-                    total_length=total_len,
-                    num_patches=self.config.num_patches,
+            point_scores_all = vectorized_voting_for_all_thresholds(
+                scores=patch_scores,
+                point_indices=pt_indices,
+                point_coverage=pt_coverage,
+                thresholds=thresholds_arr,
+            )
+
+            eval_mask = np.ones(total_len, dtype=bool)
+            for k in pa_k_values:
+                roc_result = _compute_single_pa_k_roc((
+                    point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
+                    eval_mask, k, None, True
+                ))
+                _, _, pa_auc, _ = roc_result
+                results[f'pa_{k}_roc_auc'] = float(pa_auc)
+
+                # PA%K F1: point-level threshold + voting
+                voted_preds = _compute_voted_point_predictions(
+                    patch_scores, pt_indices, pt_coverage, threshold, total_len
                 )
-
-                flat = voting_scores.ravel()
-                n_thresholds = 100
-                thresholds_arr = np.linspace(flat.min() - 0.01, flat.max() + 0.01, n_thresholds)
-
-                point_scores_all = vectorized_voting_for_all_thresholds(
-                    scores=voting_scores,
-                    point_indices=pt_indices,
-                    point_coverage=pt_coverage,
-                    thresholds=thresholds_arr,
+                pa_f1 = _compute_pa_k_f1_at_threshold(
+                    voted_preds, pt_labels, self.test_dataset.anomaly_regions,
+                    k, eval_mask
                 )
-
-                eval_mask = np.ones(total_len, dtype=bool)
-                for k in pa_k_values:
-                    roc_result = _compute_single_pa_k_roc((
-                        point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
-                        eval_mask, k, None, True
-                    ))
-                    _, _, pa_auc, pa_f1 = roc_result
-                    results[f'pa_{k}_roc_auc'] = float(pa_auc)
-                    results[f'pa_{k}_f1'] = float(pa_f1)
-            else:
-                for k in pa_k_values:
-                    f1_metrics = compute_pa_k_metrics(predictions, sample_labels, k_percent=k)
-                    roc_auc_k = compute_pa_k_roc_auc(sample_scores, sample_labels, k_percent=k)
-                    results[f'pa_{k}_f1'] = f1_metrics['pa_k_f1']
-                    results[f'pa_{k}_roc_auc'] = roc_auc_k
+                results[f'pa_{k}_f1'] = float(pa_f1)
         else:
             results = {
                 'roc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,

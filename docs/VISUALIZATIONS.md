@@ -196,10 +196,12 @@ Visualizations use the **same evaluation method** as the ablation runner:
 
 ### Inference Mode
 
-The `collect_predictions()` and `collect_detailed_data()` functions in `base.py` use iterative patch masking (all patches mode):
+The `collect_predictions()` and `collect_all_visualization_data()` functions in `base.py` use iterative patch masking (all patches mode):
 - Each patch masked one at a time (N forward passes)
-- Patch-level labels computed from `point_labels`
-- Output shape: (n_windows × num_patches,)
+- Patch-level scores: (n_windows × num_patches,)
+- **Point-level aggregation**: patch scores mean-aggregated to physical timestamps
+- Primary metrics (ROC, threshold, F1) use point-level scores and labels
+- Patch-level data retained for loss statistics and PA%K voting
 
 ---
 

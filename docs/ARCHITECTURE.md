@@ -287,8 +287,10 @@ Each feature independently selects which patches to mask.
 During inference, each patch is masked one at a time with N forward passes per window:
 - Mask each patch position independently
 - Compute reconstruction error and discrepancy for masked positions
-- Per-patch scores with patch-level labels
-- Each patch is evaluated independently for comprehensive coverage
+- Per-patch scores (n_windows × num_patches) computed during inference
+- **Point-level aggregation**: patch scores are mean-aggregated to physical timestamps for evaluation metrics
+- Primary metrics (ROC-AUC, F1, precision, recall) use point-level scores and labels
+- PA%K uses majority voting with point-level threshold
 
 See [INFERENCE_MODES.md](INFERENCE_MODES.md) for detailed flow diagrams.
 
@@ -484,6 +486,17 @@ anomaly_score = MSE(teacher_out - original)
 ```python
 anomaly_score = MSE(student_out - original)
 ```
+
+### Point-Level Aggregation
+
+All scoring formulas above produce **patch-level** scores (n_windows × num_patches). For evaluation:
+
+1. **Mean aggregation**: Each timestamp's score = mean of all patch scores covering it
+2. **Point-level ROC/threshold**: ROC curve computed from (point_labels, point_scores), threshold via Youden's J
+3. **Primary metrics**: F1, precision, recall computed from point-level binary predictions
+4. **PA%K F1**: Point-level threshold applied to patch scores via majority voting → PA%K segment adjustment
+5. **PA%K AUROC**: Threshold sweep with voting (threshold-free metric)
+6. **Loss statistics** (disc_ratio, Cohen's d): Remain patch-level (describe model behavior)
 
 ---
 

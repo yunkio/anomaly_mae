@@ -211,9 +211,8 @@ class BestModelVisualizer:
     def recompute_scores(self, scoring_mode: str):
         """Recompute anomaly scores with different scoring mode (CPU only, fast).
 
-        This allows generating visualizations for different scoring modes without
-        re-running GPU inference. The raw recon_errors and discrepancies are preserved,
-        only the combined 'scores' are recomputed.
+        Recomputes patch-level scores, then re-aggregates to point-level.
+        The raw recon_errors and discrepancies are preserved.
 
         Args:
             scoring_mode: One of 'default', 'adaptive', 'normalized'
@@ -223,19 +222,51 @@ class BestModelVisualizer:
         lambda_disc = getattr(self.config, 'lambda_disc', 0.5)
 
         if scoring_mode == 'default':
-            scores = recon + lambda_disc * disc
+            patch_scores = recon + lambda_disc * disc
         elif scoring_mode == 'adaptive':
             adaptive_lambda = recon.mean() / (disc.mean() + 1e-4)
-            scores = recon + adaptive_lambda * disc
+            patch_scores = recon + adaptive_lambda * disc
         elif scoring_mode == 'normalized':
             recon_z = (recon - recon.mean()) / (recon.std() + 1e-4)
             disc_z = (disc - disc.mean()) / (disc.std() + 1e-4)
-            scores = recon_z + disc_z
+            patch_scores = recon_z + disc_z
         else:
             raise ValueError(f"Unknown scoring_mode: {scoring_mode}")
 
-        self.pred_data['scores'] = scores
+        self.pred_data['patch_scores'] = patch_scores
         self.config.anomaly_score_mode = scoring_mode
+
+        # Re-aggregate to point-level if possible
+        if 'window_start_indices' in self.pred_data and 'point_labels' in self.pred_data:
+            from mae_anomaly.evaluator import aggregate_patch_scores_to_point_level
+            n_windows = self.pred_data['n_windows']
+            num_patches = self.pred_data['num_patches']
+            patch_size = self.pred_data['patch_size']
+            seq_length = self.pred_data['seq_length']
+            ws_indices = self.pred_data['window_start_indices']
+            total_len = self.pred_data['total_length']
+
+            patch_scores_2d = patch_scores.reshape(n_windows, num_patches)
+            point_scores, _ = aggregate_patch_scores_to_point_level(
+                patch_scores_2d, ws_indices, seq_length,
+                patch_size, num_patches, total_len, method='mean'
+            )
+            point_scores = np.nan_to_num(point_scores, nan=0.0)
+            self.pred_data['point_scores'] = point_scores
+            self.pred_data['scores'] = point_scores
+
+            # Re-aggregate component scores to point-level
+            recon = self.pred_data['recon_errors'].reshape(n_windows, num_patches)
+            disc = self.pred_data['discrepancies'].reshape(n_windows, num_patches)
+            student = self.pred_data['student_errors'].reshape(n_windows, num_patches)
+            for key, arr_2d in [('point_recon', recon), ('point_disc', disc), ('point_student', student)]:
+                pt, _ = aggregate_patch_scores_to_point_level(
+                    arr_2d, ws_indices, seq_length,
+                    patch_size, num_patches, total_len, method='mean'
+                )
+                self.pred_data[key] = np.nan_to_num(pt, nan=0.0)
+        else:
+            self.pred_data['scores'] = patch_scores
 
         # Recompute threshold with new scores
         self._compute_threshold()
@@ -447,14 +478,34 @@ class BestModelVisualizer:
         plt.close()
         print("  - best_model_reconstruction.png")
 
+    def _point_idx_to_window_idx(self, point_idx: int) -> int:
+        """Find a window containing the given point timestamp.
+
+        Returns the window index in detailed_data that contains this point.
+        Falls back to 0 if no matching window found.
+        """
+        if 'window_start_indices' in self.pred_data:
+            ws = self.pred_data['window_start_indices']
+            seq_len = self.pred_data.get('seq_length', self.config.seq_length)
+            # Find windows that contain this point
+            for w_idx, start in enumerate(ws):
+                if start <= point_idx < start + seq_len:
+                    if w_idx < len(self.detailed_data['originals']):
+                        return w_idx
+        # Fallback: use modular mapping
+        n_windows = len(self.detailed_data['originals'])
+        return min(point_idx % n_windows, n_windows - 1)
+
     def plot_detection_examples(self):
-        """Show TP, TN, FP, FN examples with anomaly region and masked region highlighted"""
-        # Use cached values
+        """Show TP, TN, FP, FN examples with anomaly region highlighted.
+
+        Uses point-level predictions and scores.
+        """
         threshold = self._roc_data['thresholds'][self._optimal_idx]
         predictions = self._predictions
         labels = self.pred_data['labels']
 
-        # Find examples
+        # Find examples (point-level indices)
         tp_idx = np.where((predictions == 1) & (labels == 1))[0]
         tn_idx = np.where((predictions == 0) & (labels == 0))[0]
         fp_idx = np.where((predictions == 1) & (labels == 0))[0]
@@ -471,20 +522,16 @@ class BestModelVisualizer:
 
         for ax, (indices, title, color) in zip(axes.flatten(), examples):
             if len(indices) > 0:
-                patch_idx = indices[0]
-                window_idx = self._patch_idx_to_window_idx(patch_idx)
+                point_idx = indices[len(indices) // 2]  # Pick middle example
+                window_idx = self._point_idx_to_window_idx(point_idx)
                 original = self.detailed_data['originals'][window_idx, :, 0]
-                point_labels = self.detailed_data['point_labels'][window_idx]
+                window_point_labels = self.detailed_data['point_labels'][window_idx]
                 x = np.arange(len(original))
 
-                # Highlight anomaly regions first (so they appear behind the line)
-                self._highlight_anomaly_regions(ax, point_labels, alpha=0.3, label='Anomaly Region')
-
-                # Highlight masked region (works for both modes)
-                self._highlight_masked_region(ax, patch_idx, len(original), label='Masked Region')
+                self._highlight_anomaly_regions(ax, window_point_labels, alpha=0.3, label='Anomaly Region')
 
                 ax.plot(x, original, color=color, lw=2, label='Signal')
-                ax.set_title(f'{title}\nScore: {self.pred_data["scores"][patch_idx]:.4f}, '
+                ax.set_title(f'{title}\nPoint score: {self.pred_data["scores"][point_idx]:.4f}, '
                            f'Threshold: {threshold:.4f}', fontweight='bold')
                 ax.set_xlabel('Time Step')
                 ax.set_ylabel('Value')
@@ -493,7 +540,7 @@ class BestModelVisualizer:
                 ax.text(0.5, 0.5, f'No {title} examples', ha='center', va='center', transform=ax.transAxes)
                 ax.set_title(title, fontweight='bold')
 
-        plt.suptitle('Detection Examples\n(Red=Anomaly Region, Yellow=Masked Region)',
+        plt.suptitle('Detection Examples (Point-Level)',
                     fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'best_model_detection_examples.png'), dpi=150, bbox_inches='tight')
@@ -1175,14 +1222,13 @@ Separation Ratios:
         - False Negative (missed anomaly)
         - For each anomaly type (spike, memory_leak, noise, drift, network_congestion)
         """
-        # Get predictions using pred_data (has scores and patch-level sample_types)
+        # Get predictions using pred_data (point-level scores and labels)
         threshold = self._get_optimal_threshold()
         scores = self._get_scores()
         predictions = (scores >= threshold).astype(int)
         labels = self.pred_data['labels']
-        sample_types = self.pred_data['sample_types']  # patch-level sample_types
 
-        # Find examples for each category
+        # Find examples for each category (point-level)
         tp_idx = np.where((labels == 1) & (predictions == 1))[0]
         tn_idx = np.where((labels == 0) & (predictions == 0))[0]
         fp_idx = np.where((labels == 0) & (predictions == 1))[0]
@@ -1207,8 +1253,8 @@ Separation Ratios:
 
             # Select a representative sample (median score among category)
             cat_scores = scores[indices]
-            patch_idx = indices[np.argsort(cat_scores)[len(cat_scores)//2]]
-            window_idx = self._patch_idx_to_window_idx(patch_idx)
+            point_idx = indices[np.argsort(cat_scores)[len(cat_scores)//2]]
+            window_idx = self._point_idx_to_window_idx(point_idx)
 
             # Column 1: Time series with reconstruction
             ax = axes[row, 0]
@@ -1225,8 +1271,6 @@ Separation Ratios:
             anomaly_region = np.where(point_labels == 1)[0]
             if len(anomaly_region) > 0:
                 ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'], label='Anomaly')
-            self._highlight_masked_region(ax, patch_idx, len(original), label='Masked')
-
             ax.set_title(f'{cat_name}: Time Series', fontweight='bold', color=color)
             ax.set_xlabel('Time Step')
             ax.set_ylabel('Value')
@@ -1241,13 +1285,6 @@ Separation Ratios:
 
             if len(anomaly_region) > 0:
                 ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-            self._highlight_masked_region(ax, patch_idx, len(discrepancy), label=None)
-
-            # Get correct masked region for statistics
-            mask_start, mask_end = self._get_masked_region(patch_idx, len(discrepancy))
-            masked_disc_mean = np.mean(discrepancy[mask_start:mask_end])
-            ax.axhline(y=masked_disc_mean, color=VIS_COLORS['threshold'], linestyle='--',
-                      label=f'Masked Mean: {masked_disc_mean:.4f}')
 
             ax.set_title(f'{cat_name}: Discrepancy (|T-S|)', fontweight='bold', color=color)
             ax.set_xlabel('Time Step')
@@ -1258,39 +1295,25 @@ Separation Ratios:
             ax = axes[row, 2]
             ax.axis('off')
 
-            sample_score = scores[patch_idx]
-            # Compute errors for the correct masked region
-            mask_start, mask_end = self._get_masked_region(patch_idx, len(original))
-            teacher_err = np.mean((original[mask_start:mask_end] - teacher_recon[mask_start:mask_end])**2)
-            student_err = np.mean((original[mask_start:mask_end] - student_recon[mask_start:mask_end])**2)
-            masked_disc = np.mean(discrepancy[mask_start:mask_end])
-            anomaly_in_mask = sum(point_labels[mask_start:mask_end])
-
-            stype = sample_types[patch_idx]  # Use patch-level sample_type
-            stype_name = ['Pure Normal', 'Disturbing Normal', 'Anomaly'][stype]
+            sample_score = scores[point_idx]
 
             stats_text = f"""
 {cat_name} Case Study
 ═══════════════════════════════════
 
-Patch Index:  {patch_idx} (Window: {window_idx})
-Sample Type:  {stype_name}
-True Label:   {'Anomaly' if labels[patch_idx] == 1 else 'Normal'}
-Prediction:   {'Anomaly' if predictions[patch_idx] == 1 else 'Normal'}
+Point Index:  {point_idx} (Window: {window_idx})
+True Label:   {'Anomaly' if labels[point_idx] == 1 else 'Normal'}
+Prediction:   {'Anomaly' if predictions[point_idx] == 1 else 'Normal'}
 
 Score Analysis:
   • Total Score:    {sample_score:.6f}
   • Threshold:      {threshold:.6f}
   • Margin:         {sample_score - threshold:+.6f}
 
-Masked Region Metrics [{mask_start}:{mask_end}]:
-  • Teacher MSE:    {teacher_err:.6f}
-  • Student MSE:    {student_err:.6f}
-  • Discrepancy:    {masked_disc:.6f}
+Window Discrepancy: {np.mean(discrepancy):.6f}
 
-Anomaly Location:
+Anomaly in Window:
   • Points: {len(anomaly_region)} / {len(original)}
-  • In Mask: {anomaly_in_mask}
             """
 
             ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
@@ -1373,9 +1396,6 @@ Anomaly Location:
                     anomaly_region = np.where(point_labels == 1)[0]
                     if len(anomaly_region) > 0:
                         ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                    # Convert window_idx to patch_idx for masked region
-                    patch_idx_tp = tp_idx * self.num_patches + (self.num_patches - 1)
-                    self._highlight_masked_region(ax, patch_idx_tp, len(original), label=None)
 
                 ax.set_title(f'{atype.upper()}: TP Example', fontweight='bold', color=VIS_COLORS['teacher'])
             else:
@@ -1392,7 +1412,6 @@ Anomaly Location:
                 ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['teacher'])
                 if len(anomaly_region) > 0:
                     ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                self._highlight_masked_region(ax, patch_idx_tp, len(discrepancy), label=None)
             ax.set_title(f'{atype.upper()}: TP Discrepancy', fontweight='bold', color=VIS_COLORS['teacher'])
             ax.set_xlabel('Time Step')
 
@@ -1413,9 +1432,6 @@ Anomaly Location:
                     anomaly_region_fn = np.where(point_labels == 1)[0]
                     if len(anomaly_region_fn) > 0:
                         ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                    # Convert window_idx to patch_idx for masked region
-                    patch_idx_fn = fn_idx * self.num_patches + (self.num_patches - 1)
-                    self._highlight_masked_region(ax, patch_idx_fn, len(original), label=None)
 
                 ax.set_title(f'{atype.upper()}: FN Example', fontweight='bold', color=VIS_COLORS['anomaly'])
             else:
@@ -1430,7 +1446,6 @@ Anomaly Location:
                 ax.fill_between(range(len(discrepancy)), discrepancy, alpha=0.6, color=VIS_COLORS['anomaly'])
                 if len(anomaly_region_fn) > 0:
                     ax.axvspan(anomaly_region_fn[0], anomaly_region_fn[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-                self._highlight_masked_region(ax, patch_idx_fn, len(discrepancy), label=None)
             ax.set_title(f'{atype.upper()}: FN Discrepancy', fontweight='bold', color=VIS_COLORS['anomaly'])
             ax.set_xlabel('Time Step')
 
@@ -1499,23 +1514,23 @@ Anomaly Location:
         plt.close()
         print("  - hardest_samples.png")
 
-    def _plot_sample_detail(self, axes_row, patch_idx, title_prefix, color, threshold):
+    def _plot_sample_detail(self, axes_row, point_idx, title_prefix, color, threshold):
         """Helper to plot detailed sample analysis in a row of 3 axes.
 
         Args:
-            patch_idx: Index from pred_data (patch-level in all_patches mode)
+            point_idx: Point-level index from pred_data
         """
-        # Convert patch index to window index for detailed_data access
-        window_idx = self._patch_idx_to_window_idx(patch_idx)
+        # Convert point index to window index for detailed_data access
+        window_idx = self._point_idx_to_window_idx(point_idx)
 
         original = self.detailed_data['originals'][window_idx, :, 0]
         teacher_recon = self.detailed_data['teacher_recons'][window_idx, :, 0]
         student_recon = self.detailed_data['student_recons'][window_idx, :, 0]
         discrepancy = self.detailed_data['discrepancies'][window_idx]
         point_labels = self.detailed_data['point_labels'][window_idx]
-        score = self._get_scores()[patch_idx]
-        label = self.pred_data['labels'][patch_idx]
-        sample_type = self.pred_data['sample_types'][patch_idx]  # Use patch-level sample_type
+        score = self._get_scores()[point_idx]
+        label = self.pred_data['labels'][point_idx]
+        sample_type_label = 'anomaly' if label == 1 else 'normal'
 
         anomaly_region = np.where(point_labels == 1)[0]
 
@@ -1526,7 +1541,6 @@ Anomaly Location:
         ax.plot(student_recon, 'r:', lw=1.5, alpha=0.7, label='Student')
         if len(anomaly_region) > 0:
             ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-        self._highlight_masked_region(ax, patch_idx, len(original), label=None)
         ax.set_title(f'{title_prefix}: Time Series', fontweight='bold', color=color)
         ax.legend(fontsize=7)
 
@@ -1536,36 +1550,26 @@ Anomaly Location:
         ax.plot(discrepancy, color=VIS_COLORS['student_dark'], lw=1)
         if len(anomaly_region) > 0:
             ax.axvspan(anomaly_region[0], anomaly_region[-1], alpha=0.2, color=VIS_COLORS['anomaly_region'])
-        self._highlight_masked_region(ax, patch_idx, len(discrepancy), label=None)
         ax.set_title(f'{title_prefix}: Discrepancy', fontweight='bold', color=color)
 
         # Column 3: Stats
         ax = axes_row[2]
         ax.axis('off')
 
-        stype_name = ['Pure Normal', 'Disturbing Normal', 'Anomaly'][sample_type]
         margin = score - threshold
-
-        # Get correct masked region for statistics
-        mask_start, mask_end = self._get_masked_region(patch_idx, len(point_labels))
-        anomaly_in_mask = sum(point_labels[mask_start:mask_end])
-        mask_size = mask_end - mask_start
 
         stats_text = f"""
 {title_prefix}
 ═══════════════════════════════
 
-Patch Idx:  {patch_idx}
+Point Idx:  {point_idx}
 Window Idx: {window_idx}
-Type:  {stype_name}
+Type:  {sample_type_label}
 Label: {'Anomaly' if label == 1 else 'Normal'}
 
 Score:     {score:.6f}
 Threshold: {threshold:.6f}
 Margin:    {margin:+.6f}
-
-Anomaly in masked region [{mask_start}:{mask_end}]:
-  {anomaly_in_mask} / {mask_size} points
         """
 
         ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
@@ -2504,10 +2508,11 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
         - Student Recon Only: student reconstruction error
         """
         labels = self.pred_data['labels']
-        recon_errors = self.pred_data['recon_errors']  # Teacher reconstruction
-        student_errors = self.pred_data['student_errors']  # Student reconstruction
-        discrepancies = self.pred_data['discrepancies']
-        combined_scores = self.pred_data['scores']  # Already computed with scoring_mode
+        combined_scores = self.pred_data['scores']
+        # Use point-level component scores if available, else patch-level
+        recon_errors = self.pred_data.get('point_recon', self.pred_data['recon_errors'])
+        student_errors = self.pred_data.get('point_student', self.pred_data['student_errors'])
+        discrepancies = self.pred_data.get('point_disc', self.pred_data['discrepancies'])
 
         fig, ax = plt.subplots(figsize=(10, 10))
 
@@ -2605,10 +2610,11 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
             print("  - best_model_roc_curve_PA80_comparison.png (SKIPPED: no segment info)")
             return
 
-        recon_errors = self.pred_data['recon_errors']
-        student_errors = self.pred_data['student_errors']
-        discrepancies = self.pred_data['discrepancies']
-        combined_scores = self.pred_data['scores']
+        # Use PATCH-level scores for voting (not point-level)
+        patch_recon = self.pred_data['recon_errors']
+        patch_student = self.pred_data['student_errors']
+        patch_disc = self.pred_data['discrepancies']
+        patch_combined = self.pred_data['patch_scores']
 
         # Get point-level data (use base dataset for signal-level attrs, subset-aware for window indices)
         total_length = len(base_dataset.point_labels)
@@ -2619,18 +2625,16 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
 
         num_patches = getattr(self.config, 'num_patches', 10)
 
-        # Determine if we're using patch-level scores based on actual data shape
-        first_scores = combined_scores
-        # Convert scores to 2D (n_windows, num_patches) for patch-level voting
+        # Convert patch-level scores to 2D (n_windows, num_patches) for voting
         def prepare_scores(scores):
             return scores.reshape(n_windows, num_patches)
 
         # Scoring methods to compare
         scoring_methods = [
-            ('Anomaly Score (combined)', prepare_scores(combined_scores), VIS_COLORS['total']),
-            ('Discrepancy Only', prepare_scores(discrepancies), VIS_COLORS['discrepancy']),
-            ('Teacher Recon Only', prepare_scores(recon_errors), VIS_COLORS['teacher']),
-            ('Student Recon Only', prepare_scores(student_errors), VIS_COLORS['student']),
+            ('Anomaly Score (combined)', prepare_scores(patch_combined), VIS_COLORS['total']),
+            ('Discrepancy Only', prepare_scores(patch_disc), VIS_COLORS['discrepancy']),
+            ('Teacher Recon Only', prepare_scores(patch_recon), VIS_COLORS['teacher']),
+            ('Student Recon Only', prepare_scores(patch_student), VIS_COLORS['student']),
         ]
 
         fig, ax = plt.subplots(figsize=(10, 10))
@@ -2733,42 +2737,45 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
         Args:
             experiment_dir: Path to experiment directory (optional, for compatibility)
         """
-        labels = self.pred_data['labels']
-        recon_errors = self.pred_data['recon_errors']
-        student_errors = self.pred_data['student_errors']
-        discrepancies = self.pred_data['discrepancies']
-        combined_scores = self.pred_data['scores']
-        sample_types = self.pred_data['sample_types']
+        labels = self.pred_data['labels']  # point-level
+        combined_scores = self.pred_data['scores']  # point-level
+        point_recon = self.pred_data.get('point_recon', combined_scores)
+        point_disc = self.pred_data.get('point_disc', combined_scores)
+        point_student = self.pred_data.get('point_student', combined_scores)
 
-        # Get anomaly_types from batches (batch[4] contains anomaly_type)
-        anomaly_types = []
-        try:
-            for batch in self.test_loader:
-                if len(batch) >= 5:
-                    anomaly_types.append(batch[4].numpy())
-            if anomaly_types:
-                anomaly_types = np.concatenate(anomaly_types)
-                # If all_patches mode, need to expand
-                if len(anomaly_types) != len(labels):
-                    num_patches = getattr(self.config, 'num_patches', 10)
-                    anomaly_types = np.repeat(anomaly_types, num_patches)
-            else:
-                anomaly_types = np.zeros_like(labels)
-        except Exception:
-            # Fallback: use zeros (can't distinguish anomaly types)
-            anomaly_types = np.zeros_like(labels)
-
-        # Scoring methods to compare
-        scoring_methods = [
-            ('Anomaly Score', combined_scores),
-            ('Discrepancy', discrepancies),
-            ('Teacher Recon', recon_errors),
-            ('Student Recon', student_errors),
-        ]
-
-        # Check if test_dataset has anomaly_regions for segment-based PA%K (handle Subset)
+        # Build point-level anomaly_types from anomaly_regions
         raw_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
         base_dataset = _unwrap_subset(raw_dataset) if raw_dataset is not None else None
+        total_length = len(labels)
+        anomaly_types = np.zeros(total_length, dtype=int)
+        if base_dataset is not None and hasattr(base_dataset, 'anomaly_regions'):
+            for region in base_dataset.anomaly_regions:
+                start = region.start
+                end = min(region.end, total_length)
+                anomaly_types[start:end] = region.anomaly_type
+
+        # Build point-level sample_types from point_labels
+        # 0=pure normal, 1=disturbing normal (not used at point-level), 2=anomaly
+        point_sample_types = np.zeros(total_length, dtype=int)
+        point_sample_types[labels == 1] = 2
+
+        # Scoring methods: point-level scores for threshold/detection,
+        # patch-level scores stored separately for voting
+        scoring_methods = [
+            ('Anomaly Score', combined_scores),
+            ('Discrepancy', point_disc),
+            ('Teacher Recon', point_recon),
+            ('Student Recon', point_student),
+        ]
+        # Patch-level scores for voting (keyed by scoring method name)
+        patch_scores_by_method = {
+            'Anomaly Score': self.pred_data.get('patch_scores'),
+            'Discrepancy': self.pred_data.get('discrepancies'),
+            'Teacher Recon': self.pred_data.get('recon_errors'),
+            'Student Recon': self.pred_data.get('student_errors'),
+        }
+
+        # Check if test_dataset has anomaly_regions for segment-based PA%K (handle Subset)
         can_use_segment_pa_k = (
             base_dataset is not None and
             hasattr(base_dataset, 'anomaly_regions') and
@@ -2820,9 +2827,12 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
                     type_masks[atype] = mask
 
                 # Process each scoring method using shared precomputed data
-                for score_name, sample_scores in scoring_methods:
-                    # Reshape to (n_windows, num_patches) for voting
-                    window_scores = sample_scores.reshape(n_windows, num_patches)
+                for score_name, _ in scoring_methods:
+                    # Use patch-level scores for voting
+                    patch_scores_flat = patch_scores_by_method.get(score_name)
+                    if patch_scores_flat is None or len(patch_scores_flat) != n_windows * num_patches:
+                        continue
+                    window_scores = patch_scores_flat.reshape(n_windows, num_patches)
 
                     # Generate thresholds for this method's score distribution
                     min_score, max_score = window_scores.min(), window_scores.max()
@@ -2889,13 +2899,13 @@ Anomaly in masked region [{mask_start}:{mask_end}]:
             normal_mean_score = 0.0
             disturbing_mean_score = 0.0
 
-            # Get pure_normal and disturbing_normal mean scores
-            pure_normal_mask = (sample_types == 0)
-            disturbing_mask = (sample_types == 1)
-            if pure_normal_mask.sum() > 0:
-                normal_mean_score = float(scores[pure_normal_mask].mean())
-            if disturbing_mask.sum() > 0:
-                disturbing_mean_score = float(scores[disturbing_mask].mean())
+            # Get normal mean scores (point-level: label==0 is normal)
+            normal_mask = (labels == 0)
+            anomaly_mask = (labels == 1)
+            if normal_mask.sum() > 0:
+                normal_mean_score = float(scores[normal_mask].mean())
+            if anomaly_mask.sum() > 0:
+                disturbing_mean_score = float(scores[anomaly_mask].mean())
 
             # Process each anomaly type (skip normal=0)
             for atype_idx in range(1, 10):  # anomaly types 1-9

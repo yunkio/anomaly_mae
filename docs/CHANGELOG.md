@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-01-30 (Update 42): Point-Level Evaluation Refactor
+
+### Summary
+
+Refactored all evaluation metrics from patch-level to point-level. Primary metrics (roc_auc, f1, precision, recall) now use point-level scores computed by mean-aggregating patch scores to physical timestamps. PA%K metrics use majority voting with the point-level threshold instead of independent threshold optimization per K.
+
+### Code Changes
+
+| Component | Changes |
+|-----------|---------|
+| `evaluator.py` | `evaluate()`, `evaluate_by_score_type()`, `get_performance_by_anomaly_type()` refactored to point-level; added `_compute_voted_point_predictions()` and `_compute_pa_k_f1_at_threshold()` helpers |
+| `visualization/base.py` | `collect_predictions()` and `collect_all_visualization_data()` now return point-level scores/labels as primary, with patch-level data retained for loss stats and voting |
+| `visualization/best_model_visualizer.py` | Updated ROC, threshold, detection examples, comparison plots to use point-level data; removed patch-level masked region highlighting from detection plots |
+| `run_ablation.py` | No changes needed — CSV column mapping auto-adapts via `**metrics` unpacking |
+
+### Documentation Changes
+
+| File | Changes |
+|------|---------|
+| ARCHITECTURE.md | Added "Point-Level Aggregation" section, clarified inference metrics |
+| VISUALIZATIONS.md | Updated inference mode description for point-level aggregation |
+| ABLATION_STUDIES.md | Clarified point-level labeling in evaluation strategy |
+
 ## 2026-01-29 (Update 41): Remove last_patch inference mode
 
 ### Summary
