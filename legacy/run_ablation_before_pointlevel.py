@@ -414,14 +414,6 @@ def compute_loss_statistics(detailed_losses: Dict) -> Dict:
     stats['disc_ratio_disturbing'] = stats['disc_anomaly'] / (stats['disc_disturbing'] + 1e-8)
     stats['recon_ratio'] = stats['recon_anomaly'] / (stats['recon_normal'] + 1e-8)
 
-    # SNR metrics (signal-to-noise ratio: mean_diff / sum_of_stds)
-    stats['disc_SNR'] = (stats['disc_anomaly'] - stats['disc_normal']) / (
-        stats['disc_anomaly_std'] + stats['disc_normal_std'] + 1e-8)
-    stats['disc_SNR_disturbing'] = (stats['disc_anomaly'] - stats['disc_disturbing']) / (
-        stats['disc_anomaly_std'] + stats['disc_disturbing_std'] + 1e-8)
-    stats['recon_SNR'] = (stats['recon_anomaly'] - stats['recon_normal']) / (
-        stats['recon_anomaly_std'] + stats['recon_normal_std'] + 1e-8)
-
     # Cohen's d separation metrics (higher = better separation)
     # Positive values mean anomaly has higher values than normal (expected behavior)
     if normal_mask.sum() > 0 and anomaly_mask.sum() > 0:
@@ -459,11 +451,6 @@ def _cpu_eval_worker(args):
     Runs in a separate process. Creates a dummy model + Evaluator with
     pre-populated cache, then runs scoring/metrics for all scoring modes.
     Saves per-experiment output files and returns summary records.
-
-    Uses DatasetMetadata instead of full SlidingWindowDataset to avoid
-    duplicating the windows array (~2-3 GB for large window sizes).
-    The evaluator only needs point_labels, window_start_indices, and
-    anomaly_regions for point-level PA%K — not the full windows data.
     """
     (cached_scores, config_dict, exp_name, mask_suffix, scoring_modes,
      signals, point_labels, anomaly_regions_ser,
@@ -484,29 +471,22 @@ def _cpu_eval_worker(args):
         for r in anomaly_regions_ser
     ]
 
-    # Create lightweight metadata (not full dataset) to avoid ~2-3 GB memory waste.
-    # Compute window_start_indices the same way SlidingWindowDataset does.
-    from mae_anomaly.evaluator import DatasetMetadata
-    total_length = len(signals)
-    train_end = int(total_length * config.sliding_window_train_ratio)
-    test_signals = signals[train_end:]
-    test_length = len(test_signals)
-    stride = config.sliding_window_test_stride
-    window_size = config.seq_length
-    n_windows = max(0, (test_length - window_size) // stride + 1)
-    window_start_indices = [train_end + i * stride for i in range(n_windows)]
-
-    dataset_meta = DatasetMetadata(
-        point_labels=point_labels,
-        window_start_indices=window_start_indices,
+    # Create test dataset/loader
+    test_dataset = SlidingWindowDataset(
+        signals=signals, point_labels=point_labels,
         anomaly_regions=anomaly_regions,
+        window_size=config.seq_length,
+        stride=config.sliding_window_test_stride,
+        mask_last_n=config.patch_size, split='test',
+        train_ratio=config.sliding_window_train_ratio,
+        seed=config.random_seed
     )
+    test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
     # Dummy model (CPU only, never called - cache already populated)
     dummy_model = SelfDistilledMAEMultivariate(config)
     dummy_model.eval()
-    # test_loader=None is safe because cache is pre-populated (no forward pass needed)
-    evaluator = Evaluator(dummy_model, config, test_loader=None, test_dataset=dataset_meta)
+    evaluator = Evaluator(dummy_model, config, test_loader, test_dataset=test_dataset)
     evaluator._cache['raw_scores'] = cached_scores
 
     all_results = {}
@@ -546,7 +526,7 @@ def _cpu_eval_worker(args):
                 'label': detailed_losses['labels'],
                 'sample_type': detailed_losses['sample_types'],
                 'anomaly_type': detailed_losses['anomaly_types'],
-                'anomaly_type_name': np.array(SLIDING_ANOMALY_TYPE_NAMES)[detailed_losses['anomaly_types'].astype(int)]
+                'anomaly_type_name': [SLIDING_ANOMALY_TYPE_NAMES[int(at)] for at in detailed_losses['anomaly_types']]
             })
             detailed_df.to_csv(os.path.join(output_dir, 'best_model_detailed.csv'), index=False)
 
@@ -592,6 +572,7 @@ def _cpu_eval_worker(args):
             'force_mask_anomaly': config_dict.get('force_mask_anomaly'),
             'margin_type': config_dict.get('margin_type'),
             'masking_ratio': config_dict.get('masking_ratio'),
+            'masking_strategy': config_dict.get('masking_strategy'),
             'seq_length': config_dict.get('seq_length'),
             'num_patches': config_dict.get('num_patches'),
             'patch_size': config_dict.get('patch_size'),
@@ -637,9 +618,6 @@ def _cpu_eval_worker(args):
             'disc_normal_std': loss_stats['disc_normal_std'],
             'disc_anomaly_std': loss_stats['disc_anomaly_std'],
             'disc_disturbing_std': loss_stats['disc_disturbing_std'],
-            'disc_SNR': loss_stats['disc_SNR'],
-            'disc_SNR_disturbing': loss_stats['disc_SNR_disturbing'],
-            'recon_SNR': loss_stats['recon_SNR'],
             'disc_only_roc_auc': disc_metrics.get('roc_auc', 0),
             'disc_only_f1_score': disc_metrics.get('f1_score', 0),
             'disc_only_pa_20_roc_auc': disc_metrics.get('pa_20_roc_auc', 0),
@@ -696,12 +674,8 @@ def _wait_for_slot():
 
 
 def _background_viz_worker(args):
-    """Worker function for background visualization (CPU-only).
-
-    Receives pre-collected pred_data and detailed_data from the main process
-    so no GPU is needed in the spawned process.
-    """
-    config_dict, pred_data, detailed_data, scoring_modes, output_dirs = args
+    """Worker function for background visualization."""
+    model_path, scoring_modes, output_dirs, num_test = args
 
     import traceback
     import sys
@@ -711,15 +685,9 @@ def _background_viz_worker(args):
         matplotlib.use('Agg')
 
         from mae_anomaly.visualization import (
-            setup_style, BestModelVisualizer,
+            setup_style, load_best_model, BestModelVisualizer,
+            collect_all_visualization_data
         )
-        from mae_anomaly import Config
-        from mae_anomaly.config import set_seed
-        from mae_anomaly.dataset_sliding import (
-            SlidingWindowDataset, SlidingWindowTimeSeriesGenerator,
-            NormalDataComplexity,
-        )
-        from torch.utils.data import DataLoader
 
         setup_style()
     except Exception as e:
@@ -728,37 +696,13 @@ def _background_viz_worker(args):
         return False
 
     try:
-        # Reconstruct config on CPU
-        config = Config()
-        for k, v in config_dict.items():
-            if hasattr(config, k):
-                setattr(config, k, v)
-        config.device = 'cpu'
+        print(f"[BG-VIZ] Loading model from {model_path}...", flush=True)
+        model, config, test_loader, _ = load_best_model(model_path, num_test)
 
-        # Reconstruct test_loader for BestModelVisualizer
-        # Use base Config for data generation (same as main loop),
-        # but experiment config for windowing parameters
-        base_cfg = Config()
-        set_seed(base_cfg.random_seed)
-        complexity = NormalDataComplexity(enable_complexity=False)
-        generator = SlidingWindowTimeSeriesGenerator(
-            total_length=base_cfg.sliding_window_total_length,
-            num_features=base_cfg.num_features,
-            interval_scale=base_cfg.anomaly_interval_scale,
-            complexity=complexity,
-            seed=base_cfg.random_seed
+        print(f"[BG-VIZ] Collecting all data for all_patches...", flush=True)
+        pred_data, detailed_data = collect_all_visualization_data(
+            model, test_loader, config
         )
-        signals, point_labels, anomaly_regions = generator.generate()
-        test_dataset = SlidingWindowDataset(
-            signals=signals, point_labels=point_labels,
-            anomaly_regions=anomaly_regions,
-            window_size=config.seq_length,
-            stride=config.sliding_window_test_stride,
-            mask_last_n=config.patch_size, split='test',
-            train_ratio=config.sliding_window_train_ratio,
-            seed=config.random_seed
-        )
-        test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
         invariant_plots = ['best_model_reconstruction.png', 'learning_curve.png', 'case_study_gallery.png']
 
@@ -782,7 +726,7 @@ def _background_viz_worker(args):
                     history = history_data.get('0', {})
 
             visualizer = BestModelVisualizer(
-                None, config, test_loader, viz_dir,
+                model, config, test_loader, viz_dir,
                 pred_data=pred_data.copy(),
                 detailed_data=detailed_data
             )
@@ -807,9 +751,6 @@ def _background_viz_worker(args):
                 visualizer.plot_performance_by_anomaly_type(exp_dir)
                 visualizer.plot_score_distribution_by_type(exp_dir)
                 visualizer.plot_score_contribution_epoch_trends(exp_dir, history)
-                visualizer.plot_roc_curve_comparison()
-                visualizer.plot_roc_curve_pa80_comparison()
-                visualizer.plot_performance_by_anomaly_type_comparison(exp_dir)
 
             print(f"[BG-VIZ] Completed {result_key}", flush=True)
 
@@ -823,22 +764,16 @@ def _background_viz_worker(args):
 
 
 def run_visualization_background(
-    config_dict: dict,
-    pred_data: dict,
-    detailed_data: dict,
+    model_path: str,
     scoring_modes: List[str],
     output_dirs: Dict[str, str],
+    num_test: int = 500
 ):
-    """Start visualization in background process (non-blocking, CPU-only).
-
-    GPU data collection must be done in the main process before calling this.
-    Pass pre-collected pred_data and detailed_data so the spawned process
-    needs no GPU access.
-    """
+    """Start visualization in background process (non-blocking)."""
     _wait_for_slot()
 
     ctx = mp.get_context('spawn')
-    args = (config_dict, pred_data, detailed_data, scoring_modes, output_dirs)
+    args = (model_path, scoring_modes, output_dirs, num_test)
     process = ctx.Process(target=_background_viz_worker, args=(args,))
     process.start()
     _background_viz_processes.append(process)
@@ -912,8 +847,7 @@ class SingleExperimentRunner:
         anomaly_regions: list,
         train_ratio: float = None,  # None = use config.sliding_window_train_ratio
         point_aggregation_method: str = 'voting',
-        scoring_modes: List[str] = None,
-        eval_only: bool = False
+        scoring_modes: List[str] = None
     ):
         self.exp_config = exp_config
         self.output_base_dir = output_base_dir
@@ -923,7 +857,6 @@ class SingleExperimentRunner:
         self._train_ratio_override = train_ratio  # Store override value
         self.point_aggregation_method = point_aggregation_method
         self.scoring_modes = scoring_modes or ['default']
-        self.eval_only = eval_only
 
     def _create_config(self) -> Config:
         """Create Config object from experiment configuration."""
@@ -951,10 +884,20 @@ class SingleExperimentRunner:
         config = self._create_config()
         set_seed(config.random_seed)
 
-        exp_name = self.exp_config.get('name', 'experiment')
-        mask_suffix = 'mask_after' if config.mask_after_encoder else 'mask_before'
-
         # No downsampling for test - use all windows with stride=1 for PA%K evaluation
+
+        train_dataset = SlidingWindowDataset(
+            signals=self.signals,
+            point_labels=self.point_labels,
+            anomaly_regions=self.anomaly_regions,
+            window_size=config.seq_length,
+            stride=config.sliding_window_stride,  # Train stride (default 11)
+            mask_last_n=config.patch_size,
+            split='train',
+            train_ratio=self.train_ratio,
+            seed=config.random_seed
+        )
+
         test_dataset = SlidingWindowDataset(
             signals=self.signals,
             point_labels=self.point_labels,
@@ -966,62 +909,25 @@ class SingleExperimentRunner:
             train_ratio=self.train_ratio,
             seed=config.random_seed
         )
+
+        train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
-        if self.eval_only:
-            # Load saved model
-            first_dir = os.path.join(
-                self.output_base_dir,
-                f"{exp_name}_{mask_suffix}_{self.scoring_modes[0]}_all"
-            )
-            model_path = os.path.join(first_dir, 'best_model.pt')
-            if not os.path.exists(model_path):
-                print(f"  SKIP (no model at {model_path})")
-                return {}
+        # Set primary scoring mode BEFORE training
+        config.anomaly_score_mode = self.scoring_modes[0]
 
-            checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
-            # Restore config from checkpoint
-            for key, value in checkpoint['config'].items():
-                if hasattr(config, key):
-                    setattr(config, key, value)
-            model = SelfDistilledMAEMultivariate(config)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            model = model.to(config.device)
-            model.eval()
-            train_time = 0
+        train_start = time.time()
+        model = SelfDistilledMAEMultivariate(config)
+        trainer = Trainer(model, config, train_loader, test_loader, verbose=False)
+        trainer.train()
+        train_time = time.time() - train_start
 
-            # Load training history if available
-            hist_path = os.path.join(first_dir, 'training_histories.json')
-            history = None
-            if os.path.exists(hist_path):
-                with open(hist_path) as f:
-                    hist_data = json.load(f)
-                    history = hist_data.get('0')
-        else:
-            train_dataset = SlidingWindowDataset(
-                signals=self.signals,
-                point_labels=self.point_labels,
-                anomaly_regions=self.anomaly_regions,
-                window_size=config.seq_length,
-                stride=config.sliding_window_stride,
-                mask_last_n=config.patch_size,
-                split='train',
-                train_ratio=self.train_ratio,
-                seed=config.random_seed
-            )
-            train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
-
-            # Set primary scoring mode BEFORE training
-            config.anomaly_score_mode = self.scoring_modes[0]
-
-            train_start = time.time()
-            model = SelfDistilledMAEMultivariate(config)
-            trainer = Trainer(model, config, train_loader, test_loader, verbose=False)
-            trainer.train()
-            train_time = time.time() - train_start
-            history = trainer.history
+        history = trainer.history
 
         all_results = {}
+        exp_name = self.exp_config.get('name', 'experiment')
+        mask_suffix = 'mask_after' if config.mask_after_encoder else 'mask_before'
+
         evaluator = Evaluator(model, config, test_loader, test_dataset=test_dataset)
 
         for scoring_mode in self.scoring_modes:
@@ -1045,13 +951,12 @@ class SingleExperimentRunner:
             )
             os.makedirs(output_dir, exist_ok=True)
 
-            # Save model (skip in eval_only mode)
-            if not self.eval_only:
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'config': asdict(config),
-                    'metrics': metrics
-                }, os.path.join(output_dir, 'best_model.pt'))
+            # Save model
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'config': asdict(config),
+                'metrics': metrics
+            }, os.path.join(output_dir, 'best_model.pt'))
 
             # Save config
             with open(os.path.join(output_dir, 'best_config.json'), 'w') as f:
@@ -1070,7 +975,7 @@ class SingleExperimentRunner:
                 'label': detailed_losses['labels'],
                 'sample_type': detailed_losses['sample_types'],
                 'anomaly_type': detailed_losses['anomaly_types'],
-                'anomaly_type_name': np.array(SLIDING_ANOMALY_TYPE_NAMES)[detailed_losses['anomaly_types'].astype(int)]
+                'anomaly_type_name': [SLIDING_ANOMALY_TYPE_NAMES[int(at)] for at in detailed_losses['anomaly_types']]
             })
             detailed_df.to_csv(os.path.join(output_dir, 'best_model_detailed.csv'), index=False)
 
@@ -1108,10 +1013,6 @@ class SingleExperimentRunner:
                 'train_time': train_time,
                 'eval_time': eval_time,
             }
-
-        # Free GPU memory
-        del model, evaluator
-        torch.cuda.empty_cache()
 
         return all_results
 
@@ -1278,8 +1179,7 @@ def run_ablation_study(
                     signals=signals,
                     point_labels=point_labels,
                     anomaly_regions=anomaly_regions,
-                    scoring_modes=scoring_modes,
-                    eval_only=eval_only
+                    scoring_modes=scoring_modes
                 )
 
                 results = runner.run()
@@ -1315,6 +1215,7 @@ def run_ablation_study(
                         'force_mask_anomaly': cfg.get('force_mask_anomaly'),
                         'margin_type': cfg.get('margin_type'),
                         'masking_ratio': cfg.get('masking_ratio'),
+                        'masking_strategy': cfg.get('masking_strategy'),
                         'seq_length': cfg.get('seq_length'),
                         'num_patches': cfg.get('num_patches'),
                         'patch_size': cfg.get('patch_size'),
@@ -1360,9 +1261,6 @@ def run_ablation_study(
                         'disc_normal_std': loss_stats['disc_normal_std'],
                         'disc_anomaly_std': loss_stats['disc_anomaly_std'],
                         'disc_disturbing_std': loss_stats['disc_disturbing_std'],
-                        'disc_SNR': loss_stats['disc_SNR'],
-                        'disc_SNR_disturbing': loss_stats['disc_SNR_disturbing'],
-                        'recon_SNR': loss_stats['recon_SNR'],
                         'disc_only_roc_auc': result.get('disc_metrics', {}).get('roc_auc', 0),
                         'disc_only_f1_score': result.get('disc_metrics', {}).get('f1_score', 0),
                         'disc_only_pa_20_roc_auc': result.get('disc_metrics', {}).get('pa_20_roc_auc', 0),
@@ -1567,32 +1465,9 @@ def _run_parallel_mode(
                     )
                     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
-                    # Single GPU forward pass
+                    # GPU forward pass
                     evaluator = Evaluator(model, config, test_loader, test_dataset=test_dataset)
                     t_fwd = time.time()
-
-                    if enable_viz:
-                        # Collect both eval scores and viz data in one pass
-                        from mae_anomaly.visualization import collect_all_visualization_data
-                        viz_pred_data, viz_detailed_data = collect_all_visualization_data(
-                            model, test_loader, config
-                        )
-                        n_win = viz_pred_data['n_windows']
-                        num_p = viz_pred_data['num_patches']
-                        evaluator.set_precomputed_patch_scores(
-                            recon_patches=viz_pred_data['recon_errors'].reshape(n_win, num_p),
-                            disc_patches=viz_pred_data['discrepancies'].reshape(n_win, num_p),
-                            student_recon_patches=viz_pred_data['student_errors'].reshape(n_win, num_p),
-                            labels=viz_detailed_data['labels'],
-                            sample_types=viz_detailed_data['sample_types'],
-                            anomaly_types=viz_detailed_data['anomaly_types'],
-                        )
-                    else:
-                        # Eval-only: use evaluator's own forward pass (no viz data overhead)
-                        viz_pred_data = None
-                        viz_detailed_data = None
-                        evaluator._get_cached_scores()
-
                     cached = evaluator._get_cached_scores()
                     t_fwd = time.time() - t_fwd
 
@@ -1601,9 +1476,6 @@ def _run_parallel_mode(
                         k: v.copy() if isinstance(v, np.ndarray) else v
                         for k, v in cached.items()
                     }
-                    # Free evaluator cache to reduce peak memory
-                    del evaluator._cache
-                    torch.cuda.empty_cache()
 
                     config_dict = asdict(config)
 
@@ -1636,18 +1508,19 @@ def _run_parallel_mode(
                     train_str = f"train={train_time:.0f}s " if not eval_only else ""
                     print(f"{train_str}fwd={t_fwd:.1f}s -> pool (seq={config.seq_length} p={config.num_patches})")
 
-                    # Start background visualization (CPU-only, data already collected)
-                    if enable_viz and background_viz:
+                    # Start background visualization
+                    if enable_viz and background_viz and not eval_only:
+                        first_dir = os.path.join(output_dir, f"{exp_name}_{mask_suffix}_{scoring_modes[0]}_all")
+                        model_path = os.path.join(first_dir, 'best_model.pt')
                         output_dirs_map = {
                             f"{sm}_all": os.path.join(output_dir, f"{exp_name}_{mask_suffix}_{sm}_all")
                             for sm in scoring_modes
                         }
                         run_visualization_background(
-                            config_dict=config_dict,
-                            pred_data=viz_pred_data,
-                            detailed_data=viz_detailed_data,
+                            model_path=model_path,
                             scoring_modes=scoring_modes,
                             output_dirs=output_dirs_map,
+                            num_test=500
                         )
 
                 except Exception as e:

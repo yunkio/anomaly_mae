@@ -33,7 +33,6 @@ from mae_anomaly import (
     ANOMALY_TYPE_NAMES, FEATURE_NAMES,
 )
 from mae_anomaly.dataset_sliding import ANOMALY_TYPE_CONFIGS
-from mae_anomaly.evaluator import aggregate_patch_scores_to_point_level
 
 
 # =============================================================================
@@ -325,7 +324,7 @@ def load_best_model(model_path: str, num_test: int = 2000, use_complexity: bool 
 
     print(f"  Test dataset: {len(test_dataset)} samples")
 
-    return model, config, test_loader, test_dataset, metrics
+    return model, config, test_loader, metrics
 
 
 # =============================================================================
@@ -447,7 +446,7 @@ def collect_predictions(model, dataloader, config) -> Dict:
             all_discrepancies.append(disc_flat)
             all_sample_types.append(sample_types_expanded.numpy())
 
-    # Concatenate all raw scores (patch-level, flattened)
+    # Concatenate all raw scores
     recon_all = np.concatenate(all_recon_errors)
     disc_all = np.concatenate(all_discrepancies)
     student_all = np.concatenate(all_student_errors)
@@ -456,7 +455,11 @@ def collect_predictions(model, dataloader, config) -> Dict:
 
     # Apply scoring formula GLOBALLY (consistent with evaluator._apply_scoring_formula)
     score_mode = getattr(config, 'anomaly_score_mode', 'default')
-    if score_mode == 'adaptive':
+    if score_mode == 'normalized':
+        recon_z = (recon_all - recon_all.mean()) / (recon_all.std() + 1e-4)
+        disc_z = (disc_all - disc_all.mean()) / (disc_all.std() + 1e-4)
+        scores_all = recon_z + disc_z
+    elif score_mode == 'adaptive':
         adaptive_lambda = recon_all.mean() / (disc_all.mean() + 1e-4)
         scores_all = recon_all + adaptive_lambda * disc_all
     elif score_mode == 'ratio_weighted':
@@ -465,78 +468,14 @@ def collect_predictions(model, dataloader, config) -> Dict:
     else:  # default
         scores_all = recon_all + config.lambda_disc * disc_all
 
-    n_windows = len(scores_all) // num_patches
-
-    result = {
-        'patch_scores': scores_all,
-        'patch_labels': labels_all,
-        'recon_errors': recon_all,
-        'student_errors': student_all,
-        'discrepancies': disc_all,
-        'sample_types': sample_types_all,
-        'n_windows': n_windows,
-        'num_patches': num_patches,
-        'patch_size': patch_size,
-        'seq_length': config.seq_length,
+    return {
+        'scores': scores_all,
+        'labels': labels_all,
+        'recon_errors': recon_all,           # Teacher reconstruction error
+        'student_errors': student_all,       # Student reconstruction error
+        'discrepancies': disc_all,           # Teacher-student difference
+        'sample_types': sample_types_all
     }
-
-    # Point-level aggregation
-    dataset = dataloader.dataset
-    from torch.utils.data import Subset
-    base_dataset = dataset
-    while isinstance(base_dataset, Subset):
-        base_dataset = base_dataset.dataset
-
-    if hasattr(base_dataset, 'window_start_indices') and hasattr(base_dataset, 'point_labels'):
-        ws_indices = np.array(base_dataset.window_start_indices)
-        pt_labels_full = np.array(base_dataset.point_labels)
-        total_len = len(pt_labels_full)
-
-        if isinstance(dataset, Subset):
-            ws_indices = ws_indices[np.array(dataset.indices)]
-
-        patch_scores_2d = scores_all.reshape(n_windows, num_patches)
-        patch_recon_2d = recon_all.reshape(n_windows, num_patches)
-        patch_disc_2d = disc_all.reshape(n_windows, num_patches)
-
-        point_scores, _ = aggregate_patch_scores_to_point_level(
-            patch_scores_2d, ws_indices, config.seq_length,
-            patch_size, num_patches, total_len, method='mean'
-        )
-        point_recon, _ = aggregate_patch_scores_to_point_level(
-            patch_recon_2d, ws_indices, config.seq_length,
-            patch_size, num_patches, total_len, method='mean'
-        )
-        point_disc, _ = aggregate_patch_scores_to_point_level(
-            patch_disc_2d, ws_indices, config.seq_length,
-            patch_size, num_patches, total_len, method='mean'
-        )
-        patch_student_2d = student_all.reshape(n_windows, num_patches)
-        point_student, _ = aggregate_patch_scores_to_point_level(
-            patch_student_2d, ws_indices, config.seq_length,
-            patch_size, num_patches, total_len, method='mean'
-        )
-        point_scores = np.nan_to_num(point_scores, nan=0.0)
-        point_recon = np.nan_to_num(point_recon, nan=0.0)
-        point_disc = np.nan_to_num(point_disc, nan=0.0)
-        point_student = np.nan_to_num(point_student, nan=0.0)
-
-        result['point_scores'] = point_scores
-        result['point_labels'] = pt_labels_full
-        result['point_recon'] = point_recon
-        result['point_disc'] = point_disc
-        result['point_student'] = point_student
-        result['scores'] = point_scores
-        result['labels'] = pt_labels_full
-        result['window_start_indices'] = ws_indices
-        result['total_length'] = total_len
-        result['patch_recon_2d'] = patch_recon_2d
-        result['patch_disc_2d'] = patch_disc_2d
-    else:
-        result['scores'] = scores_all
-        result['labels'] = labels_all
-
-    return result
 
 
 def compute_score_contributions(
@@ -569,7 +508,32 @@ def compute_score_contributions(
 
     mode_params = {'score_mode': score_mode}
 
-    if score_mode == 'adaptive':
+    if score_mode == 'normalized':
+        # Z-score normalization
+        recon_mean, recon_std = recon_all.mean(), recon_all.std() + 1e-8
+        disc_mean, disc_std = disc_all.mean(), disc_all.std() + 1e-8
+        recon_z = (recon_all - recon_mean) / recon_std
+        disc_z = (disc_all - disc_mean) / disc_std
+        scores = recon_z + disc_z
+
+        # Min-shift for visualization: shift both to start from 0
+        # This preserves relative differences while making interpretation intuitive
+        min_val = min(recon_z.min(), disc_z.min())
+        recon_contrib = recon_z - min_val
+        disc_contrib = disc_z - min_val
+
+        # Contribution ratios based on shifted (non-negative) values
+        total = recon_contrib + disc_contrib + 1e-8
+        recon_ratio = recon_contrib / total
+        disc_ratio = disc_contrib / total
+
+        mode_params.update({
+            'recon_mean': recon_mean, 'recon_std': recon_std,
+            'disc_mean': disc_mean, 'disc_std': disc_std,
+            'min_shift': min_val
+        })
+
+    elif score_mode == 'adaptive':
         # Auto-scale lambda based on mean values
         adaptive_lambda = recon_all.mean() / (disc_all.mean() + 1e-8)
         recon_contrib = recon_all
@@ -641,23 +605,16 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
     patch_size = getattr(config, 'patch_size', 10)
     num_patches = getattr(config, 'num_patches', 10)
 
+    all_teacher_errors = []
+    all_student_errors = []
     all_discrepancies = []
+    all_masks = []
     all_labels = []
     all_point_labels = []
     all_originals = []
     all_teacher_recons = []
     all_student_recons = []
     all_sample_types = []
-
-    # Running sums for error statistics (replaces full teacher_errors/student_errors arrays)
-    _teacher_err_normal_sum = 0.0
-    _teacher_err_normal_count = 0
-    _teacher_err_anomaly_sum = 0.0
-    _teacher_err_anomaly_count = 0
-    _student_err_normal_sum = 0.0
-    _student_err_normal_count = 0
-    _student_err_anomaly_sum = 0.0
-    _student_err_anomaly_count = 0
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Collecting detailed data"):
@@ -672,9 +629,8 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
             teacher_error_final = torch.zeros(batch_size, seq_length, device=device)
             student_error_final = torch.zeros(batch_size, seq_length, device=device)
             discrepancy_final = torch.zeros(batch_size, seq_length, device=device)
-            # Store only feature 0 for visualization (saves 87.5% memory for 8-feature data)
-            teacher_recon_final = torch.zeros(batch_size, seq_length, device=device)
-            student_recon_final = torch.zeros(batch_size, seq_length, device=device)
+            teacher_recon_final = torch.zeros_like(sequences)
+            student_recon_final = torch.zeros_like(sequences)
 
             # Process patches in batches
             for batch_start in range(0, num_patches, patch_batch_size):
@@ -714,47 +670,35 @@ def collect_detailed_data(model, dataloader, config) -> Dict:
                     teacher_error_final[:, start_pos:end_pos] = teacher_error[:, i, start_pos:end_pos]
                     student_error_final[:, start_pos:end_pos] = student_error[:, i, start_pos:end_pos]
                     discrepancy_final[:, start_pos:end_pos] = discrepancy[:, i, start_pos:end_pos]
-                    teacher_recon_final[:, start_pos:end_pos] = teacher_output[:, i, start_pos:end_pos, 0]
-                    student_recon_final[:, start_pos:end_pos] = student_output[:, i, start_pos:end_pos, 0]
+                    teacher_recon_final[:, start_pos:end_pos] = teacher_output[:, i, start_pos:end_pos]
+                    student_recon_final[:, start_pos:end_pos] = student_output[:, i, start_pos:end_pos]
 
                 # Clear intermediate tensors to free memory
                 del expanded, masks, teacher_output, student_output, teacher_error, student_error, discrepancy
 
-            # Accumulate error statistics instead of storing full arrays
-            te_cpu = teacher_error_final.cpu()
-            se_cpu = student_error_final.cpu()
-            normal_mask_batch = (window_labels == 0)
-            anomaly_mask_batch = (window_labels == 1)
-            if normal_mask_batch.any():
-                _teacher_err_normal_sum += te_cpu[normal_mask_batch].sum().item()
-                _teacher_err_normal_count += te_cpu[normal_mask_batch].numel()
-                _student_err_normal_sum += se_cpu[normal_mask_batch].sum().item()
-                _student_err_normal_count += se_cpu[normal_mask_batch].numel()
-            if anomaly_mask_batch.any():
-                _teacher_err_anomaly_sum += te_cpu[anomaly_mask_batch].sum().item()
-                _teacher_err_anomaly_count += te_cpu[anomaly_mask_batch].numel()
-                _student_err_anomaly_sum += se_cpu[anomaly_mask_batch].sum().item()
-                _student_err_anomaly_count += se_cpu[anomaly_mask_batch].numel()
-            del te_cpu, se_cpu
+            # Combined mask (all positions were masked at some point)
+            combined_mask = torch.zeros(batch_size, seq_length, device=device)
 
+            all_teacher_errors.append(teacher_error_final.cpu().numpy())
+            all_student_errors.append(student_error_final.cpu().numpy())
             all_discrepancies.append(discrepancy_final.cpu().numpy())
+            all_masks.append(combined_mask.cpu().numpy())
             all_labels.append(window_labels.numpy())
             all_point_labels.append(point_labels.numpy())
-            all_originals.append(sequences[:, :, 0].cpu().numpy())  # feature 0 only
+            all_originals.append(sequences.cpu().numpy())
             all_teacher_recons.append(teacher_recon_final.cpu().numpy())
             all_student_recons.append(student_recon_final.cpu().numpy())
             all_sample_types.append(sample_types.numpy())
     return {
-        'teacher_err_normal_mean': np.float64(_teacher_err_normal_sum / max(_teacher_err_normal_count, 1)),
-        'teacher_err_anomaly_mean': np.float64(_teacher_err_anomaly_sum / max(_teacher_err_anomaly_count, 1)),
-        'student_err_normal_mean': np.float64(_student_err_normal_sum / max(_student_err_normal_count, 1)),
-        'student_err_anomaly_mean': np.float64(_student_err_anomaly_sum / max(_student_err_anomaly_count, 1)),
+        'teacher_errors': np.concatenate(all_teacher_errors),
+        'student_errors': np.concatenate(all_student_errors),
         'discrepancies': np.concatenate(all_discrepancies),
+        'masks': np.concatenate(all_masks),
         'labels': np.concatenate(all_labels),
         'point_labels': np.concatenate(all_point_labels),
-        'originals': np.concatenate(all_originals),           # 2D: (N, seq_length) feature 0 only
-        'teacher_recons': np.concatenate(all_teacher_recons),  # 2D: (N, seq_length) feature 0 only
-        'student_recons': np.concatenate(all_student_recons),  # 2D: (N, seq_length) feature 0 only
+        'originals': np.concatenate(all_originals),
+        'teacher_recons': np.concatenate(all_teacher_recons),
+        'student_recons': np.concatenate(all_student_recons),
         'sample_types': np.concatenate(all_sample_types),
     }
 
@@ -793,28 +737,21 @@ def collect_all_visualization_data(model, dataloader, config) -> Tuple[Dict, Dic
     all_discrepancies_pred = []
     all_sample_types_pred = []
 
-    # Detailed data collectors (memory-optimized: feature 0 only, no full error arrays)
+    # Detailed data collectors
+    all_teacher_errors_det = []
+    all_student_errors_det = []
     all_discrepancies_det = []
+    all_masks = []
     all_det_labels = []
     all_point_labels = []
-    all_originals = []       # feature 0 only (2D) for visualization
-    all_teacher_recons = []  # feature 0 only (2D) for visualization
-    all_student_recons = []  # feature 0 only (2D) for visualization
+    all_originals = []
+    all_teacher_recons = []
+    all_student_recons = []
     all_sample_types_det = []
-    all_anomaly_types_det = []
-    # Running sums for summary statistics (replaces full teacher_errors/student_errors arrays)
-    _teacher_err_normal_sum = 0.0
-    _teacher_err_normal_count = 0
-    _teacher_err_anomaly_sum = 0.0
-    _teacher_err_anomaly_count = 0
-    _student_err_normal_sum = 0.0
-    _student_err_normal_count = 0
-    _student_err_anomaly_sum = 0.0
-    _student_err_anomaly_count = 0
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Collecting all data"):
-            sequences, window_labels, point_labels, sample_types, anomaly_types = batch
+            sequences, window_labels, point_labels, sample_types, _ = batch
             sequences = sequences.to(device)
             batch_size, seq_length, num_features = sequences.shape
 
@@ -830,9 +767,8 @@ def collect_all_visualization_data(model, dataloader, config) -> Tuple[Dict, Dic
             teacher_error_final = torch.zeros(batch_size, seq_length, device=device)
             student_error_final = torch.zeros(batch_size, seq_length, device=device)
             discrepancy_final = torch.zeros(batch_size, seq_length, device=device)
-            # Store only feature 0 for visualization (saves 87.5% memory for 8-feature data)
-            teacher_recon_final = torch.zeros(batch_size, seq_length, device=device)
-            student_recon_final = torch.zeros(batch_size, seq_length, device=device)
+            teacher_recon_final = torch.zeros_like(sequences)
+            student_recon_final = torch.zeros_like(sequences)
 
             # Process patches in batches (SINGLE forward pass per batch)
             for batch_start in range(0, num_patches, patch_batch_size):
@@ -881,9 +817,8 @@ def collect_all_visualization_data(model, dataloader, config) -> Tuple[Dict, Dic
                     teacher_error_final[:, start_pos:end_pos] = recon_error_view[:, i, start_pos:end_pos]
                     student_error_final[:, start_pos:end_pos] = student_error_view[:, i, start_pos:end_pos]
                     discrepancy_final[:, start_pos:end_pos] = discrepancy_view[:, i, start_pos:end_pos]
-                    # Feature 0 only for visualization
-                    teacher_recon_final[:, start_pos:end_pos] = teacher_output_view[:, i, start_pos:end_pos, 0]
-                    student_recon_final[:, start_pos:end_pos] = student_output_view[:, i, start_pos:end_pos, 0]
+                    teacher_recon_final[:, start_pos:end_pos] = teacher_output_view[:, i, start_pos:end_pos]
+                    student_recon_final[:, start_pos:end_pos] = student_output_view[:, i, start_pos:end_pos]
 
                 # Clear intermediate tensors
                 del expanded, masks, teacher_output, student_output, recon_error, student_error, discrepancy
@@ -917,135 +852,38 @@ def collect_all_visualization_data(model, dataloader, config) -> Tuple[Dict, Dic
             all_sample_types_pred.append(sample_types_expanded.numpy())
 
             # === Detailed data processing ===
-            # Accumulate error statistics instead of full arrays (saves ~0.33GB for window_500)
-            normal_mask_batch = (window_labels == 0)
-            anomaly_mask_batch = (window_labels == 1)
-            te_cpu = teacher_error_final.cpu()
-            se_cpu = student_error_final.cpu()
-            if normal_mask_batch.any():
-                _teacher_err_normal_sum += te_cpu[normal_mask_batch].sum().item()
-                _teacher_err_normal_count += te_cpu[normal_mask_batch].numel()
-                _student_err_normal_sum += se_cpu[normal_mask_batch].sum().item()
-                _student_err_normal_count += se_cpu[normal_mask_batch].numel()
-            if anomaly_mask_batch.any():
-                _teacher_err_anomaly_sum += te_cpu[anomaly_mask_batch].sum().item()
-                _teacher_err_anomaly_count += te_cpu[anomaly_mask_batch].numel()
-                _student_err_anomaly_sum += se_cpu[anomaly_mask_batch].sum().item()
-                _student_err_anomaly_count += se_cpu[anomaly_mask_batch].numel()
-            del te_cpu, se_cpu
-
+            combined_mask = torch.zeros(batch_size, seq_length, device=device)
+            all_teacher_errors_det.append(teacher_error_final.cpu().numpy())
+            all_student_errors_det.append(student_error_final.cpu().numpy())
             all_discrepancies_det.append(discrepancy_final.cpu().numpy())
+            all_masks.append(combined_mask.cpu().numpy())
             all_det_labels.append(window_labels.numpy())
             all_point_labels.append(point_labels.numpy())
-            all_originals.append(sequences[:, :, 0].cpu().numpy())  # feature 0 only
+            all_originals.append(sequences.cpu().numpy())
             all_teacher_recons.append(teacher_recon_final.cpu().numpy())
             all_student_recons.append(student_recon_final.cpu().numpy())
             all_sample_types_det.append(sample_types.numpy())
-            all_anomaly_types_det.append(anomaly_types.numpy())
-
-    # Patch-level arrays (flattened: n_windows * num_patches)
-    scores_flat = np.concatenate(all_scores)
-    labels_flat = np.concatenate(all_pred_labels)
-    recon_flat = np.concatenate(all_recon_errors)
-    student_flat = np.concatenate(all_student_errors_pred)
-    disc_flat = np.concatenate(all_discrepancies_pred)
-    sample_types_flat = np.concatenate(all_sample_types_pred)
-
-    # Compute n_windows for reshaping
-    n_windows = len(scores_flat) // num_patches
 
     pred_data = {
-        # Patch-level (flattened) — kept for recompute_scores and loss stats
-        'patch_scores': scores_flat,
-        'patch_labels': labels_flat,
-        'recon_errors': recon_flat,
-        'student_errors': student_flat,
-        'discrepancies': disc_flat,
-        'sample_types': sample_types_flat,
-        # Metadata for re-aggregation
-        'n_windows': n_windows,
-        'num_patches': num_patches,
-        'patch_size': patch_size,
-        'seq_length': config.seq_length,
+        'scores': np.concatenate(all_scores),
+        'labels': np.concatenate(all_pred_labels),
+        'recon_errors': np.concatenate(all_recon_errors),
+        'student_errors': np.concatenate(all_student_errors_pred),
+        'discrepancies': np.concatenate(all_discrepancies_pred),
+        'sample_types': np.concatenate(all_sample_types_pred)
     }
 
-    # Point-level aggregation (if dataset has window_start_indices)
-    dataset = dataloader.dataset
-    # Unwrap Subset if needed
-    from torch.utils.data import Subset
-    base_dataset = dataset
-    while isinstance(base_dataset, Subset):
-        base_dataset = base_dataset.dataset
-
-    if hasattr(base_dataset, 'window_start_indices') and hasattr(base_dataset, 'point_labels'):
-        ws_indices = np.array(base_dataset.window_start_indices)
-        pt_labels_full = np.array(base_dataset.point_labels)
-        total_len = len(pt_labels_full)
-
-        # Handle Subset: only use the subset's window indices
-        if isinstance(dataset, Subset):
-            ws_indices = ws_indices[np.array(dataset.indices)]
-
-        # Reshape patch scores to (n_windows, num_patches) for aggregation
-        patch_scores_2d = scores_flat.reshape(n_windows, num_patches)
-        patch_recon_2d = recon_flat.reshape(n_windows, num_patches)
-        patch_disc_2d = disc_flat.reshape(n_windows, num_patches)
-
-        point_scores, _ = aggregate_patch_scores_to_point_level(
-            patch_scores_2d, ws_indices, config.seq_length,
-            patch_size, num_patches, total_len, method='mean'
-        )
-        point_scores = np.nan_to_num(point_scores, nan=0.0)
-
-        # Also aggregate component scores to point-level
-        point_recon, _ = aggregate_patch_scores_to_point_level(
-            patch_recon_2d, ws_indices, config.seq_length,
-            patch_size, num_patches, total_len, method='mean'
-        )
-        point_disc, _ = aggregate_patch_scores_to_point_level(
-            patch_disc_2d, ws_indices, config.seq_length,
-            patch_size, num_patches, total_len, method='mean'
-        )
-        patch_student_2d = student_flat.reshape(n_windows, num_patches)
-        point_student, _ = aggregate_patch_scores_to_point_level(
-            patch_student_2d, ws_indices, config.seq_length,
-            patch_size, num_patches, total_len, method='mean'
-        )
-        point_recon = np.nan_to_num(point_recon, nan=0.0)
-        point_disc = np.nan_to_num(point_disc, nan=0.0)
-        point_student = np.nan_to_num(point_student, nan=0.0)
-
-        pred_data['point_scores'] = point_scores
-        pred_data['point_labels'] = pt_labels_full
-        pred_data['point_recon'] = point_recon
-        pred_data['point_disc'] = point_disc
-        pred_data['point_student'] = point_student
-        pred_data['scores'] = point_scores          # Primary: point-level
-        pred_data['labels'] = pt_labels_full         # Primary: point-level
-        pred_data['window_start_indices'] = ws_indices
-        pred_data['total_length'] = total_len
-        # Store 2D patch arrays for recompute_scores re-aggregation
-        pred_data['patch_recon_2d'] = patch_recon_2d
-        pred_data['patch_disc_2d'] = patch_disc_2d
-        pred_data['patch_student_2d'] = patch_student_2d
-    else:
-        # Fallback: use patch-level as scores/labels
-        pred_data['scores'] = scores_flat
-        pred_data['labels'] = labels_flat
-
     detailed_data = {
-        'teacher_err_normal_mean': np.float64(_teacher_err_normal_sum / max(_teacher_err_normal_count, 1)),
-        'teacher_err_anomaly_mean': np.float64(_teacher_err_anomaly_sum / max(_teacher_err_anomaly_count, 1)),
-        'student_err_normal_mean': np.float64(_student_err_normal_sum / max(_student_err_normal_count, 1)),
-        'student_err_anomaly_mean': np.float64(_student_err_anomaly_sum / max(_student_err_anomaly_count, 1)),
+        'teacher_errors': np.concatenate(all_teacher_errors_det),
+        'student_errors': np.concatenate(all_student_errors_det),
         'discrepancies': np.concatenate(all_discrepancies_det),
+        'masks': np.concatenate(all_masks),
         'labels': np.concatenate(all_det_labels),
         'point_labels': np.concatenate(all_point_labels),
-        'originals': np.concatenate(all_originals),           # 2D: (N, seq_length) feature 0 only
-        'teacher_recons': np.concatenate(all_teacher_recons),  # 2D: (N, seq_length) feature 0 only
-        'student_recons': np.concatenate(all_student_recons),  # 2D: (N, seq_length) feature 0 only
+        'originals': np.concatenate(all_originals),
+        'teacher_recons': np.concatenate(all_teacher_recons),
+        'student_recons': np.concatenate(all_student_recons),
         'sample_types': np.concatenate(all_sample_types_det),
-        'anomaly_types': np.concatenate(all_anomaly_types_det),  # (n_windows,) for evaluator cache
     }
 
     return pred_data, detailed_data

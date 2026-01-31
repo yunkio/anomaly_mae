@@ -295,6 +295,79 @@ class SelfDistilledMAEMultivariate(nn.Module):
 
         return x_masked, mask
 
+    def feature_wise_masking(
+        self,
+        x: torch.Tensor,
+        x_raw: torch.Tensor,
+        masking_ratio: float,
+        point_labels: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Feature-wise masking: mask each feature independently at different PATCHES
+
+        Each feature is masked at different patch positions independently.
+        Example with 5 patches:
+            F0: [██, ░░, ██, ░░, ██]  (patches 1,3 masked)
+            F1: [░░, ██, ░░, ██, ██]  (patches 0,2 masked)
+            F2: [██, ██, ░░, ░░, ██]  (patches 2,3 masked)
+
+        Args:
+            x: (seq_len, batch_size, d_model) - embedded input (seq_len = num_patches)
+            x_raw: (batch_size, seq_length, num_features) - raw input
+            masking_ratio: ratio of patches to mask per feature
+            point_labels: (batch_size, seq_length) for force_mask_anomaly
+        Returns:
+            x_masked: masked input (seq_len, batch_size, d_model)
+            mask: binary mask (batch_size, num_patches, num_features) - 1=keep, 0=masked
+        """
+        batch_size, seq_length, num_features = x_raw.shape
+        seq_len = x.size(0)  # num_patches if using patch mode
+
+        if not self.config.use_masking or masking_ratio == 0:
+            return x, torch.ones(batch_size, self.num_patches, num_features, device=x.device)
+
+        num_mask_per_feature = round(self.num_patches * masking_ratio)
+
+        # Vectorized feature-wise masking
+        # Generate random indices for all batch x feature combinations at once
+        # Shape: (batch_size, num_features, num_patches)
+        rand_vals = torch.rand(batch_size, num_features, self.num_patches, device=x.device)
+
+        # Force mask anomaly patches if enabled
+        if self.training and self.config.force_mask_anomaly and point_labels is not None:
+            # point_labels: (batch, seq_length) -> (batch, num_patches)
+            patch_labels = point_labels.reshape(batch_size, self.num_patches, self.patch_size)
+            anomaly_patches = (patch_labels.sum(dim=2) > 0).float()  # (batch, num_patches)
+            # Give anomaly patches very low random values so they get selected first
+            # Expand to (batch, num_features, num_patches)
+            anomaly_boost = anomaly_patches.unsqueeze(1).expand(-1, num_features, -1)
+            rand_vals = rand_vals - anomaly_boost * 10  # Anomaly patches get negative values
+
+        # Get indices that would sort rand_vals (ascending)
+        # Smallest values (including anomaly-boosted) come first
+        sorted_indices = rand_vals.argsort(dim=2)  # (batch, num_features, num_patches)
+
+        # Select first num_mask_per_feature indices for masking
+        mask_indices = sorted_indices[:, :, :num_mask_per_feature]  # (batch, num_features, num_mask)
+
+        # Create mask using scatter
+        mask = torch.ones(batch_size, num_features, self.num_patches, device=x.device)
+        mask.scatter_(2, mask_indices, 0)
+
+        # Transpose to (batch, num_patches, num_features)
+        mask = mask.transpose(1, 2)
+
+        # For embedded input, we need to determine which patches to mask
+        # A patch in embedded space is masked if ANY feature at that patch is masked
+        patch_mask = mask.min(dim=2)[0]  # (batch, num_patches)
+        patch_mask = patch_mask.transpose(0, 1)  # (num_patches, batch)
+
+        # Apply patch-level masking to embedded input (use default mask token)
+        mask_token = self._get_mask_token('teacher')
+        mask_tokens = mask_token.repeat(seq_len, batch_size, 1)
+        x_masked = x * patch_mask.unsqueeze(-1) + mask_tokens * (1 - patch_mask.unsqueeze(-1))
+
+        return x_masked, mask
+
     def _get_mask_token(self, for_decoder: str = 'shared') -> torch.Tensor:
         """Get the appropriate mask token based on configuration.
 
@@ -417,16 +490,24 @@ class SelfDistilledMAEMultivariate(nn.Module):
         x_embed = self._embed_input(x)  # (seq_len, batch, d_model)
         seq_len = x_embed.size(0)
 
-        # Masking (patch strategy)
+        # Masking based on strategy
         mask_provided_externally = mask is not None
+        is_feature_wise = self.config.masking_strategy == 'feature_wise'
 
         # Get default mask token for pre-masking (used when mask_after_encoder=False)
         default_mask_token = self._get_mask_token('teacher')
 
         if mask is None:
-            x_masked, mask = self.random_masking(x_embed, masking_ratio)
-            # mask is (seq_len, batch) for patch strategy
-            patch_mask = mask
+            if is_feature_wise:
+                # feature_wise handles force_mask_anomaly internally
+                x_masked, mask = self.feature_wise_masking(x_embed, x, masking_ratio, point_labels)
+                # mask is (batch, num_patches, num_features) for feature_wise
+                # Convert to patch-level mask for encoding
+                patch_mask = mask.min(dim=2)[0].transpose(0, 1)  # (seq_len, batch)
+            else:  # 'patch' strategy (default)
+                x_masked, mask = self.random_masking(x_embed, masking_ratio)
+                # mask is (seq_len, batch) for patch strategy
+                patch_mask = mask
         else:
             # Handle pre-defined mask (from external source like evaluator)
             # External mask is always (batch, seq_length) format
@@ -439,9 +520,10 @@ class SelfDistilledMAEMultivariate(nn.Module):
             mask_tokens = default_mask_token.repeat(x_embed.size(0), x_embed.size(1), 1)
             x_masked = x_embed * mask.unsqueeze(-1) + mask_tokens * (1 - mask.unsqueeze(-1))
 
-        # Force mask patches containing anomalies during training
+        # Force mask patches containing anomalies during training (patch strategy only)
+        # Note: feature_wise strategy handles force_mask_anomaly in feature_wise_masking()
         if (self.training and self.config.force_mask_anomaly and
-            point_labels is not None):
+            point_labels is not None and self.config.masking_strategy == 'patch'):
             current_seq_len = patch_mask.shape[0]
 
             if self.use_patch:
@@ -547,6 +629,17 @@ class SelfDistilledMAEMultivariate(nn.Module):
             if self.use_patch and mask.shape[1] == self.num_patches:
                 mask = mask.unsqueeze(-1).repeat(1, 1, self.patch_size)
                 mask = mask.reshape(batch_size, seq_length)
+        elif is_feature_wise:
+            # mask is (batch, num_patches, num_features)
+            # Convert to (batch, seq_length) by:
+            # 1. Take min across features (position masked if ANY feature masked)
+            # 2. Expand patches to time steps
+            patch_mask_out = mask.min(dim=2)[0]  # (batch, num_patches)
+            if self.use_patch:
+                patch_mask_out = patch_mask_out.unsqueeze(-1).repeat(1, 1, self.patch_size)
+                mask = patch_mask_out.reshape(batch_size, seq_length)
+            else:
+                mask = patch_mask_out
         else:
             # patch strategy: mask is (seq_len, batch)
             mask = mask.transpose(0, 1)  # (batch, seq_len)

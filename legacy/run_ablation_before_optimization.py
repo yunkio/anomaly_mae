@@ -414,14 +414,6 @@ def compute_loss_statistics(detailed_losses: Dict) -> Dict:
     stats['disc_ratio_disturbing'] = stats['disc_anomaly'] / (stats['disc_disturbing'] + 1e-8)
     stats['recon_ratio'] = stats['recon_anomaly'] / (stats['recon_normal'] + 1e-8)
 
-    # SNR metrics (signal-to-noise ratio: mean_diff / sum_of_stds)
-    stats['disc_SNR'] = (stats['disc_anomaly'] - stats['disc_normal']) / (
-        stats['disc_anomaly_std'] + stats['disc_normal_std'] + 1e-8)
-    stats['disc_SNR_disturbing'] = (stats['disc_anomaly'] - stats['disc_disturbing']) / (
-        stats['disc_anomaly_std'] + stats['disc_disturbing_std'] + 1e-8)
-    stats['recon_SNR'] = (stats['recon_anomaly'] - stats['recon_normal']) / (
-        stats['recon_anomaly_std'] + stats['recon_normal_std'] + 1e-8)
-
     # Cohen's d separation metrics (higher = better separation)
     # Positive values mean anomaly has higher values than normal (expected behavior)
     if normal_mask.sum() > 0 and anomaly_mask.sum() > 0:
@@ -546,7 +538,7 @@ def _cpu_eval_worker(args):
                 'label': detailed_losses['labels'],
                 'sample_type': detailed_losses['sample_types'],
                 'anomaly_type': detailed_losses['anomaly_types'],
-                'anomaly_type_name': np.array(SLIDING_ANOMALY_TYPE_NAMES)[detailed_losses['anomaly_types'].astype(int)]
+                'anomaly_type_name': [SLIDING_ANOMALY_TYPE_NAMES[int(at)] for at in detailed_losses['anomaly_types']]
             })
             detailed_df.to_csv(os.path.join(output_dir, 'best_model_detailed.csv'), index=False)
 
@@ -592,6 +584,7 @@ def _cpu_eval_worker(args):
             'force_mask_anomaly': config_dict.get('force_mask_anomaly'),
             'margin_type': config_dict.get('margin_type'),
             'masking_ratio': config_dict.get('masking_ratio'),
+            'masking_strategy': config_dict.get('masking_strategy'),
             'seq_length': config_dict.get('seq_length'),
             'num_patches': config_dict.get('num_patches'),
             'patch_size': config_dict.get('patch_size'),
@@ -637,9 +630,6 @@ def _cpu_eval_worker(args):
             'disc_normal_std': loss_stats['disc_normal_std'],
             'disc_anomaly_std': loss_stats['disc_anomaly_std'],
             'disc_disturbing_std': loss_stats['disc_disturbing_std'],
-            'disc_SNR': loss_stats['disc_SNR'],
-            'disc_SNR_disturbing': loss_stats['disc_SNR_disturbing'],
-            'recon_SNR': loss_stats['recon_SNR'],
             'disc_only_roc_auc': disc_metrics.get('roc_auc', 0),
             'disc_only_f1_score': disc_metrics.get('f1_score', 0),
             'disc_only_pa_20_roc_auc': disc_metrics.get('pa_20_roc_auc', 0),
@@ -912,8 +902,7 @@ class SingleExperimentRunner:
         anomaly_regions: list,
         train_ratio: float = None,  # None = use config.sliding_window_train_ratio
         point_aggregation_method: str = 'voting',
-        scoring_modes: List[str] = None,
-        eval_only: bool = False
+        scoring_modes: List[str] = None
     ):
         self.exp_config = exp_config
         self.output_base_dir = output_base_dir
@@ -923,7 +912,6 @@ class SingleExperimentRunner:
         self._train_ratio_override = train_ratio  # Store override value
         self.point_aggregation_method = point_aggregation_method
         self.scoring_modes = scoring_modes or ['default']
-        self.eval_only = eval_only
 
     def _create_config(self) -> Config:
         """Create Config object from experiment configuration."""
@@ -951,10 +939,20 @@ class SingleExperimentRunner:
         config = self._create_config()
         set_seed(config.random_seed)
 
-        exp_name = self.exp_config.get('name', 'experiment')
-        mask_suffix = 'mask_after' if config.mask_after_encoder else 'mask_before'
-
         # No downsampling for test - use all windows with stride=1 for PA%K evaluation
+
+        train_dataset = SlidingWindowDataset(
+            signals=self.signals,
+            point_labels=self.point_labels,
+            anomaly_regions=self.anomaly_regions,
+            window_size=config.seq_length,
+            stride=config.sliding_window_stride,  # Train stride (default 11)
+            mask_last_n=config.patch_size,
+            split='train',
+            train_ratio=self.train_ratio,
+            seed=config.random_seed
+        )
+
         test_dataset = SlidingWindowDataset(
             signals=self.signals,
             point_labels=self.point_labels,
@@ -966,62 +964,25 @@ class SingleExperimentRunner:
             train_ratio=self.train_ratio,
             seed=config.random_seed
         )
+
+        train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
-        if self.eval_only:
-            # Load saved model
-            first_dir = os.path.join(
-                self.output_base_dir,
-                f"{exp_name}_{mask_suffix}_{self.scoring_modes[0]}_all"
-            )
-            model_path = os.path.join(first_dir, 'best_model.pt')
-            if not os.path.exists(model_path):
-                print(f"  SKIP (no model at {model_path})")
-                return {}
+        # Set primary scoring mode BEFORE training
+        config.anomaly_score_mode = self.scoring_modes[0]
 
-            checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
-            # Restore config from checkpoint
-            for key, value in checkpoint['config'].items():
-                if hasattr(config, key):
-                    setattr(config, key, value)
-            model = SelfDistilledMAEMultivariate(config)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            model = model.to(config.device)
-            model.eval()
-            train_time = 0
+        train_start = time.time()
+        model = SelfDistilledMAEMultivariate(config)
+        trainer = Trainer(model, config, train_loader, test_loader, verbose=False)
+        trainer.train()
+        train_time = time.time() - train_start
 
-            # Load training history if available
-            hist_path = os.path.join(first_dir, 'training_histories.json')
-            history = None
-            if os.path.exists(hist_path):
-                with open(hist_path) as f:
-                    hist_data = json.load(f)
-                    history = hist_data.get('0')
-        else:
-            train_dataset = SlidingWindowDataset(
-                signals=self.signals,
-                point_labels=self.point_labels,
-                anomaly_regions=self.anomaly_regions,
-                window_size=config.seq_length,
-                stride=config.sliding_window_stride,
-                mask_last_n=config.patch_size,
-                split='train',
-                train_ratio=self.train_ratio,
-                seed=config.random_seed
-            )
-            train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
-
-            # Set primary scoring mode BEFORE training
-            config.anomaly_score_mode = self.scoring_modes[0]
-
-            train_start = time.time()
-            model = SelfDistilledMAEMultivariate(config)
-            trainer = Trainer(model, config, train_loader, test_loader, verbose=False)
-            trainer.train()
-            train_time = time.time() - train_start
-            history = trainer.history
+        history = trainer.history
 
         all_results = {}
+        exp_name = self.exp_config.get('name', 'experiment')
+        mask_suffix = 'mask_after' if config.mask_after_encoder else 'mask_before'
+
         evaluator = Evaluator(model, config, test_loader, test_dataset=test_dataset)
 
         for scoring_mode in self.scoring_modes:
@@ -1045,13 +1006,12 @@ class SingleExperimentRunner:
             )
             os.makedirs(output_dir, exist_ok=True)
 
-            # Save model (skip in eval_only mode)
-            if not self.eval_only:
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'config': asdict(config),
-                    'metrics': metrics
-                }, os.path.join(output_dir, 'best_model.pt'))
+            # Save model
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'config': asdict(config),
+                'metrics': metrics
+            }, os.path.join(output_dir, 'best_model.pt'))
 
             # Save config
             with open(os.path.join(output_dir, 'best_config.json'), 'w') as f:
@@ -1070,7 +1030,7 @@ class SingleExperimentRunner:
                 'label': detailed_losses['labels'],
                 'sample_type': detailed_losses['sample_types'],
                 'anomaly_type': detailed_losses['anomaly_types'],
-                'anomaly_type_name': np.array(SLIDING_ANOMALY_TYPE_NAMES)[detailed_losses['anomaly_types'].astype(int)]
+                'anomaly_type_name': [SLIDING_ANOMALY_TYPE_NAMES[int(at)] for at in detailed_losses['anomaly_types']]
             })
             detailed_df.to_csv(os.path.join(output_dir, 'best_model_detailed.csv'), index=False)
 
@@ -1108,10 +1068,6 @@ class SingleExperimentRunner:
                 'train_time': train_time,
                 'eval_time': eval_time,
             }
-
-        # Free GPU memory
-        del model, evaluator
-        torch.cuda.empty_cache()
 
         return all_results
 
@@ -1278,8 +1234,7 @@ def run_ablation_study(
                     signals=signals,
                     point_labels=point_labels,
                     anomaly_regions=anomaly_regions,
-                    scoring_modes=scoring_modes,
-                    eval_only=eval_only
+                    scoring_modes=scoring_modes
                 )
 
                 results = runner.run()
@@ -1315,6 +1270,7 @@ def run_ablation_study(
                         'force_mask_anomaly': cfg.get('force_mask_anomaly'),
                         'margin_type': cfg.get('margin_type'),
                         'masking_ratio': cfg.get('masking_ratio'),
+                        'masking_strategy': cfg.get('masking_strategy'),
                         'seq_length': cfg.get('seq_length'),
                         'num_patches': cfg.get('num_patches'),
                         'patch_size': cfg.get('patch_size'),
@@ -1360,9 +1316,6 @@ def run_ablation_study(
                         'disc_normal_std': loss_stats['disc_normal_std'],
                         'disc_anomaly_std': loss_stats['disc_anomaly_std'],
                         'disc_disturbing_std': loss_stats['disc_disturbing_std'],
-                        'disc_SNR': loss_stats['disc_SNR'],
-                        'disc_SNR_disturbing': loss_stats['disc_SNR_disturbing'],
-                        'recon_SNR': loss_stats['recon_SNR'],
                         'disc_only_roc_auc': result.get('disc_metrics', {}).get('roc_auc', 0),
                         'disc_only_f1_score': result.get('disc_metrics', {}).get('f1_score', 0),
                         'disc_only_pa_20_roc_auc': result.get('disc_metrics', {}).get('pa_20_roc_auc', 0),
@@ -1567,32 +1520,26 @@ def _run_parallel_mode(
                     )
                     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
-                    # Single GPU forward pass
+                    # Single GPU forward pass: collect both eval scores and viz data
+                    from mae_anomaly.visualization import collect_all_visualization_data
                     evaluator = Evaluator(model, config, test_loader, test_dataset=test_dataset)
+
                     t_fwd = time.time()
+                    viz_pred_data, viz_detailed_data = collect_all_visualization_data(
+                        model, test_loader, config
+                    )
 
-                    if enable_viz:
-                        # Collect both eval scores and viz data in one pass
-                        from mae_anomaly.visualization import collect_all_visualization_data
-                        viz_pred_data, viz_detailed_data = collect_all_visualization_data(
-                            model, test_loader, config
-                        )
-                        n_win = viz_pred_data['n_windows']
-                        num_p = viz_pred_data['num_patches']
-                        evaluator.set_precomputed_patch_scores(
-                            recon_patches=viz_pred_data['recon_errors'].reshape(n_win, num_p),
-                            disc_patches=viz_pred_data['discrepancies'].reshape(n_win, num_p),
-                            student_recon_patches=viz_pred_data['student_errors'].reshape(n_win, num_p),
-                            labels=viz_detailed_data['labels'],
-                            sample_types=viz_detailed_data['sample_types'],
-                            anomaly_types=viz_detailed_data['anomaly_types'],
-                        )
-                    else:
-                        # Eval-only: use evaluator's own forward pass (no viz data overhead)
-                        viz_pred_data = None
-                        viz_detailed_data = None
-                        evaluator._get_cached_scores()
-
+                    # Populate evaluator cache from viz data (avoids redundant forward pass)
+                    n_win = viz_pred_data['n_windows']
+                    num_p = viz_pred_data['num_patches']
+                    evaluator.set_precomputed_patch_scores(
+                        recon_patches=viz_pred_data['recon_errors'].reshape(n_win, num_p),
+                        disc_patches=viz_pred_data['discrepancies'].reshape(n_win, num_p),
+                        student_recon_patches=viz_pred_data['student_errors'].reshape(n_win, num_p),
+                        labels=viz_detailed_data['labels'],
+                        sample_types=viz_detailed_data['sample_types'],
+                        anomaly_types=viz_detailed_data['anomaly_types'],
+                    )
                     cached = evaluator._get_cached_scores()
                     t_fwd = time.time() - t_fwd
 
@@ -1601,9 +1548,6 @@ def _run_parallel_mode(
                         k: v.copy() if isinstance(v, np.ndarray) else v
                         for k, v in cached.items()
                     }
-                    # Free evaluator cache to reduce peak memory
-                    del evaluator._cache
-                    torch.cuda.empty_cache()
 
                     config_dict = asdict(config)
 

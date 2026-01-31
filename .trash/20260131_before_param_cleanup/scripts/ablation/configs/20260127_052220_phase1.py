@@ -41,7 +41,7 @@ CREATED_AT = "2026-01-27 05:22:20"
 # Scoring and Inference Modes
 # =============================================================================
 
-SCORING_MODES = ['default', 'adaptive']
+SCORING_MODES = ['default', 'adaptive', 'normalized']
 MASK_SETTINGS = [True, False]  # Both mask_after_encoder=True and False
 
 # =============================================================================
@@ -54,6 +54,7 @@ BASE_CONFIG_PHASE1 = {
     'margin_type': 'dynamic',
     'mask_after_encoder': False,
     'masking_ratio': 0.2,
+    'masking_strategy': 'patch',
     'seq_length': 100,
     'num_patches': 10,
     'patch_size': 10,
@@ -86,6 +87,7 @@ BASE_CONFIG_PHASE2 = {
     'margin_type': 'dynamic',
     'mask_after_encoder': False,
     'masking_ratio': 0.2,
+    'masking_strategy': 'patch',
     'seq_length': 100,
     'num_patches': 10,
     'patch_size': 10,
@@ -325,6 +327,11 @@ def get_experiments() -> List[Dict]:
         exp['name'] = f'{31+i:03d}_mask_{mr:.2f}'
         exp['masking_ratio'] = mr
         experiments.append(exp)
+
+    exp = deepcopy(base1)
+    exp['name'] = '040_feature_wise_mask'
+    exp['masking_strategy'] = 'feature_wise'
+    experiments.append(exp)
 
     # -------------------------------------------------------------------------
     # GROUP 5 (041-050): Loss Parameters

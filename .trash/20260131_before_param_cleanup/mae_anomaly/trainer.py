@@ -222,7 +222,22 @@ class Trainer:
         score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
         lambda_disc = getattr(self.config, 'lambda_disc', 0.5)
 
-        if score_mode == 'adaptive':
+        if score_mode == 'normalized':
+            recon_mean, recon_std = recon_all.mean(), recon_all.std() + 1e-4
+            disc_mean, disc_std = disc_all.mean(), disc_all.std() + 1e-4
+            recon_z = (recon_all - recon_mean) / recon_std
+            disc_z = (disc_all - disc_mean) / disc_std
+
+            # Min-shift for visualization: shift both to start from 0
+            min_val = min(recon_z.min(), disc_z.min())
+            recon_contrib_all = recon_z - min_val
+            disc_contrib_all = disc_z - min_val
+
+            # Contribution ratios based on shifted (non-negative) values
+            total = recon_contrib_all + disc_contrib_all + 1e-4
+            recon_ratio_all = recon_contrib_all / total
+            disc_ratio_all = disc_contrib_all / total
+        elif score_mode == 'adaptive':
             adaptive_lambda = recon_all.mean() / (disc_all.mean() + 1e-4)
             recon_contrib_all = recon_all
             disc_contrib_all = adaptive_lambda * disc_all

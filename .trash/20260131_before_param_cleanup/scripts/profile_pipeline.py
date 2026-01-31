@@ -349,6 +349,7 @@ def _profiled_cpu_eval_worker(args):
             'force_mask_anomaly': config_dict.get('force_mask_anomaly'),
             'margin_type': config_dict.get('margin_type'),
             'masking_ratio': config_dict.get('masking_ratio'),
+            'masking_strategy': config_dict.get('masking_strategy'),
             'seq_length': config_dict.get('seq_length'),
             'num_patches': config_dict.get('num_patches'),
             'patch_size': config_dict.get('patch_size'),
@@ -607,7 +608,7 @@ def _profiled_viz_worker(args):
 EXPERIMENT_DIR = str(PROJECT_ROOT / 'results' / 'experiments' / '20260128_012500_phase1')
 CONFIG_PATH = str(PROJECT_ROOT / 'scripts' / 'ablation' / 'configs' / '20260127_052220_phase1.py')
 EXP_RANGE = (1, 5)
-SCORING_MODES = ['default', 'adaptive']
+SCORING_MODES = ['default', 'adaptive', 'normalized']
 NUM_WORKERS = 2
 
 

@@ -212,7 +212,7 @@ class BestModelVisualizer:
         The raw recon_errors and discrepancies are preserved.
 
         Args:
-            scoring_mode: One of 'default', 'adaptive'
+            scoring_mode: One of 'default', 'adaptive', 'normalized'
         """
         recon = self.pred_data['recon_errors']
         disc = self.pred_data['discrepancies']
@@ -223,6 +223,10 @@ class BestModelVisualizer:
         elif scoring_mode == 'adaptive':
             adaptive_lambda = recon.mean() / (disc.mean() + 1e-4)
             patch_scores = recon + adaptive_lambda * disc
+        elif scoring_mode == 'normalized':
+            recon_z = (recon - recon.mean()) / (recon.std() + 1e-4)
+            disc_z = (disc - disc.mean()) / (disc.std() + 1e-4)
+            patch_scores = recon_z + disc_z
         else:
             raise ValueError(f"Unknown scoring_mode: {scoring_mode}")
 
@@ -594,178 +598,60 @@ class BestModelVisualizer:
         plt.close()
         print("  - best_model_summary.png")
 
-    def _compute_anomaly_type_metrics(self):
-        """Compute per-anomaly-type detection metrics for all scoring methods.
-
-        Returns a dict keyed by scoring method name, each containing:
-            anomaly_types, detection_rates, pa_{10,20,50,80}_rates,
-            mean_scores, counts, normal_mean_score, disturbing_mean_score
-        """
-        labels = self.pred_data['labels']
-        combined_scores = self.pred_data['scores']
-        point_recon = self.pred_data.get('point_recon', combined_scores)
-        point_disc = self.pred_data.get('point_disc', combined_scores)
-        point_student = self.pred_data.get('point_student', combined_scores)
-
-        # Build point-level anomaly_types from anomaly_regions
-        raw_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
-        base_dataset = _unwrap_subset(raw_dataset) if raw_dataset is not None else None
-        total_length = len(labels)
-        anomaly_types_arr = np.zeros(total_length, dtype=int)
-        if base_dataset is not None and hasattr(base_dataset, 'anomaly_regions'):
-            for region in base_dataset.anomaly_regions:
-                start = region.start
-                end = min(region.end, total_length)
-                anomaly_types_arr[start:end] = region.anomaly_type
-
-        scoring_methods = [
-            ('Anomaly Score', combined_scores, self.pred_data.get('patch_scores')),
-            ('Discrepancy', point_disc, self.pred_data.get('discrepancies')),
-            ('Teacher Recon', point_recon, self.pred_data.get('recon_errors')),
-            ('Student Recon', point_student, self.pred_data.get('student_errors')),
-        ]
-
-        # Check segment-based PA%K availability
-        can_use_segment_pa_k = (
-            base_dataset is not None and
-            hasattr(base_dataset, 'anomaly_regions') and
-            hasattr(base_dataset, 'point_labels') and
-            hasattr(base_dataset, 'window_start_indices') and
-            len(base_dataset.anomaly_regions) > 0
-        )
-
-        # Pre-compute shared point indices for voting
-        pt_indices = None
-        point_coverage = None
-        window_start_indices = None
-        full_length = total_length
-        num_patches = getattr(self.config, 'num_patches', 10)
-        n_windows = 0
-        if can_use_segment_pa_k:
-            full_length = len(base_dataset.point_labels)
-            _, window_start_indices = _get_subset_window_indices(raw_dataset)
-            n_windows = len(window_start_indices)
-            pt_flat_t, pt_flat_si, point_coverage = precompute_point_score_indices(
-                window_start_indices=window_start_indices,
-                seq_length=self.config.seq_length,
-                patch_size=self.config.patch_size,
-                total_length=full_length,
-                num_patches=num_patches,
-            )
-            pt_indices = (pt_flat_t, pt_flat_si)
-
-        # Compute per-method metrics
-        all_method_metrics = {}
-        for score_name, scores, patch_scores_flat in scoring_methods:
-            # Optimal threshold
-            if len(np.unique(labels)) > 1:
-                fpr, tpr, thresholds = roc_curve(labels, scores)
-                optimal_idx = np.argmax(tpr - fpr)
-                threshold = thresholds[optimal_idx]
-            else:
-                threshold = np.median(scores)
-            predictions = (scores > threshold).astype(int)
-
-            # Compute voted predictions for PA%K
-            voted_preds = None
-            if can_use_segment_pa_k and patch_scores_flat is not None and len(patch_scores_flat) == n_windows * num_patches:
-                window_scores = patch_scores_flat.reshape(n_windows, num_patches)
-                voted_preds = _compute_voted_point_predictions(
-                    window_scores, pt_indices, point_coverage,
-                    threshold, full_length
-                )
-
-            # Per-type metrics
-            anomaly_types_list = []
-            detection_rates = []
-            pa_10_rates, pa_20_rates, pa_50_rates, pa_80_rates = [], [], [], []
-            mean_scores_list = []
-            counts = []
-            normal_mean_score = float(scores[labels == 0].mean()) if (labels == 0).sum() > 0 else 0.0
-            disturbing_mean_score = float(scores[labels == 1].mean()) if (labels == 1).sum() > 0 else 0.0
-
-            for atype_idx in range(1, 10):
-                atype_name = ANOMALY_TYPE_NAMES[atype_idx] if atype_idx < len(ANOMALY_TYPE_NAMES) else f'type_{atype_idx}'
-                type_mask = (anomaly_types_arr == atype_idx)
-                if type_mask.sum() == 0:
-                    continue
-
-                type_scores = scores[type_mask]
-                type_labels = labels[type_mask]
-                type_predictions = predictions[type_mask]
-                anomaly_types_list.append(atype_name)
-                mean_scores_list.append(float(type_scores.mean()))
-                counts.append(int(type_mask.sum()))
-
-                anomaly_sample_mask = (type_labels == 1)
-                if anomaly_sample_mask.sum() > 0:
-                    detection_rates.append(float(type_predictions[anomaly_sample_mask].mean()) * 100)
-                    if can_use_segment_pa_k and voted_preds is not None:
-                        for k, rate_list in [(10, pa_10_rates), (20, pa_20_rates),
-                                             (50, pa_50_rates), (80, pa_80_rates)]:
-                            pa_rate = compute_segment_pa_k_detection_rate(
-                                point_scores=voted_preds,
-                                point_labels=base_dataset.point_labels,
-                                anomaly_regions=base_dataset.anomaly_regions,
-                                anomaly_type=atype_idx, threshold=0.5, k_percent=k
-                            )
-                            rate_list.append(float(pa_rate) * 100)
-                    else:
-                        for k, rate_list in [(10, pa_10_rates), (20, pa_20_rates),
-                                             (50, pa_50_rates), (80, pa_80_rates)]:
-                            adjusted = compute_pa_k_adjusted_predictions(type_predictions, type_labels, k_percent=k)
-                            rate_list.append(float(adjusted[anomaly_sample_mask].mean()) * 100)
-                else:
-                    detection_rates.append(0)
-                    pa_10_rates.append(0)
-                    pa_20_rates.append(0)
-                    pa_50_rates.append(0)
-                    pa_80_rates.append(0)
-
-            all_method_metrics[score_name] = {
-                'anomaly_types': anomaly_types_list,
-                'detection_rates': detection_rates,
-                'pa_10_rates': pa_10_rates,
-                'pa_20_rates': pa_20_rates,
-                'pa_50_rates': pa_50_rates,
-                'pa_80_rates': pa_80_rates,
-                'mean_scores': mean_scores_list,
-                'counts': counts,
-                'normal_mean_score': normal_mean_score,
-                'disturbing_mean_score': disturbing_mean_score,
-            }
-
-        return all_method_metrics
-
-    def plot_performance_by_anomaly_type(self, anomaly_type_metrics: Dict = None):
-        """Plot detection performance by anomaly type (combined anomaly score only).
+    def plot_performance_by_anomaly_type(self, experiment_dir: str = None):
+        """Plot detection performance by anomaly type
 
         Args:
-            anomaly_type_metrics: Pre-computed metrics from _compute_anomaly_type_metrics()
+            experiment_dir: Path to experiment directory containing anomaly_type_metrics.json
         """
-        if anomaly_type_metrics is None or 'Anomaly Score' not in anomaly_type_metrics:
-            print("  ! Skipping performance_by_anomaly_type (no metrics)")
+        metrics_json = None
+        if experiment_dir:
+            json_path = os.path.join(experiment_dir, 'anomaly_type_metrics.json')
+            if os.path.exists(json_path):
+                with open(json_path, 'r') as f:
+                    metrics_json = json.load(f)
+
+        if metrics_json is None:
+            print("  ! Skipping performance_by_anomaly_type (no metrics JSON found)")
             return
 
-        m = anomaly_type_metrics['Anomaly Score']
-        anomaly_types_original = m['anomaly_types']
+        # Extract detection rates for anomaly types
+        anomaly_types_original = []  # Original names for color lookup
+        anomaly_types_display = []   # Display names with line breaks
+        detection_rates = []  # Point-wise detection rate
+        pa_10_detection_rates = []  # PA%10
+        pa_20_detection_rates = []  # PA%20
+        pa_50_detection_rates = []  # PA%50
+        pa_80_detection_rates = []  # PA%80
+        mean_scores = []
+        counts = []
+
+        # Extract normal/disturbing scores for reference
+        normal_mean_score = 0.0
+        disturbing_mean_score = 0.0
+
+        for atype, metrics in metrics_json.items():
+            if atype == 'normal':
+                normal_mean_score = metrics.get('mean_score', 0)
+                continue  # Skip normal for detection rate plots
+            if atype == 'disturbing_normal':
+                disturbing_mean_score = metrics.get('mean_score', 0)
+                continue  # Skip disturbing for detection rate plots
+            anomaly_types_original.append(atype)
+            anomaly_types_display.append(atype.replace('_', '\n'))
+            detection_rates.append(metrics.get('detection_rate', 0) * 100)
+            # PA%K detection rates for all K values
+            default_rate = metrics.get('detection_rate', 0)
+            pa_10_detection_rates.append(metrics.get('pa_10_detection_rate', default_rate) * 100)
+            pa_20_detection_rates.append(metrics.get('pa_20_detection_rate', default_rate) * 100)
+            pa_50_detection_rates.append(metrics.get('pa_50_detection_rate', default_rate) * 100)
+            pa_80_detection_rates.append(metrics.get('pa_80_detection_rate', default_rate) * 100)
+            mean_scores.append(metrics.get('mean_score', 0))
+            counts.append(metrics.get('count', 0))
+
         if len(anomaly_types_original) == 0:
             print("  ! Skipping performance_by_anomaly_type (no anomaly types found)")
             return
-
-        anomaly_types_display = [a.replace('_', '\n') for a in anomaly_types_original]
-        detection_rates = m['detection_rates']
-        pa_10_detection_rates = m['pa_10_rates']
-        pa_20_detection_rates = m['pa_20_rates']
-        pa_50_detection_rates = m['pa_50_rates']
-        pa_80_detection_rates = m['pa_80_rates']
-        mean_scores = m['mean_scores']
-        counts = m['counts']
-        normal_mean_score = m['normal_mean_score']
-        disturbing_mean_score = m['disturbing_mean_score']
-        display_scores = mean_scores
-        display_normal = normal_mean_score
-        display_disturbing = disturbing_mean_score
 
         # Create 3x3 subplot grid (9 total subplots)
         fig, axes = plt.subplots(3, 3, figsize=(18, 14))
@@ -841,14 +727,21 @@ class BestModelVisualizer:
         # Row 2, Col 3: Mean Anomaly Score (includes normal/disturbing reference)
         ax = axes[1, 2]
 
-        display_scores = mean_scores
-        display_normal = normal_mean_score
-        display_disturbing = disturbing_mean_score
+        # For normalized mode, shift all scores so minimum is 0
+        scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        all_scores_for_shift = mean_scores + [normal_mean_score, disturbing_mean_score]
+        score_min = min(all_scores_for_shift) if scoring_mode == 'normalized' else 0
+
+        # Shift scores for normalized mode
+        display_scores = [s - score_min for s in mean_scores]
+        display_normal = normal_mean_score - score_min
+        display_disturbing = disturbing_mean_score - score_min
 
         # Bar chart for anomaly types only
         bars = ax.bar(anomaly_types_display, display_scores, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
         ax.set_ylabel('Mean Anomaly Score')
-        ax.set_title('Mean Score by Sample Type', fontweight='bold')
+        title_suffix = ' (shifted to 0)' if scoring_mode == 'normalized' else ''
+        ax.set_title(f'Mean Score by Sample Type{title_suffix}', fontweight='bold')
         plt.setp(ax.get_xticklabels(), fontsize=7, rotation=0, ha='center')
         for bar, score in zip(bars, display_scores):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
@@ -965,9 +858,13 @@ Consistency Gap: {avg_pa10 - avg_pa80:.1f}%
             adaptive_weight = recon_mean / disc_mean
             recon_scores = recon_raw
             disc_scores = adaptive_weight * disc_raw
-        else:  # default fallback
-            recon_scores = recon_raw
-            disc_scores = lambda_disc * disc_raw
+        else:  # normalized
+            # Total score = recon_z + disc_z (same as evaluator.py)
+            # Note: z-scores can be negative, which is correct
+            recon_mean, recon_std = recon_raw.mean(), recon_raw.std() + 1e-8
+            disc_mean, disc_std = disc_raw.mean(), disc_raw.std() + 1e-8
+            recon_scores = (recon_raw - recon_mean) / recon_std
+            disc_scores = (disc_raw - disc_mean) / disc_std
 
         detailed_csv['recon_score'] = recon_scores
         detailed_csv['disc_score'] = disc_scores
@@ -1036,7 +933,7 @@ Consistency Gap: {avg_pa10 - avg_pa80:.1f}%
         ]
         fig.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(0.99, 0.99))
 
-        scoring_label = {'default': 'Default', 'adaptive': 'Adaptive'}.get(scoring_mode, scoring_mode)
+        scoring_label = {'default': 'Default', 'adaptive': 'Adaptive', 'normalized': 'Normalized'}.get(scoring_mode, scoring_mode)
         plt.suptitle(f'Score Distribution by Anomaly Type ({scoring_label} Scoring)\n'
                     '(Reconstruction vs Discrepancy Score per Pattern)',
                     fontsize=14, fontweight='bold', y=1.02)
@@ -2001,7 +1898,7 @@ Margin:    {margin:+.6f}
             """Recalculate contribution scores from raw values using current scoring mode.
 
             This is needed because training history may have been saved with 'default' mode
-            even when experiment config specifies 'adaptive' mode.
+            even when experiment config specifies 'adaptive' or 'normalized' mode.
             """
             raw_recon_normal = np.array(history['epoch_raw_recon_normal'])
             raw_recon_disturbing = np.array(history['epoch_raw_recon_disturbing'])
@@ -2036,6 +1933,12 @@ Margin:    {margin:+.6f}
                         adaptive_lambda = overall_recon_mean / (overall_disc_mean + 1e-8)
                         recon_contrib = recon
                         disc_contrib = adaptive_lambda * disc
+                    elif score_mode == 'normalized':
+                        # For normalized, we need std which we don't have per-epoch
+                        # Use simple scaling based on means as approximation
+                        # This gives equal weight to both components
+                        recon_contrib = recon
+                        disc_contrib = (overall_recon_mean / (overall_disc_mean + 1e-8)) * disc
                     else:  # default
                         recon_contrib = recon
                         disc_contrib = lambda_disc * disc
@@ -2214,6 +2117,8 @@ Margin:    {margin:+.6f}
             param_str = f"λ_disc={mode_params.get('lambda_disc', 0.5):.2f}"
         elif score_mode == 'adaptive':
             param_str = f"adaptive_λ={mode_params.get('adaptive_lambda', 0):.3f}"
+        elif score_mode == 'normalized':
+            param_str = f"z-score normalized"
         elif score_mode == 'ratio_weighted':
             param_str = f"disc_median={mode_params.get('disc_median', 0):.4f}"
         else:
@@ -2258,8 +2163,7 @@ Margin:    {margin:+.6f}
         self.plot_hardest_samples()
 
         # Anomaly type analysis (requires detailed results from experiment)
-        anomaly_type_metrics = self._compute_anomaly_type_metrics()
-        self.plot_performance_by_anomaly_type(anomaly_type_metrics)
+        self.plot_performance_by_anomaly_type(experiment_dir)
         self.plot_score_distribution_by_type(experiment_dir)
 
         # Anomaly type score trends over epochs (requires history with epoch_anomaly_type_scores)
@@ -2270,7 +2174,7 @@ Margin:    {margin:+.6f}
         self.plot_roc_curve_pa80_comparison()
 
         # Performance by anomaly type comparison (different score types)
-        self.plot_performance_by_anomaly_type_comparison(anomaly_type_metrics)
+        self.plot_performance_by_anomaly_type_comparison(self.output_dir)
 
     def plot_score_contribution_epoch_trends(self, experiment_dir: str = None, history: Dict = None):
         """Plot epoch-wise score contribution breakdown for each anomaly type
@@ -2349,8 +2253,42 @@ Margin:    {margin:+.6f}
                     type_data[atype]['count'].append(0)
 
         # Compute weighted disc based on current scoring mode
-        # Compute weighted disc based on current scoring mode
-        for atype in anomaly_type_order:
+        if score_mode == 'normalized':
+            # Z-score normalization: compute all z-scores first, then shift globally
+            n_epochs = len(epochs)
+            z_scores = {}  # {atype: {'recon_z': [], 'disc_z': []}}
+
+            # First pass: compute z-scores for all types
+            for atype in anomaly_type_order:
+                recon_arr = np.array(type_data[atype]['recon'])
+                raw_disc_arr = np.array(type_data[atype]['raw_disc'])
+                z_scores[atype] = {'recon_z': [], 'disc_z': []}
+
+                for i in range(n_epochs):
+                    all_recon = [type_data[t]['recon'][i] for t in anomaly_type_order]
+                    all_disc = [type_data[t]['raw_disc'][i] for t in anomaly_type_order]
+                    recon_mean, recon_std = np.mean(all_recon), np.std(all_recon) + 1e-8
+                    disc_mean, disc_std = np.mean(all_disc), np.std(all_disc) + 1e-8
+                    recon_z = (recon_arr[i] - recon_mean) / recon_std
+                    disc_z = (raw_disc_arr[i] - disc_mean) / disc_std
+                    z_scores[atype]['recon_z'].append(recon_z)
+                    z_scores[atype]['disc_z'].append(disc_z)
+
+            # Find global minimum across all types and epochs
+            all_z_values = []
+            for atype in anomaly_type_order:
+                all_z_values.extend(z_scores[atype]['recon_z'])
+                all_z_values.extend(z_scores[atype]['disc_z'])
+            global_min = min(all_z_values) if all_z_values else 0
+
+            # Second pass: shift all values by global minimum
+            for atype in anomaly_type_order:
+                type_data[atype]['recon'] = [z - global_min for z in z_scores[atype]['recon_z']]
+                type_data[atype]['disc'] = [z - global_min for z in z_scores[atype]['disc_z']]
+
+        else:
+            # Non-normalized modes: adaptive or default
+            for atype in anomaly_type_order:
                 recon_arr = np.array(type_data[atype]['recon'])
                 raw_disc_arr = np.array(type_data[atype]['raw_disc'])
 
@@ -2674,7 +2612,7 @@ Margin:    {margin:+.6f}
         plt.close()
         print("  - best_model_roc_curve_PA80_comparison.png")
 
-    def plot_performance_by_anomaly_type_comparison(self, anomaly_type_metrics: Dict = None):
+    def plot_performance_by_anomaly_type_comparison(self, experiment_dir: str = None):
         """Plot detection performance by anomaly type comparing different scoring methods.
 
         Creates a 4x4 grid:
@@ -2682,14 +2620,105 @@ Margin:    {margin:+.6f}
         - Cols: Point-wise Detection Rate, All PA%K, PA%80 Detection Rate, Mean Score
 
         Args:
-            anomaly_type_metrics: Pre-computed metrics from _compute_anomaly_type_metrics()
+            experiment_dir: Path to experiment directory (optional, for compatibility)
         """
-        if anomaly_type_metrics is None:
-            print("  ! Skipping performance_by_anomaly_type_comparison (no metrics)")
-            return
+        labels = self.pred_data['labels']  # point-level
+        combined_scores = self.pred_data['scores']  # point-level
+        point_recon = self.pred_data.get('point_recon', combined_scores)
+        point_disc = self.pred_data.get('point_disc', combined_scores)
+        point_student = self.pred_data.get('point_student', combined_scores)
 
-        labels = self.pred_data['labels']
-        scoring_method_names = ['Anomaly Score', 'Discrepancy', 'Teacher Recon', 'Student Recon']
+        # Build point-level anomaly_types from anomaly_regions
+        raw_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
+        base_dataset = _unwrap_subset(raw_dataset) if raw_dataset is not None else None
+        total_length = len(labels)
+        anomaly_types = np.zeros(total_length, dtype=int)
+        if base_dataset is not None and hasattr(base_dataset, 'anomaly_regions'):
+            for region in base_dataset.anomaly_regions:
+                start = region.start
+                end = min(region.end, total_length)
+                anomaly_types[start:end] = region.anomaly_type
+
+        # Build point-level sample_types from point_labels
+        # 0=pure normal, 1=disturbing normal (not used at point-level), 2=anomaly
+        point_sample_types = np.zeros(total_length, dtype=int)
+        point_sample_types[labels == 1] = 2
+
+        # Scoring methods: point-level scores for threshold/detection,
+        # patch-level scores stored separately for voting
+        scoring_methods = [
+            ('Anomaly Score', combined_scores),
+            ('Discrepancy', point_disc),
+            ('Teacher Recon', point_recon),
+            ('Student Recon', point_student),
+        ]
+        # Patch-level scores for voting (keyed by scoring method name)
+        patch_scores_by_method = {
+            'Anomaly Score': self.pred_data.get('patch_scores'),
+            'Discrepancy': self.pred_data.get('discrepancies'),
+            'Teacher Recon': self.pred_data.get('recon_errors'),
+            'Student Recon': self.pred_data.get('student_errors'),
+        }
+
+        # Check if test_dataset has anomaly_regions for segment-based PA%K (handle Subset)
+        can_use_segment_pa_k = (
+            base_dataset is not None and
+            hasattr(base_dataset, 'anomaly_regions') and
+            hasattr(base_dataset, 'point_labels') and
+            hasattr(base_dataset, 'window_start_indices') and
+            len(base_dataset.anomaly_regions) > 0
+        )
+
+        # Pre-compute voting-based PA%K metrics for each scoring method
+        # Uses a SINGLE point-level threshold per scoring method for all K values.
+        # PA%K only varies the segment detection criterion (K%), not the threshold.
+        pa_k_voted_preds_by_method = {}
+        if can_use_segment_pa_k:
+            total_length = len(base_dataset.point_labels)
+            num_patches = getattr(self.config, 'num_patches', 10)
+            _, window_start_indices = _get_subset_window_indices(raw_dataset)
+            n_windows = len(window_start_indices)
+            point_labels_full = np.array(base_dataset.point_labels)
+
+            # Precompute point_indices ONCE (shared across all methods)
+            pt_flat_t, pt_flat_si, point_coverage = precompute_point_score_indices(
+                window_start_indices=window_start_indices,
+                seq_length=self.config.seq_length,
+                patch_size=self.config.patch_size,
+                total_length=total_length,
+                num_patches=num_patches,
+            )
+
+            # For each scoring method, compute voted predictions at that method's
+            # single point-level optimal threshold
+            for score_name, point_scores_method in scoring_methods:
+                patch_scores_flat = patch_scores_by_method.get(score_name)
+                if patch_scores_flat is None or len(patch_scores_flat) != n_windows * num_patches:
+                    continue
+                window_scores = patch_scores_flat.reshape(n_windows, num_patches)
+
+                # Find point-level optimal threshold for this scoring method
+                if len(np.unique(labels)) > 1:
+                    fpr_m, tpr_m, thresholds_m = roc_curve(labels, point_scores_method)
+                    optimal_idx_m = np.argmax(tpr_m - fpr_m)
+                    method_threshold = thresholds_m[optimal_idx_m]
+                else:
+                    method_threshold = np.median(point_scores_method)
+
+                # Aggregate patch scores to point-level via mean for threshold
+                point_scores_agg, _ = aggregate_patch_scores_to_point_level(
+                    window_scores, window_start_indices, self.config.seq_length,
+                    self.config.patch_size, num_patches, total_length, method='mean'
+                )
+                point_scores_agg = np.nan_to_num(point_scores_agg, nan=0.0)
+
+                # Compute voted binary predictions at the single threshold
+                voted_preds = _compute_voted_point_predictions(
+                    window_scores, (pt_flat_t, pt_flat_si), point_coverage,
+                    method_threshold, total_length
+                )
+
+                pa_k_voted_preds_by_method[score_name] = voted_preds
 
         fig, axes = plt.subplots(4, 4, figsize=(24, 20))
         anomaly_colors = get_anomaly_colors()
@@ -2699,19 +2728,88 @@ Margin:    {margin:+.6f}
         baseline_pa_80_rates = None
         baseline_anomaly_types_list = None
 
-        for row_idx, score_name in enumerate(scoring_method_names):
-            if score_name not in anomaly_type_metrics:
-                continue
-            m = anomaly_type_metrics[score_name]
-            anomaly_types_list = m['anomaly_types']
-            detection_rates = m['detection_rates']
-            pa_10_rates = m['pa_10_rates']
-            pa_20_rates = m['pa_20_rates']
-            pa_50_rates = m['pa_50_rates']
-            pa_80_rates = m['pa_80_rates']
-            mean_scores_list = m['mean_scores']
-            normal_mean_score = m['normal_mean_score']
-            disturbing_mean_score = m['disturbing_mean_score']
+        for row_idx, (score_name, scores) in enumerate(scoring_methods):
+            # Compute optimal threshold for this scoring method
+            if len(np.unique(labels)) > 1:
+                fpr, tpr, thresholds = roc_curve(labels, scores)
+                optimal_idx = np.argmax(tpr - fpr)
+                threshold = thresholds[optimal_idx]
+            else:
+                threshold = np.median(scores)
+
+            predictions = (scores > threshold).astype(int)
+
+            # Collect metrics per anomaly type
+            anomaly_types_list = []
+            detection_rates = []
+            pa_10_rates = []
+            pa_20_rates = []
+            pa_50_rates = []
+            pa_80_rates = []
+            mean_scores_list = []
+            normal_mean_score = 0.0
+            disturbing_mean_score = 0.0
+
+            # Get normal mean scores (point-level: label==0 is normal)
+            normal_mask = (labels == 0)
+            anomaly_mask = (labels == 1)
+            if normal_mask.sum() > 0:
+                normal_mean_score = float(scores[normal_mask].mean())
+            if anomaly_mask.sum() > 0:
+                disturbing_mean_score = float(scores[anomaly_mask].mean())
+
+            # Process each anomaly type (skip normal=0)
+            for atype_idx in range(1, 10):  # anomaly types 1-9
+                atype_name = ANOMALY_TYPE_NAMES[atype_idx] if atype_idx < len(ANOMALY_TYPE_NAMES) else f'type_{atype_idx}'
+                type_mask = (anomaly_types == atype_idx)
+
+                if type_mask.sum() == 0:
+                    continue
+
+                type_scores = scores[type_mask]
+                type_labels = labels[type_mask]
+                type_predictions = predictions[type_mask]
+
+                anomaly_types_list.append(atype_name)
+
+                # Detection rate: compute for actual anomaly samples (label==1) only
+                anomaly_sample_mask = (type_labels == 1)
+                if anomaly_sample_mask.sum() > 0:
+                    # Detection rate = fraction of actual anomalies that were predicted as anomalies
+                    det_rate = float(type_predictions[anomaly_sample_mask].mean())
+                    detection_rates.append(det_rate * 100)
+
+                    # PA%K detection rates — single threshold for all K values.
+                    # PA%K only varies the segment detection criterion (K%),
+                    # not the binary prediction threshold.
+                    if can_use_segment_pa_k and score_name in pa_k_voted_preds_by_method:
+                        voted_preds = pa_k_voted_preds_by_method[score_name]
+
+                        for k, rate_list in [(10, pa_10_rates), (20, pa_20_rates),
+                                             (50, pa_50_rates), (80, pa_80_rates)]:
+                            pa_rate = compute_segment_pa_k_detection_rate(
+                                point_scores=voted_preds,
+                                point_labels=base_dataset.point_labels,
+                                anomaly_regions=base_dataset.anomaly_regions,
+                                anomaly_type=atype_idx,
+                                threshold=0.5,
+                                k_percent=k
+                            )
+                            rate_list.append(float(pa_rate) * 100)
+                    else:
+                        # Fallback: sample-level PA%K (approximate)
+                        for k, rate_list in [(10, pa_10_rates), (20, pa_20_rates),
+                                             (50, pa_50_rates), (80, pa_80_rates)]:
+                            adjusted = compute_pa_k_adjusted_predictions(type_predictions, type_labels, k_percent=k)
+                            rate_list.append(float(adjusted[anomaly_sample_mask].mean()) * 100)
+                else:
+                    detection_rates.append(0)
+                    pa_10_rates.append(0)
+                    pa_20_rates.append(0)
+                    pa_50_rates.append(0)
+                    pa_80_rates.append(0)
+
+                mean_scores_list.append(float(type_scores.mean()))
 
             if len(anomaly_types_list) == 0:
                 continue
@@ -2789,13 +2887,25 @@ Margin:    {margin:+.6f}
             # Column 4: Mean Score by Sample Type
             ax = axes[row_idx, 3]
 
-            display_scores = mean_scores_list
-            display_normal = normal_mean_score
-            display_disturbing = disturbing_mean_score
+            # Shift for normalized mode - add small padding so minimum is visible
+            scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+            all_scores_for_shift = mean_scores_list + [normal_mean_score, disturbing_mean_score]
+            if scoring_mode == 'normalized':
+                score_min = min(all_scores_for_shift)
+                score_range = max(all_scores_for_shift) - score_min
+                padding = score_range * 0.05  # 5% padding so minimum bar is visible
+            else:
+                score_min = 0
+                padding = 0
+
+            display_scores = [s - score_min + padding for s in mean_scores_list]
+            display_normal = normal_mean_score - score_min + padding
+            display_disturbing = disturbing_mean_score - score_min + padding
 
             bars = ax.bar(display_names, display_scores, color=colors, alpha=0.8, edgecolor=VIS_COLORS['baseline'])
             ax.set_ylabel('Mean Score')
-            ax.set_title(f'{score_name}: Mean Score', fontweight='bold', fontsize=10)
+            title_suffix = ' (shifted)' if scoring_mode == 'normalized' else ''
+            ax.set_title(f'{score_name}: Mean Score{title_suffix}', fontweight='bold', fontsize=10)
 
             # Fix: Use percentage of y-axis range for text offset
             y_max = max(display_scores + [display_normal, display_disturbing]) * 1.15

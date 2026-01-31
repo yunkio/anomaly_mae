@@ -46,6 +46,9 @@ class Config:
     dim_feedforward: int = 256  # 4 * d_model
     dropout: float = 0.1
     masking_ratio: float = 0.2
+    masking_strategy: str = 'patch'  # 'patch' or 'feature_wise'
+    # - 'patch': Mask entire patches (all features at same time points)
+    # - 'feature_wise': Mask each feature independently (different time points per feature)
     num_patches: int = 10  # seq_length / patch_size (dynamically computed when window size changes)
     patch_size: int = 10  # Fixed patch size; num_patches = seq_length / patch_size
     patchify_mode: str = 'patch_cnn'  # 'patch_cnn', 'linear'
@@ -79,7 +82,9 @@ class Config:
     # Anomaly score computation mode
     anomaly_score_mode: str = 'default'
     # - 'default': recon + lambda_disc * disc (original)
+    # - 'normalized': Z-score normalization (recon_z + disc_z)
     # - 'adaptive': Auto-scaled lambda (recon + (mean_recon/mean_disc) * disc)
+    # - 'ratio_weighted': Ratio-based (recon * (1 + disc/median_disc))
 
     # Training parameters
     batch_size: int = 1024  # Batch size for training

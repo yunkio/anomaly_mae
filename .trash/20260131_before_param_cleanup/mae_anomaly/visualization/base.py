@@ -456,7 +456,11 @@ def collect_predictions(model, dataloader, config) -> Dict:
 
     # Apply scoring formula GLOBALLY (consistent with evaluator._apply_scoring_formula)
     score_mode = getattr(config, 'anomaly_score_mode', 'default')
-    if score_mode == 'adaptive':
+    if score_mode == 'normalized':
+        recon_z = (recon_all - recon_all.mean()) / (recon_all.std() + 1e-4)
+        disc_z = (disc_all - disc_all.mean()) / (disc_all.std() + 1e-4)
+        scores_all = recon_z + disc_z
+    elif score_mode == 'adaptive':
         adaptive_lambda = recon_all.mean() / (disc_all.mean() + 1e-4)
         scores_all = recon_all + adaptive_lambda * disc_all
     elif score_mode == 'ratio_weighted':
@@ -569,7 +573,32 @@ def compute_score_contributions(
 
     mode_params = {'score_mode': score_mode}
 
-    if score_mode == 'adaptive':
+    if score_mode == 'normalized':
+        # Z-score normalization
+        recon_mean, recon_std = recon_all.mean(), recon_all.std() + 1e-8
+        disc_mean, disc_std = disc_all.mean(), disc_all.std() + 1e-8
+        recon_z = (recon_all - recon_mean) / recon_std
+        disc_z = (disc_all - disc_mean) / disc_std
+        scores = recon_z + disc_z
+
+        # Min-shift for visualization: shift both to start from 0
+        # This preserves relative differences while making interpretation intuitive
+        min_val = min(recon_z.min(), disc_z.min())
+        recon_contrib = recon_z - min_val
+        disc_contrib = disc_z - min_val
+
+        # Contribution ratios based on shifted (non-negative) values
+        total = recon_contrib + disc_contrib + 1e-8
+        recon_ratio = recon_contrib / total
+        disc_ratio = disc_contrib / total
+
+        mode_params.update({
+            'recon_mean': recon_mean, 'recon_std': recon_std,
+            'disc_mean': disc_mean, 'disc_std': disc_std,
+            'min_shift': min_val
+        })
+
+    elif score_mode == 'adaptive':
         # Auto-scale lambda based on mean values
         adaptive_lambda = recon_all.mean() / (disc_all.mean() + 1e-8)
         recon_contrib = recon_all

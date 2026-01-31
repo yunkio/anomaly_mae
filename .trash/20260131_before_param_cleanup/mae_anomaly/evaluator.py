@@ -784,12 +784,18 @@ class Evaluator:
         Args:
             recon: Raw reconstruction scores
             disc: Raw discrepancy scores
-            scoring_mode: 'default', 'adaptive', or 'ratio_weighted'
+            scoring_mode: 'default', 'normalized', 'adaptive', or 'ratio_weighted'
 
         Returns:
             Combined anomaly scores
         """
-        if scoring_mode == 'adaptive':
+        if scoring_mode == 'normalized':
+            recon_mean, recon_std = recon.mean(), recon.std() + 1e-4
+            disc_mean, disc_std = disc.mean(), disc.std() + 1e-4
+            recon_z = (recon - recon_mean) / recon_std
+            disc_z = (disc - disc_mean) / disc_std
+            return recon_z + disc_z
+        elif scoring_mode == 'adaptive':
             adaptive_lambda = recon.mean() / (disc.mean() + 1e-4)
             return recon + adaptive_lambda * disc
         elif scoring_mode == 'ratio_weighted':
@@ -957,7 +963,9 @@ class Evaluator:
 
         Supports different scoring modes via config.anomaly_score_mode:
         - 'default': recon + lambda_disc * disc
+        - 'normalized': Z-score normalization (recon_z + disc_z)
         - 'adaptive': Auto-scaled lambda (recon + (mean_recon/mean_disc) * disc)
+        - 'ratio_weighted': Ratio-based (recon * (1 + disc/median_disc))
 
         Uses caching to avoid redundant forward passes.
 

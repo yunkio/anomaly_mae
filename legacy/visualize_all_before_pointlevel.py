@@ -116,7 +116,7 @@ def main():
 
     if not param_keys:
         print("WARNING: Could not determine param_keys, using defaults")
-        param_keys = ['masking_ratio', 'num_patches',
+        param_keys = ['masking_ratio', 'masking_strategy', 'num_patches',
                       'margin_type', 'force_mask_anomaly', 'patch_level_loss', 'patchify_mode',
                       'mask_after_encoder', 'shared_mask_token']
 
@@ -152,7 +152,7 @@ def main():
     # 5. Best Model Visualizations
     if not args.skip_model and exp_data['model_path']:
         best_dir = os.path.join(vis_dir, 'best_model')
-        model, config, test_loader, _, _ = load_best_model(exp_data['model_path'], args.num_test)
+        model, config, test_loader, _ = load_best_model(exp_data['model_path'], args.num_test)
         best_vis = BestModelVisualizer(model, config, test_loader, best_dir)
 
         # Get training history (if available)

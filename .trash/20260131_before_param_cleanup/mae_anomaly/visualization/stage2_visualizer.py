@@ -456,6 +456,7 @@ class Stage2Visualizer:
         # Hyperparameter descriptions (fallback for unknown params)
         hyperparam_info = {
             'masking_ratio': ('Masking Ratio', 'Ratio of patches to mask'),
+            'masking_strategy': ('Masking Strategy', 'patch or feature_wise'),
             'num_patches': ('Num Patches', 'Number of patches'),
             'margin_type': ('Margin Type', 'Loss calculation method'),
             'force_mask_anomaly': ('Force Mask Anomaly', 'Force masking anomaly regions'),
