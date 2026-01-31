@@ -562,28 +562,28 @@ All scoring formulas above produce **patch-level** scores (n_windows × num_patc
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| seq_length | 100 | Input sequence length |
+| seq_length | 500 | Input sequence length |
 | num_features | 8 | Multivariate features (server metrics) |
-| d_model | 64 | Model dimension |
-| nhead | 2 | Number of attention heads |
-| dim_feedforward | 256 | FFN dimension (4x d_model) |
-| num_patches | 10 | Number of patches (seq_length / patch_size) |
-| patch_size | 10 | Time steps per patch (fixed) |
+| d_model | 128 | Model dimension |
+| nhead | 8 | Number of attention heads |
+| dim_feedforward | 512 | FFN dimension (4x d_model) |
+| num_patches | 25 | Number of patches (seq_length / patch_size) |
+| patch_size | 20 | Time steps per patch (fixed) |
 | patchify_mode | patch_cnn | Patchify mode (patch_cnn/linear) |
-| cnn_channels | (32, 64) | CNN channels (d_model//2, d_model) |
+| cnn_channels | (64, 128) | CNN channels (d_model//2, d_model) |
 | masking_strategy | patch | Masking strategy (patch/feature_wise) |
-| masking_ratio | 0.2 | Training masking ratio |
+| masking_ratio | 0.15 | Training masking ratio |
 | mask_after_encoder | False | Mask tokens go through encoder (non-standard) |
-| shared_mask_token | True | Share mask token between teacher/student |
+| shared_mask_token | False | Separate mask tokens for teacher/student |
 | num_encoder_layers | 1 | Encoder layers |
-| num_teacher_decoder_layers | 2 | Teacher decoder layers (t2s1) |
+| num_teacher_decoder_layers | 4 | Teacher decoder layers (t4s1) |
 | num_student_decoder_layers | 1 | Student decoder layers |
 | margin | 0.5 | Discrepancy margin (fixed) |
-| lambda_disc | 0.5 | Discrepancy loss weight (fixed) |
+| lambda_disc | 2.0 | Discrepancy loss weight |
 | margin_type | dynamic | Margin loss type (dynamic/hinge/softplus) |
-| dynamic_margin_k | 1.5 | k for dynamic margin (mu + k*sigma) |
+| dynamic_margin_k | 2.0 | k for dynamic margin (mu + k*sigma) |
 | patch_level_loss | True | Loss computation level |
-| learning_rate | 5e-3 | Learning rate |
+| learning_rate | 2e-3 | Learning rate |
 | weight_decay | 1e-5 | Weight decay |
 | teacher_only_warmup_epochs | 3 | Epochs for teacher-only training |
 | warmup_epochs | 10 | Learning rate warm-up epochs |

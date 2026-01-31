@@ -1,5 +1,58 @@
 # Changelog
 
+## 2026-01-31 (Update 44): Fix Phase 2 Defaults — enc1, lr=2e-3
+
+### Summary
+
+Diagnostic testing revealed Phase 2 defaults (enc2, lr=5e-3) cause catastrophic performance degradation at w500. `num_encoder_layers=2` collapses discrepancy signal (disc_d: 2.44→0.21), making teacher/student outputs nearly identical. Combined enc2+td4 drops roc from 0.9855 to 0.7592. `lr=5e-3` also degrades at w500 (-0.040 roc). Corrected defaults: `num_encoder_layers=1`, `learning_rate=2e-3`. Phase 2 config file updated.
+
+### Corrected Parameters
+
+| Parameter | Corrected | Previous | Reason |
+|-----------|-----------|----------|--------|
+| num_encoder_layers | 1 | 2 | enc2 collapses disc_d at w500 (0.21 vs 2.44) |
+| learning_rate | 2e-3 | 5e-3 | lr=5e-3 too aggressive for w500+d128 |
+
+## 2026-01-31 (Update 43): Phase 2 Experiment Plan & Default Parameter Update
+
+### Summary
+
+Updated model default parameters based on Phase 1 ablation analysis (1,014 evaluations). Created Phase 2 experiment plan with 150 configs (600 total evaluations). New defaults reflect Phase 1 optimal findings: larger window (500), larger model (d128/nh8), deeper decoder (td4), higher learning rate (0.005), lower masking ratio (0.15), and stronger discrepancy training (λ=2.0, k=2.0, alw=2).
+
+### Default Parameter Changes
+
+| Parameter | New | Old | Rationale |
+|-----------|-----|-----|-----------|
+| seq_length | 500 | 100 | Best disturbing-normal separation (H3) |
+| d_model | 128 | 64 | Critical for w500 performance (H7) |
+| nhead | 8 | 2 | Best mean roc_auc (0.9694) |
+| dim_feedforward | 512 | 256 | d_model × 4 |
+| num_encoder_layers | 2 | 1 | el=2-3 improves over el=1 |
+| num_teacher_decoder_layers | 4 | 2 | Best overall by mean and max |
+| patch_size | 20 | 10 | Optimal for w500 (25 patches) |
+| masking_ratio | 0.15 | 0.2 | SNR sweet spot 0.08-0.15 |
+| lambda_disc | 2.0 | 0.5 | Eliminates scoring mode gap for mask_after |
+| dynamic_margin_k | 2.0 | 1.5 | Higher k helps mask_after disc_d |
+| anomaly_loss_weight | 2.0 | 1.0 | Boosts mask_after disc_d +22% |
+| dropout | 0.15 | 0.1 | Between 0.1 and 0.2 (phase1 best) |
+| shared_mask_token | False | True | Separate mask tokens preferred |
+
+### Code Changes
+
+| Component | Changes |
+|-----------|---------|
+| `config.py` | Updated all default parameter values |
+
+### Documentation Changes
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Updated Default Configuration table |
+| `docs/ablation/phase2/PHASE2_PLAN.md` | New file: 150-config Phase 2 experiment plan |
+| `docs/CHANGELOG.md` | This entry |
+
+---
+
 ## 2026-01-30 (Update 42): Point-Level Evaluation Refactor
 
 ### Summary

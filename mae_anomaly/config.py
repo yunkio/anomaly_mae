@@ -13,7 +13,7 @@ from typing import Optional
 class Config:
     """Configuration for MAE anomaly detection experiments"""
     # Data parameters
-    seq_length: int = 100
+    seq_length: int = 500
     num_features: int = 8  # Multivariate: 8 features (expanded for sliding window dataset)
     num_train_samples: int = 10000  # (for legacy dataset)
     num_test_samples: int = 2500  # (for legacy dataset)
@@ -35,26 +35,26 @@ class Config:
     test_ratio_anomaly: float = 0.25
 
     # Model parameters
-    d_model: int = 64
-    nhead: int = 2
+    d_model: int = 128
+    nhead: int = 8
     num_encoder_layers: int = 1
-    num_teacher_decoder_layers: int = 2  # t2s1 decoder
+    num_teacher_decoder_layers: int = 4  # t4s1 decoder
     num_student_decoder_layers: int = 1
     num_shared_decoder_layers: int = 0  # Shared decoder layers before teacher/student decoders
     # - 0: No shared decoder (default)
     # - >0: Shared decoder trained with teacher, separate mask tokens for student
-    dim_feedforward: int = 256  # 4 * d_model
-    dropout: float = 0.1
-    masking_ratio: float = 0.2
-    num_patches: int = 10  # seq_length / patch_size (dynamically computed when window size changes)
-    patch_size: int = 10  # Fixed patch size; num_patches = seq_length / patch_size
+    dim_feedforward: int = 512  # 4 * d_model
+    dropout: float = 0.15
+    masking_ratio: float = 0.15
+    num_patches: int = 25  # seq_length / patch_size (dynamically computed when window size changes)
+    patch_size: int = 20  # Fixed patch size; num_patches = seq_length / patch_size
     patchify_mode: str = 'patch_cnn'  # 'patch_cnn', 'linear'
     # - 'patch_cnn': Patchify first, then CNN per patch (no cross-patch leakage)
     # - 'linear': Patchify then linear embedding (MAE original style, no CNN)
     mask_after_encoder: bool = False  # Standard MAE masking architecture
     # - False: Mask tokens go through encoder (current behavior)
     # - True: Encode visible patches only, insert mask tokens before decoder (standard MAE)
-    shared_mask_token: bool = True  # Share mask token between teacher and student
+    shared_mask_token: bool = False  # Share mask token between teacher and student
     # - True: Single mask token shared (current behavior)
     # - False: Separate mask tokens for teacher and student decoders
 
@@ -66,13 +66,13 @@ class Config:
 
     # Loss parameters
     margin: float = 0.5
-    lambda_disc: float = 0.5
+    lambda_disc: float = 2.0
     margin_type: str = 'dynamic'  # 'hinge' (relu), 'softplus', 'dynamic'
-    dynamic_margin_k: float = 1.5  # k for dynamic margin (mu + k*sigma)
+    dynamic_margin_k: float = 2.0  # k for dynamic margin (mu + k*sigma)
     patch_level_loss: bool = True  # True=patch-level, False=window-level discrepancy loss
 
     # Anomaly loss parameters
-    anomaly_loss_weight: float = 1.0  # Weight multiplier for anomaly discrepancy loss
+    anomaly_loss_weight: float = 2.0  # Weight multiplier for anomaly discrepancy loss
     # - 1.0: Default (equal weight)
     # - 2.0/3.0/5.0: Stronger interference on anomaly samples
 
@@ -84,7 +84,7 @@ class Config:
     # Training parameters
     batch_size: int = 1024  # Batch size for training
     num_epochs: int = 50
-    learning_rate: float = 5e-3
+    learning_rate: float = 2e-3
     weight_decay: float = 1e-5
     warmup_epochs: int = 10
     teacher_only_warmup_epochs: int = 3  # First N epochs train teacher only (no discrepancy/student loss)
