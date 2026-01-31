@@ -26,6 +26,78 @@ from sklearn.metrics import (
 from .dataset_sliding import ANOMALY_TYPE_NAMES
 
 
+def _build_aggregation_map(
+    window_start_indices: np.ndarray,
+    patch_size: int,
+    num_patches: int,
+    total_length: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Precompute the geometry mapping from (window, patch) to timesteps.
+
+    Returns:
+        flat_t: valid timestep indices
+        flat_wp: valid flat (w*num_patches + p) indices into patch_scores.ravel()
+        point_coverage: (total_length,) coverage count per timestep
+        covered: (total_length,) bool mask of covered timesteps
+    """
+    n_windows = len(window_start_indices)
+    offsets = np.arange(patch_size)
+    patch_indices = np.arange(num_patches)
+
+    base_positions = window_start_indices[:, np.newaxis] + patch_indices[np.newaxis, :] * patch_size
+    all_t = (base_positions[:, :, np.newaxis] + offsets[np.newaxis, np.newaxis, :]).ravel()
+
+    # Flat index into patch_scores.ravel(): w * num_patches + p, repeated patch_size times
+    w_grid = np.arange(n_windows)[:, np.newaxis, np.newaxis]
+    p_grid = patch_indices[np.newaxis, :, np.newaxis]
+    all_wp = np.broadcast_to(
+        w_grid * num_patches + p_grid, (n_windows, num_patches, patch_size)
+    ).ravel()
+
+    valid = (all_t >= 0) & (all_t < total_length)
+    flat_t = all_t[valid]
+    flat_wp = all_wp[valid]
+    point_coverage = np.bincount(flat_t, minlength=total_length).astype(int)
+    covered = point_coverage > 0
+    return flat_t, flat_wp, point_coverage, covered
+
+
+def _aggregate_with_map(
+    patch_scores_flat: np.ndarray,
+    flat_t: np.ndarray,
+    flat_wp: np.ndarray,
+    point_coverage: np.ndarray,
+    covered: np.ndarray,
+    total_length: int,
+    method: str = 'mean',
+    threshold: Optional[float] = None,
+) -> np.ndarray:
+    """Aggregate patch scores to point-level using precomputed geometry map."""
+    point_scores = np.full(total_length, np.nan)
+    flat_s = patch_scores_flat[flat_wp]
+
+    if method == 'mean':
+        score_sum = np.bincount(flat_t, weights=flat_s, minlength=total_length)
+        point_scores[covered] = score_sum[covered] / point_coverage[covered]
+    elif method == 'voting':
+        if threshold is None:
+            raise ValueError("threshold is required for voting method")
+        votes = np.bincount(flat_t, weights=(flat_s > threshold).astype(float), minlength=total_length)
+        point_scores[covered] = (votes[covered] > point_coverage[covered] / 2).astype(float)
+    elif method in ('median', 'max'):
+        sort_idx = np.argsort(flat_t)
+        sorted_t = flat_t[sort_idx]
+        sorted_s = flat_s[sort_idx]
+        splits = np.searchsorted(sorted_t, np.arange(total_length), side='left')
+        splits_end = np.searchsorted(sorted_t, np.arange(total_length), side='right')
+        agg_fn = np.median if method == 'median' else np.max
+        for t in np.where(covered)[0]:
+            point_scores[t] = agg_fn(sorted_s[splits[t]:splits_end[t]])
+    else:
+        raise ValueError(f"Unknown aggregation method: {method}")
+    return point_scores
+
+
 def aggregate_patch_scores_to_point_level(
     patch_scores: np.ndarray,
     window_start_indices: np.ndarray,
@@ -58,130 +130,62 @@ def aggregate_patch_scores_to_point_level(
     point_scores = np.full(total_length, np.nan)
     point_coverage = np.zeros(total_length, dtype=int)
 
-    # Collect scores for each timestep
-    point_score_lists = [[] for _ in range(total_length)]
+    # Build flat arrays of (timestep_index, score) for all patch-timestep assignments
+    # Each window w covers patches 0..num_patches-1, each patch covers patch_size timesteps
+    n_windows = len(window_start_indices)
 
-    for w_idx, start_idx in enumerate(window_start_indices):
-        # For each patch in this window
-        for p_idx in range(num_patches):
-            patch_start = start_idx + p_idx * patch_size
-            patch_end = patch_start + patch_size
-            score = patch_scores[w_idx, p_idx]
+    # For each (window, patch), the covered timesteps are:
+    #   start_idx + p_idx * patch_size + offset, for offset in [0, patch_size)
+    # Vectorize: create all timestep indices and corresponding scores at once
+    offsets = np.arange(patch_size)  # (patch_size,)
+    patch_indices = np.arange(num_patches)  # (num_patches,)
 
-            # Assign this patch's score to timesteps it covers
-            for t in range(patch_start, min(patch_end, total_length)):
-                if t >= 0:
-                    point_score_lists[t].append(score)
+    # Base positions: (n_windows, num_patches) -> start of each patch
+    base_positions = window_start_indices[:, np.newaxis] + patch_indices[np.newaxis, :] * patch_size
+    # (n_windows, num_patches)
 
-    # Aggregate scores
-    for t in range(total_length):
-        if len(point_score_lists[t]) > 0:
-            scores = np.array(point_score_lists[t])
-            point_coverage[t] = len(scores)
-
-            if method == 'mean':
-                point_scores[t] = scores.mean()
-            elif method == 'median':
-                point_scores[t] = np.median(scores)
-            elif method == 'max':
-                point_scores[t] = scores.max()
-            elif method == 'voting':
-                if threshold is None:
-                    raise ValueError("threshold is required for voting method")
-                votes = (scores > threshold).sum()
-                point_scores[t] = 1.0 if votes > len(scores) / 2 else 0.0
-            else:
-                raise ValueError(f"Unknown aggregation method: {method}")
-
-    return point_scores, point_coverage
-
-
-def compute_point_level_pa_k_all_patches(
-    patch_scores: np.ndarray,
-    window_start_indices: np.ndarray,
-    point_labels: np.ndarray,
-    seq_length: int,
-    patch_size: int,
-    num_patches: int,
-    method: str = 'voting',
-    threshold: Optional[float] = None,
-    k_values: List[int] = [10, 20, 50, 80]
-) -> Dict[str, float]:
-    """Compute point-level PA%K metrics using per-patch scores (all_patches mode)
-
-    Each window has N patches, and each patch's score is used to aggregate
-    point-level scores for the timesteps that patch covers.
-
-    Args:
-        patch_scores: (n_windows, num_patches) per-patch anomaly scores
-        window_start_indices: (n_windows,) start index of each window
-        point_labels: (total_length,) point-level ground truth labels
-        seq_length: Window size (e.g., 100)
-        patch_size: Size of each patch (e.g., 10)
-        num_patches: Number of patches per window (e.g., 10)
-        method: Aggregation method ('mean', 'median', 'max', 'voting')
-        threshold: Threshold for binary prediction
-        k_values: List of K% values for PA%K
-
-    Returns:
-        Dict with pa_{k}_f1 and pa_{k}_roc_auc for each k value
-    """
-    total_length = len(point_labels)
-
-    # Aggregate patch scores to point level
-    point_scores, point_coverage = aggregate_patch_scores_to_point_level(
-        patch_scores=patch_scores,
-        window_start_indices=window_start_indices,
-        seq_length=seq_length,
-        patch_size=patch_size,
-        num_patches=num_patches,
-        total_length=total_length,
-        method=method,
-        threshold=threshold
+    # All timestep indices: (n_windows, num_patches, patch_size)
+    all_t_indices = base_positions[:, :, np.newaxis] + offsets[np.newaxis, np.newaxis, :]
+    # Corresponding scores: (n_windows, num_patches, patch_size) - broadcast from patch_scores
+    all_scores = np.broadcast_to(
+        patch_scores[:, :, np.newaxis], (n_windows, num_patches, patch_size)
     )
 
-    # Only use timesteps with coverage
-    valid_mask = point_coverage > 0
-    valid_point_scores = point_scores[valid_mask]
-    valid_point_labels = point_labels[valid_mask]
+    # Flatten
+    flat_t = all_t_indices.ravel()
+    flat_s = all_scores.ravel()
 
-    if len(valid_point_labels) == 0 or len(np.unique(valid_point_labels)) < 2:
-        return {f'pa_{k}_f1': 0.0 for k in k_values} | {f'pa_{k}_roc_auc': 0.0 for k in k_values}
+    # Filter valid indices (0 <= t < total_length)
+    valid = (flat_t >= 0) & (flat_t < total_length)
+    flat_t = flat_t[valid]
+    flat_s = flat_s[valid]
 
-    results = {}
+    # Compute coverage via bincount
+    point_coverage = np.bincount(flat_t, minlength=total_length).astype(int)
+    covered = point_coverage > 0
 
-    if method == 'voting':
-        valid_predictions = valid_point_scores.astype(int)
-    else:
+    if method == 'mean':
+        score_sum = np.bincount(flat_t, weights=flat_s, minlength=total_length)
+        point_scores[covered] = score_sum[covered] / point_coverage[covered]
+    elif method == 'voting':
         if threshold is None:
-            fpr, tpr, thresholds = roc_curve(valid_point_labels, valid_point_scores)
-            optimal_idx = np.argmax(tpr - fpr)
-            threshold = thresholds[optimal_idx]
-        valid_predictions = (valid_point_scores > threshold).astype(int)
+            raise ValueError("threshold is required for voting method")
+        votes = np.bincount(flat_t, weights=(flat_s > threshold).astype(float), minlength=total_length)
+        point_scores[covered] = (votes[covered] > point_coverage[covered] / 2).astype(float)
+    elif method in ('median', 'max'):
+        # For median/max, need per-timestep grouping (less common path)
+        sort_idx = np.argsort(flat_t)
+        sorted_t = flat_t[sort_idx]
+        sorted_s = flat_s[sort_idx]
+        splits = np.searchsorted(sorted_t, np.arange(total_length), side='left')
+        splits_end = np.searchsorted(sorted_t, np.arange(total_length), side='right')
+        agg_fn = np.median if method == 'median' else np.max
+        for t in np.where(covered)[0]:
+            point_scores[t] = agg_fn(sorted_s[splits[t]:splits_end[t]])
+    else:
+        raise ValueError(f"Unknown aggregation method: {method}")
 
-    for k in k_values:
-        pa_metrics = compute_pa_k_metrics(valid_predictions, valid_point_labels, k_percent=k)
-        results[f'pa_{k}_f1'] = pa_metrics['pa_k_f1']
-
-        if method == 'voting':
-            mean_scores, _ = aggregate_patch_scores_to_point_level(
-                patch_scores=patch_scores,
-                window_start_indices=window_start_indices,
-                seq_length=seq_length,
-                patch_size=patch_size,
-                num_patches=num_patches,
-                total_length=total_length,
-                method='mean',
-                threshold=None
-            )
-            valid_mean_scores = mean_scores[valid_mask]
-            pa_roc_auc = compute_pa_k_roc_auc(valid_mean_scores, valid_point_labels, k_percent=k)
-        else:
-            pa_roc_auc = compute_pa_k_roc_auc(valid_point_scores, valid_point_labels, k_percent=k)
-
-        results[f'pa_{k}_roc_auc'] = pa_roc_auc
-
-    return results
+    return point_scores, point_coverage
 
 
 def compute_pa_k_adjusted_predictions(
@@ -260,147 +264,16 @@ def compute_pa_k_metrics(
     }
 
 
-def _find_anomaly_segments(labels: np.ndarray) -> list:
-    """Find contiguous anomaly segments in labels.
-
-    Returns:
-        List of (start, end) tuples for each anomaly segment
-    """
-    segments = []
-    i = 0
-    n = len(labels)
-    while i < n:
-        if labels[i] == 1:
-            start = i
-            while i < n and labels[i] == 1:
-                i += 1
-            segments.append((start, i))
-        else:
-            i += 1
-    return segments
-
-
-def compute_pa_k_roc_auc_vectorized(
-    scores: np.ndarray,
-    labels: np.ndarray,
-    k_percent: int = 20,
-    n_thresholds: int = 50,
-    segments: list = None
-) -> float:
-    """Vectorized PA%K ROC-AUC computation.
-
-    Optimized version that:
-    1. Pre-computes segment boundaries once
-    2. Vectorizes threshold comparisons
-    3. Computes segment detection ratios efficiently
-
-    Args:
-        scores: Continuous anomaly scores
-        labels: True binary labels (0/1)
-        k_percent: Detection threshold percentage for PA%K
-        n_thresholds: Number of thresholds (reduced from 100 to 50)
-        segments: Pre-computed segments (optional, for caching)
-
-    Returns:
-        PA%K adjusted ROC-AUC score
-    """
-    if len(np.unique(labels)) < 2:
-        return 0.0
-
-    n = len(labels)
-    n_positive = int(labels.sum())
-    n_negative = n - n_positive
-
-    if n_positive == 0 or n_negative == 0:
-        return 0.0
-
-    # Pre-compute segments if not provided
-    if segments is None:
-        segments = _find_anomaly_segments(labels)
-
-    if len(segments) == 0:
-        return 0.0
-
-    # Generate thresholds
-    min_score, max_score = scores.min(), scores.max()
-    thresholds = np.linspace(min_score - 0.01, max_score + 0.01, n_thresholds)
-
-    # Vectorized: (n_thresholds, n_samples) - all predictions at once
-    all_preds = (scores[np.newaxis, :] > thresholds[:, np.newaxis]).astype(np.int8)
-
-    # For each segment, compute detection ratio for all thresholds at once
-    k_ratio = k_percent / 100.0
-
-    # Initialize adjusted predictions
-    adjusted_preds = all_preds.copy()
-
-    for start, end in segments:
-        seg_len = end - start
-        # Sum of predictions in segment for each threshold: (n_thresholds,)
-        seg_sums = all_preds[:, start:end].sum(axis=1)
-        # Detection ratio for each threshold
-        detection_ratios = seg_sums / seg_len
-
-        # Segments detected (ratio >= k_percent)
-        detected = detection_ratios >= k_ratio
-
-        # Update adjusted predictions
-        # If detected, all segment points = 1; if not, all = 0
-        adjusted_preds[:, start:end] = detected[:, np.newaxis]
-
-    # Compute TP, FP for all thresholds at once
-    labels_bool = labels.astype(bool)
-    tp = (adjusted_preds & labels_bool).sum(axis=1)
-    fp = (adjusted_preds & ~labels_bool).sum(axis=1)
-
-    tprs = tp / n_positive
-    fprs = fp / n_negative
-
-    # Sort by FPR
-    sorted_idx = np.argsort(fprs)
-    fprs_sorted = fprs[sorted_idx]
-    tprs_sorted = tprs[sorted_idx]
-
-    # Compute AUC
-    auc = np.trapz(tprs_sorted, fprs_sorted)
-
-    return float(auc)
-
-
-def compute_pa_k_roc_auc(
-    scores: np.ndarray,
-    labels: np.ndarray,
-    k_percent: int = 20,
-    n_thresholds: int = 50
-) -> float:
-    """Compute PA%K adjusted ROC-AUC (uses vectorized version)
-
-    For each threshold:
-    1. Binarize predictions (score > threshold -> 1)
-    2. Apply PA%K adjustment to predictions
-    3. Calculate TPR and FPR from adjusted predictions
-    4. Build ROC curve and compute AUC
-
-    Args:
-        scores: Continuous anomaly scores
-        labels: True binary labels (0/1)
-        k_percent: Detection threshold percentage for PA%K
-        n_thresholds: Number of thresholds to try (default reduced to 50)
-
-    Returns:
-        PA%K adjusted ROC-AUC score
-    """
-    return compute_pa_k_roc_auc_vectorized(scores, labels, k_percent, n_thresholds)
-
-
 def precompute_point_score_indices(
     window_start_indices: np.ndarray,
     seq_length: int,
     patch_size: int,
     total_length: int,
     num_patches: int = None,
-) -> Tuple[List[List], np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Precompute which (window, patch) indices cover each timestep.
+
+    Returns flat arrays for vectorized voting instead of list-of-lists.
 
     Args:
         window_start_indices: (n_windows,) start index of each window
@@ -410,25 +283,40 @@ def precompute_point_score_indices(
         num_patches: Number of patches per window
 
     Returns:
-        point_indices: list of length total_length, each element is list of (w_idx, p_idx) tuples
+        flat_timesteps: (N,) timestep index for each (window, patch, offset) assignment
+        flat_score_indices: (N,) flat index into scores.ravel() for each assignment
         point_coverage: (total_length,) count of covering windows/patches per timestep
     """
-    point_indices = [[] for _ in range(total_length)]
+    n_windows = len(window_start_indices)
+    offsets = np.arange(patch_size)
+    patch_indices = np.arange(num_patches)
 
-    for w_idx, start in enumerate(window_start_indices):
-        for p_idx in range(num_patches):
-            p_start = start + p_idx * patch_size
-            p_end = min(p_start + patch_size, total_length)
-            for t in range(max(0, p_start), p_end):
-                point_indices[t].append((w_idx, p_idx))
+    # Base timestep positions: (n_windows, num_patches)
+    base_positions = window_start_indices[:, np.newaxis] + patch_indices[np.newaxis, :] * patch_size
 
-    point_coverage = np.array([len(indices) for indices in point_indices], dtype=int)
-    return point_indices, point_coverage
+    # All timestep indices: (n_windows, num_patches, patch_size)
+    all_t = base_positions[:, :, np.newaxis] + offsets[np.newaxis, np.newaxis, :]
+
+    # Flat score indices: w_idx * num_patches + p_idx, broadcast to (n_windows, num_patches, patch_size)
+    w_grid = np.arange(n_windows)[:, np.newaxis, np.newaxis]
+    p_grid = patch_indices[np.newaxis, :, np.newaxis]
+    all_score_idx = (w_grid * num_patches + p_grid) * np.ones(patch_size, dtype=int)[np.newaxis, np.newaxis, :]
+
+    flat_t = all_t.ravel()
+    flat_score_idx = all_score_idx.ravel()
+
+    # Filter valid
+    valid = (flat_t >= 0) & (flat_t < total_length)
+    flat_t = flat_t[valid]
+    flat_score_idx = flat_score_idx[valid]
+
+    point_coverage = np.bincount(flat_t, minlength=total_length).astype(int)
+    return flat_t, flat_score_idx, point_coverage
 
 
 def vectorized_voting_for_all_thresholds(
     scores: np.ndarray,
-    point_indices: List[List],
+    point_indices,  # (flat_timesteps, flat_score_indices) tuple or legacy list-of-lists
     point_coverage: np.ndarray,
     thresholds: np.ndarray,
 ) -> np.ndarray:
@@ -436,7 +324,7 @@ def vectorized_voting_for_all_thresholds(
 
     Args:
         scores: Patch scores. Shape (n_windows, n_patches).
-        point_indices: From precompute_point_score_indices
+        point_indices: Tuple (flat_timesteps, flat_score_indices) from precompute_point_score_indices
         point_coverage: From precompute_point_score_indices
         thresholds: (n_thresholds,) threshold values
 
@@ -444,25 +332,35 @@ def vectorized_voting_for_all_thresholds(
         (n_thresholds, total_length) binary voted point scores
     """
     n_thresholds = len(thresholds)
-    total_length = len(point_indices)
+    total_length = len(point_coverage)
+    flat_scores = scores.ravel()
+
+    # Unpack vectorized indices
+    if isinstance(point_indices, tuple) and len(point_indices) == 2:
+        flat_t, flat_score_idx = point_indices
+    else:
+        # Legacy fallback: convert list-of-lists to flat arrays
+        n_patches = scores.shape[1]
+        all_t = []
+        all_si = []
+        for t, indices in enumerate(point_indices):
+            for w, p in indices:
+                all_t.append(t)
+                all_si.append(w * n_patches + p)
+        flat_t = np.array(all_t, dtype=int)
+        flat_score_idx = np.array(all_si, dtype=int)
+
+    # Get all patch scores for all assignments: (N_assignments,)
+    assigned_scores = flat_scores[flat_score_idx]
+
+    # For each threshold, count votes per timestep using bincount
     result = np.zeros((n_thresholds, total_length), dtype=np.float64)
+    half_coverage = point_coverage / 2.0
 
-    # scores shape: (n_windows, n_patches)
-    flat_scores = scores.ravel()  # (n_windows * n_patches,)
-    n_patches = scores.shape[1]
-
-    for t in range(total_length):
-        indices = point_indices[t]
-        if len(indices) == 0:
-            continue
-        # Gather scores for this timestep
-        score_indices = np.array([w * n_patches + p for w, p in indices])
-        t_scores = flat_scores[score_indices]  # (n_covering,)
-        # For each threshold: count votes
-        # (n_thresholds, n_covering)
-        votes = t_scores[np.newaxis, :] > thresholds[:, np.newaxis]
-        vote_count = votes.sum(axis=1)  # (n_thresholds,)
-        result[:, t] = (vote_count > len(indices) / 2).astype(np.float64)
+    for ti in range(n_thresholds):
+        votes_binary = (assigned_scores > thresholds[ti]).astype(float)
+        vote_counts = np.bincount(flat_t, weights=votes_binary, minlength=total_length)
+        result[ti] = (vote_counts > half_coverage).astype(np.float64)
 
     return result
 
@@ -514,21 +412,29 @@ def _compute_single_pa_k_roc(args: tuple):
     fprs = np.zeros(n_thresholds)
     f1s = np.zeros(n_thresholds)
 
+    # Pre-extract region boundaries for vectorized segment processing
+    region_starts = np.array([r.start for r in regions])
+    region_ends = np.array([min(r.end, total_length) for r in regions])
+    valid_regions = region_ends > region_starts
+    region_starts = region_starts[valid_regions]
+    region_ends = region_ends[valid_regions]
+    region_lengths = region_ends - region_starts
+
     for t_idx in range(n_thresholds):
         preds = point_scores_all[t_idx].copy()
 
-        # Apply PA%K segment adjustment
-        for region in regions:
-            start = region.start
-            end = min(region.end, total_length)
-            if end <= start:
-                continue
-            seg_preds = preds[start:end]
-            detection_ratio = seg_preds.mean()
-            if detection_ratio >= k_ratio:
-                preds[start:end] = 1.0
-            else:
-                preds[start:end] = 0.0
+        # Vectorized PA%K segment adjustment using cumsum
+        if len(region_starts) > 0:
+            cumsum_preds = np.concatenate([[0], np.cumsum(preds)])
+            region_sums = cumsum_preds[region_ends] - cumsum_preds[region_starts]
+            detection_ratios = region_sums / region_lengths
+
+            for r_idx in range(len(region_starts)):
+                s, e = region_starts[r_idx], region_ends[r_idx]
+                if detection_ratios[r_idx] >= k_ratio:
+                    preds[s:e] = 1.0
+                else:
+                    preds[s:e] = 0.0
 
         # Apply mask
         preds[~eval_type_mask] = 0
@@ -562,7 +468,7 @@ def _compute_single_pa_k_roc(args: tuple):
 
 def _compute_voted_point_predictions(
     patch_scores: np.ndarray,
-    point_indices: List[List],
+    point_indices_flat: tuple,
     point_coverage: np.ndarray,
     threshold: float,
     total_length: int,
@@ -574,7 +480,7 @@ def _compute_voted_point_predictions(
 
     Args:
         patch_scores: (n_windows, num_patches) patch-level scores
-        point_indices: list of (w_idx, p_idx) tuples per timestamp
+        point_indices_flat: tuple of (flat_t, flat_score_idx) from precompute_point_score_indices
         point_coverage: (total_length,) coverage count per timestamp
         threshold: decision threshold
         total_length: total number of timestamps
@@ -582,18 +488,17 @@ def _compute_voted_point_predictions(
     Returns:
         (total_length,) binary predictions
     """
-    preds = np.zeros(total_length, dtype=np.float64)
+    flat_t, flat_si = point_indices_flat
     flat_scores = patch_scores.ravel()
-    n_patches = patch_scores.shape[1]
+    binary = (flat_scores[flat_si] > threshold).astype(np.float64)
 
-    for t in range(total_length):
-        indices = point_indices[t]
-        if len(indices) == 0:
-            continue
-        score_indices = np.array([w * n_patches + p for w, p in indices])
-        t_scores = flat_scores[score_indices]
-        votes = (t_scores > threshold).sum()
-        preds[t] = 1.0 if votes > len(indices) / 2 else 0.0
+    # Sum votes per timestamp using bincount
+    vote_counts = np.bincount(flat_t, weights=binary, minlength=total_length)
+
+    # Majority vote: predict anomaly if more than half the patches vote yes
+    preds = np.zeros(total_length, dtype=np.float64)
+    covered = point_coverage > 0
+    preds[covered] = (vote_counts[covered] > point_coverage[covered] / 2).astype(np.float64)
 
     return preds
 
@@ -693,100 +598,18 @@ def compute_segment_pa_k_detection_rate(
     return detected / total if total > 0 else 0.0
 
 
-def compute_segment_pa_k_adjusted_predictions(
-    point_scores: np.ndarray,
-    point_labels: np.ndarray,
-    anomaly_regions,
-    threshold: float = 0.5,
-    k_percent: int = 20
-) -> np.ndarray:
-    """Apply PA%K segment adjustment to point-level scores using anomaly_regions."""
-    predictions = (np.asarray(point_scores) > threshold).astype(int)
-    adjusted = predictions.copy()
-    k_ratio = k_percent / 100.0
+class DatasetMetadata:
+    """Lightweight metadata-only substitute for SlidingWindowDataset.
 
-    for region in anomaly_regions:
-        start = region.start
-        end = min(region.end, len(adjusted))
-        if end <= start:
-            continue
-        if predictions[start:end].mean() >= k_ratio:
-            adjusted[start:end] = 1
-        else:
-            adjusted[start:end] = 0
+    Holds only the attributes that Evaluator needs (point_labels,
+    window_start_indices, anomaly_regions) without storing the full
+    windows array, saving ~2-3 GB for large window sizes.
+    """
 
-    return adjusted
-
-
-def compute_segment_pa_k_roc_auc(
-    point_scores: np.ndarray,
-    point_labels: np.ndarray,
-    anomaly_regions,
-    k_percent: int = 20,
-    n_thresholds: int = 50
-) -> float:
-    """Compute PA%K ROC-AUC using anomaly_regions for segment identification."""
-    point_labels = np.asarray(point_labels)
-    if len(np.unique(point_labels)) < 2:
-        return 0.0
-
-    segments = [(r.start, min(r.end, len(point_labels))) for r in anomaly_regions]
-    return compute_pa_k_roc_auc_vectorized(
-        np.asarray(point_scores), point_labels, k_percent, n_thresholds, segments
-    )
-
-
-def compute_voting_threshold_pa_k_roc(
-    scores: np.ndarray,
-    point_indices: List[List],
-    point_coverage: np.ndarray,
-    point_labels: np.ndarray,
-    anomaly_regions,
-    thresholds: np.ndarray,
-    k_percent: int = 20,
-    eval_type_mask: np.ndarray = None,
-    anomaly_type: int = None,
-    return_mode=True
-):
-    """Compute PA%K ROC using voting-based point aggregation for a single scoring method."""
-    total_length = len(point_labels)
-    if eval_type_mask is None:
-        eval_type_mask = np.ones(total_length, dtype=bool)
-
-    point_scores_all = vectorized_voting_for_all_thresholds(
-        scores, point_indices, point_coverage, thresholds
-    )
-    return _compute_single_pa_k_roc((
-        point_scores_all, point_labels, anomaly_regions,
-        eval_type_mask, k_percent, anomaly_type, return_mode
-    ))
-
-
-def batch_compute_voting_threshold_pa_k_roc(
-    scoring_methods: list,
-    point_indices: List[List],
-    point_coverage: np.ndarray,
-    point_labels: np.ndarray,
-    anomaly_regions,
-    n_thresholds: int = 100,
-    k_percent: int = 20,
-) -> dict:
-    """Batch compute PA%K ROC for multiple scoring methods."""
-    results = {}
-    total_length = len(point_labels)
-    eval_type_mask = np.ones(total_length, dtype=bool)
-
-    for name, scores in scoring_methods:
-        min_s, max_s = scores.min(), scores.max()
-        thresholds = np.linspace(min_s - 0.01, max_s + 0.01, n_thresholds)
-        result = compute_voting_threshold_pa_k_roc(
-            scores, point_indices, point_coverage, point_labels,
-            anomaly_regions, thresholds, k_percent,
-            eval_type_mask, None, True
-        )
-        results[name] = result
-
-    return results
+    def __init__(self, point_labels, window_start_indices, anomaly_regions):
+        self.point_labels = point_labels
+        self.window_start_indices = window_start_indices
+        self.anomaly_regions = anomaly_regions
 
 
 class Evaluator:
@@ -796,8 +619,9 @@ class Evaluator:
         model: Trained model
         config: Model configuration
         test_loader: DataLoader for test data
-        test_dataset: Optional SlidingWindowDataset for point-level PA%K evaluation.
-                     If provided, enables point-level PA%K with window score aggregation.
+        test_dataset: Optional SlidingWindowDataset (or DatasetMetadata) for
+                     point-level PA%K evaluation. If provided, enables
+                     point-level PA%K with window score aggregation.
     """
 
     def __init__(
@@ -811,7 +635,8 @@ class Evaluator:
         self.config = config
         self.test_loader = test_loader
         self.test_dataset = test_dataset
-        self.model.eval()
+        if self.model is not None:
+            self.model.eval()
 
         # Mixed Precision Training (AMP) for inference
         self.use_amp = getattr(config, 'use_amp', False) and torch.cuda.is_available()
@@ -830,22 +655,31 @@ class Evaluator:
         """Clear cached scores (call when model or data changes)"""
         self._cache = {}
 
-    def _get_cached_scores(self):
-        """Get cached raw scores, computing if needed
+    def _build_cache_dict(
+        self,
+        recon_patches: np.ndarray,
+        disc_patches: np.ndarray,
+        student_recon_patches: np.ndarray,
+        labels: np.ndarray,
+        sample_types: np.ndarray,
+        anomaly_types: np.ndarray,
+    ) -> dict:
+        """Build raw_scores cache dict from pre-computed patch-level scores.
+
+        This is the shared logic used by both _get_cached_scores() (after GPU
+        forward pass) and set_precomputed_patch_scores() (from external data).
+
+        Args:
+            recon_patches: (n_windows, num_patches) teacher reconstruction scores
+            disc_patches: (n_windows, num_patches) discrepancy scores
+            student_recon_patches: (n_windows, num_patches) student reconstruction scores
+            labels: (n_windows,) window-level binary labels
+            sample_types: (n_windows,) window-level sample type indicators
+            anomaly_types: (n_windows,) window-level anomaly type indicators
 
         Returns:
-            dict with 'patch_recon', 'patch_disc', 'window_recon', 'window_disc',
-                 'labels', 'sample_types', 'anomaly_types', 'patch_labels',
-                 'patch_sample_types', 'patch_anomaly_types'
-                Patch arrays are (n_windows, num_patches), window arrays are (n_windows,)
+            Complete cache dict with patch/window scores, labels, and derived metadata
         """
-        cache_key = 'raw_scores'
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
-        # Compute patch-level scores once
-        recon_patches, disc_patches, student_recon_patches, labels, sample_types, anomaly_types = self._compute_patch_scores_all_patches()
-
         # Derive window-level scores by averaging
         window_recon = recon_patches.mean(axis=1)
         window_disc = disc_patches.mean(axis=1)
@@ -862,29 +696,23 @@ class Evaluator:
         patch_sample_types = np.zeros((n_windows, num_patches), dtype=np.int64)
 
         if patch_labels is not None:
-            # Determine which windows contain any anomaly
             window_has_anomaly = (patch_labels.sum(axis=1) > 0)  # (n_windows,)
-
-            # Patches with anomaly → type 2
             patch_sample_types[patch_labels == 1] = 2
-
-            # Normal patches in anomaly-containing windows → type 1 (disturbing)
-            for w_idx in range(n_windows):
-                if window_has_anomaly[w_idx]:
-                    for p_idx in range(num_patches):
-                        if patch_labels[w_idx, p_idx] == 0:
-                            patch_sample_types[w_idx, p_idx] = 1
-            # Normal patches in normal windows stay 0 (pure_normal)
+            # Vectorized: normal patches in anomaly windows → disturbing
+            disturbing_mask = window_has_anomaly[:, np.newaxis] & (patch_labels == 0)
+            patch_sample_types[disturbing_mask] = 1
 
         # Compute patch-level anomaly_types (inherit from window if patch has anomaly, else 0)
         patch_anomaly_types = np.zeros((n_windows, num_patches), dtype=np.int64)
         if patch_labels is not None:
-            for w_idx in range(n_windows):
-                for p_idx in range(num_patches):
-                    if patch_labels[w_idx, p_idx] == 1:
-                        patch_anomaly_types[w_idx, p_idx] = anomaly_types[w_idx]
+            # Vectorized: broadcast window anomaly types to patches with anomaly
+            patch_anomaly_types = np.where(
+                patch_labels == 1,
+                anomaly_types[:, np.newaxis],
+                0
+            )
 
-        result = {
+        return {
             'patch_recon': recon_patches,
             'patch_disc': disc_patches,
             'patch_student_recon': student_recon_patches,
@@ -898,6 +726,54 @@ class Evaluator:
             'patch_sample_types': patch_sample_types,  # (n_windows, num_patches)
             'patch_anomaly_types': patch_anomaly_types,  # (n_windows, num_patches)
         }
+
+    def set_precomputed_patch_scores(
+        self,
+        recon_patches: np.ndarray,
+        disc_patches: np.ndarray,
+        student_recon_patches: np.ndarray,
+        labels: np.ndarray,
+        sample_types: np.ndarray,
+        anomaly_types: np.ndarray,
+    ):
+        """Populate the evaluator cache with pre-computed patch scores.
+
+        Use this to avoid a redundant GPU forward pass when patch scores
+        have already been computed (e.g., by collect_all_visualization_data).
+
+        Args:
+            recon_patches: (n_windows, num_patches) teacher reconstruction scores
+            disc_patches: (n_windows, num_patches) discrepancy scores
+            student_recon_patches: (n_windows, num_patches) student reconstruction scores
+            labels: (n_windows,) window-level binary labels
+            sample_types: (n_windows,) window-level sample type indicators
+            anomaly_types: (n_windows,) window-level anomaly type indicators
+        """
+        self._cache['raw_scores'] = self._build_cache_dict(
+            recon_patches, disc_patches, student_recon_patches,
+            labels, sample_types, anomaly_types,
+        )
+
+    def _get_cached_scores(self):
+        """Get cached raw scores, computing if needed
+
+        Returns:
+            dict with 'patch_recon', 'patch_disc', 'window_recon', 'window_disc',
+                 'labels', 'sample_types', 'anomaly_types', 'patch_labels',
+                 'patch_sample_types', 'patch_anomaly_types'
+                Patch arrays are (n_windows, num_patches), window arrays are (n_windows,)
+        """
+        cache_key = 'raw_scores'
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # Compute patch-level scores once
+        recon_patches, disc_patches, student_recon_patches, labels, sample_types, anomaly_types = self._compute_patch_scores_all_patches()
+
+        result = self._build_cache_dict(
+            recon_patches, disc_patches, student_recon_patches,
+            labels, sample_types, anomaly_types,
+        )
 
         self._cache[cache_key] = result
         return result
@@ -928,36 +804,55 @@ class Evaluator:
         else:  # default
             return recon + self.config.lambda_disc * disc
 
+    def _get_point_score_indices(self):
+        """Get cached point score indices (geometry-only, scoring-mode independent)."""
+        cache_key = 'point_score_indices'
+        if cache_key not in self._cache:
+            ws_indices = np.array(self.test_dataset.window_start_indices)
+            total_len = len(self.test_dataset.point_labels)
+            self._cache[cache_key] = precompute_point_score_indices(
+                window_start_indices=ws_indices,
+                seq_length=self.config.seq_length,
+                patch_size=self.config.patch_size,
+                total_length=total_len,
+                num_patches=self.config.num_patches,
+            )
+        return self._cache[cache_key]
+
+    def _get_aggregation_map(self):
+        """Get cached aggregation map (geometry-only, scoring-mode independent)."""
+        cache_key = 'aggregation_map'
+        if cache_key not in self._cache:
+            ws_indices = np.array(self.test_dataset.window_start_indices)
+            total_len = len(self.test_dataset.point_labels)
+            self._cache[cache_key] = _build_aggregation_map(
+                ws_indices, self.config.patch_size,
+                self.config.num_patches, total_len
+            )
+        return self._cache[cache_key]
+
     def _compute_patch_labels(self) -> np.ndarray:
-        """Compute patch-level labels from point-level labels
-
-        For all_patches mode sample-level metrics, each patch gets its own label:
-        - 1 if the patch contains any anomaly timestep
-        - 0 otherwise
-
-        Returns:
-            patch_labels: (n_windows, num_patches) binary labels per patch
-        """
+        """Compute patch-level labels from point-level labels (vectorized)."""
         if not self.can_compute_point_level_pa_k:
             raise RuntimeError("Patch labels require test_dataset with point_labels and window_start_indices")
 
-        point_labels = self.test_dataset.point_labels
-        window_start_indices = self.test_dataset.window_start_indices
+        point_labels = np.asarray(self.test_dataset.point_labels)
+        window_start_indices = np.asarray(self.test_dataset.window_start_indices)
         patch_size = self.config.patch_size
         num_patches = self.config.num_patches
         n_windows = len(window_start_indices)
+        total_len = len(point_labels)
 
-        patch_labels = np.zeros((n_windows, num_patches), dtype=int)
+        # Vectorized: build (n_windows, num_patches) start positions
+        ws = window_start_indices[:, np.newaxis]  # (n_windows, 1)
+        p_idx = np.arange(num_patches)[np.newaxis, :]  # (1, num_patches)
+        starts = ws + p_idx * patch_size  # (n_windows, num_patches)
+        ends = np.minimum(starts + patch_size, total_len)
 
-        for w_idx, start_idx in enumerate(window_start_indices):
-            for p_idx in range(num_patches):
-                patch_start = start_idx + p_idx * patch_size
-                patch_end = min(patch_start + patch_size, len(point_labels))
-
-                # Label is 1 if any timestep in this patch is anomaly
-                if patch_start < len(point_labels):
-                    has_anomaly = point_labels[patch_start:patch_end].any()
-                    patch_labels[w_idx, p_idx] = 1 if has_anomaly else 0
+        # Use cumulative sum trick to check if any point in [start, end) has anomaly
+        cumsum = np.concatenate([[0], np.cumsum(point_labels)])
+        patch_sums = cumsum[ends] - cumsum[starts]
+        patch_labels = (patch_sums > 0).astype(int)
 
         return patch_labels
 
@@ -1139,6 +1034,8 @@ class Evaluator:
         Uses mean-aggregated point-level scores and point-level threshold.
         PA%K uses voting with the point-level threshold.
 
+        Only iterates over actual anomaly types (skips 'normal' at index 0).
+
         Returns:
             Dictionary with anomaly type names as keys, containing metrics for each type
         """
@@ -1160,77 +1057,80 @@ class Evaluator:
         ws_indices = np.array(self.test_dataset.window_start_indices)
         pt_labels = np.array(self.test_dataset.point_labels)
         total_len = len(pt_labels)
+        anomaly_regions = self.test_dataset.anomaly_regions
+        normal_mask = (pt_labels == 0)
 
-        # Point-level scores via mean aggregation
-        point_scores, _ = aggregate_patch_scores_to_point_level(
-            patch_scores, ws_indices,
-            self.config.seq_length, self.config.patch_size,
-            self.config.num_patches, total_len, method='mean'
-        )
+        # Point-level scores via mean aggregation (cached geometry)
+        flat_t, flat_wp, coverage, covered = self._get_aggregation_map()
+        point_scores = _aggregate_with_map(patch_scores.ravel(), flat_t, flat_wp, coverage, covered, total_len, method='mean')
         point_scores = np.nan_to_num(point_scores, nan=0.0)
 
         # Point-level threshold
-        if len(np.unique(pt_labels)) > 1:
-            fpr, tpr, thresholds_arr = roc_curve(pt_labels, point_scores)
-            optimal_idx = np.argmax(tpr - fpr)
-            threshold = thresholds_arr[optimal_idx]
-        else:
-            threshold = np.median(point_scores)
+        if len(np.unique(pt_labels)) < 2:
+            self._cache[cache_key] = {}
+            return {}
 
+        fpr, tpr, thresholds_arr = roc_curve(pt_labels, point_scores)
+        optimal_idx = np.argmax(tpr - fpr)
+        threshold = thresholds_arr[optimal_idx]
         point_predictions = (point_scores > threshold).astype(int)
 
-        # Precompute voting data for PA%K
-        pt_indices, pt_coverage = precompute_point_score_indices(
-            window_start_indices=ws_indices,
-            seq_length=self.config.seq_length,
-            patch_size=self.config.patch_size,
-            total_length=total_len,
-            num_patches=self.config.num_patches,
-        )
+        # Precompute voting data for PA%K (once, shared across all types)
+        pt_flat_t, pt_flat_si, pt_coverage = self._get_point_score_indices()
 
-        # For PA%K AUROC: threshold sweep with voting
+        # PA%K AUROC: threshold sweep with voting (once, shared)
         flat = patch_scores.ravel()
         n_thresh = 100
         vote_thresholds = np.linspace(flat.min() - 0.01, flat.max() + 0.01, n_thresh)
         point_scores_all = vectorized_voting_for_all_thresholds(
             scores=patch_scores,
-            point_indices=pt_indices,
+            point_indices=(pt_flat_t, pt_flat_si),
             point_coverage=pt_coverage,
             thresholds=vote_thresholds,
         )
 
-        # For PA%K F1: voted predictions at point-level threshold
+        # PA%K F1: voted predictions at point-level threshold (once, shared)
         voted_preds = _compute_voted_point_predictions(
-            patch_scores, pt_indices, pt_coverage, threshold, total_len
+            patch_scores, (pt_flat_t, pt_flat_si), pt_coverage, threshold, total_len
         )
 
-        # Build per-point anomaly_type array from anomaly_regions
+        # Build per-point anomaly_type array and precompute eval_type_masks
         point_anomaly_types = np.full(total_len, -1, dtype=int)  # -1 = normal
-        for region in self.test_dataset.anomaly_regions:
-            start = region.start
+        for region in anomaly_regions:
             end = min(region.end, total_len)
-            point_anomaly_types[start:end] = region.anomaly_type
+            point_anomaly_types[region.start:end] = region.anomaly_type
+
+        # Precompute eval_type_mask for each anomaly type (exclude other types' regions)
+        # Start with all True, then for each type mask out other types
+        base_mask = np.ones(total_len, dtype=bool)
+        # Build mask of each type's region coverage
+        type_region_masks = {}  # atype_idx -> bool mask of regions belonging to this type
+        for atype_idx in range(1, len(ANOMALY_TYPE_NAMES)):
+            type_region_masks[atype_idx] = (point_anomaly_types == atype_idx)
+
+        # For each type, eval_type_mask = ~(union of other types' anomaly regions)
+        all_anomaly_region_mask = (point_anomaly_types >= 1)  # all anomaly points
 
         results = {}
 
-        for atype_idx, atype_name in enumerate(ANOMALY_TYPE_NAMES):
-            # Points belonging to this anomaly type (or normal points)
-            type_anomaly_mask = (point_anomaly_types == atype_idx)
-            normal_mask = (pt_labels == 0)
+        # Skip index 0 ('normal') — only evaluate actual anomaly types
+        for atype_idx in range(1, len(ANOMALY_TYPE_NAMES)):
+            atype_name = ANOMALY_TYPE_NAMES[atype_idx]
+            type_anomaly_mask = type_region_masks[atype_idx]
 
-            # For per-type evaluation: include all normal points + only this type's anomaly points
-            eval_mask = normal_mask | type_anomaly_mask
-            if eval_mask.sum() == 0:
+            if not type_anomaly_mask.any():
                 continue
 
+            # For per-type evaluation: all normal + only this type's anomaly points
+            eval_mask = normal_mask | type_anomaly_mask
             type_scores = point_scores[eval_mask]
             type_labels = pt_labels[eval_mask]
             type_predictions = point_predictions[eval_mask]
 
             type_results = {
                 'count': int(type_anomaly_mask.sum()),
-                'mean_score': float(point_scores[type_anomaly_mask].mean()) if type_anomaly_mask.any() else 0.0,
-                'std_score': float(point_scores[type_anomaly_mask].std()) if type_anomaly_mask.any() else 0.0,
+                'mean_score': float(point_scores[type_anomaly_mask].mean()),
+                'std_score': float(point_scores[type_anomaly_mask].std()),
             }
 
             if len(np.unique(type_labels)) > 1:
@@ -1238,19 +1138,18 @@ class Evaluator:
                 type_results['precision'] = float(precision_score(type_labels, type_predictions, zero_division=0))
                 type_results['recall'] = float(recall_score(type_labels, type_predictions, zero_division=0))
                 type_results['f1_score'] = float(f1_score(type_labels, type_predictions, zero_division=0))
+                # detection_rate = recall (point-wise fraction of anomaly points detected)
+                type_results['detection_rate'] = type_results['recall']
 
-                # PA%K metrics
-                # Create eval_type_mask: exclude other anomaly types
-                eval_type_mask = np.ones(total_len, dtype=bool)
-                for region in self.test_dataset.anomaly_regions:
-                    if region.anomaly_type != atype_idx:
-                        start, end = region.start, min(region.end, total_len)
-                        eval_type_mask[start:end] = False
+                # PA%K: eval_type_mask excludes other anomaly types
+                eval_type_mask = ~(all_anomaly_region_mask & ~type_anomaly_mask)
+
+                type_regions = [r for r in anomaly_regions if r.anomaly_type == atype_idx]
 
                 for k in [10, 20, 50, 80]:
                     # PA%K AUROC: sweep
                     roc_result = _compute_single_pa_k_roc((
-                        point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
+                        point_scores_all, pt_labels, anomaly_regions,
                         eval_type_mask, k, atype_idx, True
                     ))
                     _, _, pa_auc, _ = roc_result
@@ -1258,26 +1157,35 @@ class Evaluator:
 
                     # PA%K F1: fixed threshold + voting
                     pa_f1 = _compute_pa_k_f1_at_threshold(
-                        voted_preds, pt_labels, self.test_dataset.anomaly_regions,
+                        voted_preds, pt_labels, anomaly_regions,
                         k, eval_type_mask
                     )
                     type_results[f'pa_{k}_f1'] = float(pa_f1)
-            else:
-                if type_labels.sum() == len(type_labels):
-                    type_results['detection_rate'] = float(type_predictions.mean())
 
-                    for k in [10, 20, 50, 80]:
-                        pa_rate = compute_segment_pa_k_detection_rate(
-                            point_scores=voted_preds,
-                            point_labels=pt_labels,
-                            anomaly_regions=self.test_dataset.anomaly_regions,
-                            anomaly_type=atype_idx,
-                            threshold=0.5,
-                            k_percent=k
-                        )
-                        type_results[f'pa_{k}_detection_rate'] = float(pa_rate)
-                else:
-                    type_results['false_positive_rate'] = float(type_predictions.mean())
+                    # PA%K segment detection rate: same voted_preds (single threshold) for all K
+                    pa_det_rate = compute_segment_pa_k_detection_rate(
+                        point_scores=voted_preds,
+                        point_labels=pt_labels,
+                        anomaly_regions=anomaly_regions,
+                        anomaly_type=atype_idx,
+                        threshold=0.5,
+                        k_percent=k
+                    )
+                    type_results[f'pa_{k}_detection_rate'] = float(pa_det_rate)
+            else:
+                # All points in eval set are anomaly (no normal points have this type)
+                type_results['detection_rate'] = float(type_predictions.mean())
+
+                for k in [10, 20, 50, 80]:
+                    pa_rate = compute_segment_pa_k_detection_rate(
+                        point_scores=voted_preds,
+                        point_labels=pt_labels,
+                        anomaly_regions=anomaly_regions,
+                        anomaly_type=atype_idx,
+                        threshold=0.5,
+                        k_percent=k
+                    )
+                    type_results[f'pa_{k}_detection_rate'] = float(pa_rate)
 
             results[atype_name] = type_results
 
@@ -1331,12 +1239,9 @@ class Evaluator:
         pt_labels = np.array(self.test_dataset.point_labels)
         total_len = len(pt_labels)
 
-        # Aggregate patch scores to point-level via mean
-        point_scores, _ = aggregate_patch_scores_to_point_level(
-            patch_scores, ws_indices,
-            self.config.seq_length, self.config.patch_size,
-            self.config.num_patches, total_len, method='mean'
-        )
+        # Aggregate patch scores to point-level via mean (cached geometry)
+        flat_t, flat_wp, coverage, covered = self._get_aggregation_map()
+        point_scores = _aggregate_with_map(patch_scores.ravel(), flat_t, flat_wp, coverage, covered, total_len, method='mean')
 
         # Handle NaN (uncovered timestamps) — treat as 0 score
         point_scores = np.nan_to_num(point_scores, nan=0.0)
@@ -1364,14 +1269,8 @@ class Evaluator:
             # === PA%K metrics ===
             pa_k_values = [10, 20, 50, 80]
 
-            # Precompute point indices for voting
-            pt_indices, pt_coverage = precompute_point_score_indices(
-                window_start_indices=ws_indices,
-                seq_length=self.config.seq_length,
-                patch_size=self.config.patch_size,
-                total_length=total_len,
-                num_patches=self.config.num_patches,
-            )
+            # Precompute point indices for voting (cached)
+            pt_flat_t, pt_flat_si, pt_coverage = self._get_point_score_indices()
 
             # PA%K AUROC: sweep thresholds with voting (threshold-free metric)
             flat = patch_scores.ravel()
@@ -1380,12 +1279,16 @@ class Evaluator:
 
             point_scores_all = vectorized_voting_for_all_thresholds(
                 scores=patch_scores,
-                point_indices=pt_indices,
+                point_indices=(pt_flat_t, pt_flat_si),
                 point_coverage=pt_coverage,
                 thresholds=thresholds_arr,
             )
 
             eval_mask = np.ones(total_len, dtype=bool)
+            # Compute voted predictions once (K-independent)
+            voted_preds = _compute_voted_point_predictions(
+                patch_scores, (pt_flat_t, pt_flat_si), pt_coverage, threshold, total_len
+            )
             for k in pa_k_values:
                 # PA%K AUROC via threshold sweep
                 roc_result = _compute_single_pa_k_roc((
@@ -1396,9 +1299,6 @@ class Evaluator:
                 results[f'pa_{k}_roc_auc'] = float(pa_auc)
 
                 # PA%K F1: use point-level threshold with voting
-                voted_preds = _compute_voted_point_predictions(
-                    patch_scores, pt_indices, pt_coverage, threshold, total_len
-                )
                 pa_f1 = _compute_pa_k_f1_at_threshold(
                     voted_preds, pt_labels, self.test_dataset.anomaly_regions,
                     k, eval_mask
@@ -1478,12 +1378,9 @@ class Evaluator:
         pt_labels = np.array(self.test_dataset.point_labels)
         total_len = len(pt_labels)
 
-        # Aggregate to point-level via mean
-        point_scores, _ = aggregate_patch_scores_to_point_level(
-            patch_scores, ws_indices,
-            self.config.seq_length, self.config.patch_size,
-            self.config.num_patches, total_len, method='mean'
-        )
+        # Aggregate to point-level via mean (cached geometry)
+        flat_t, flat_wp, coverage, covered = self._get_aggregation_map()
+        point_scores = _aggregate_with_map(patch_scores.ravel(), flat_t, flat_wp, coverage, covered, total_len, method='mean')
         point_scores = np.nan_to_num(point_scores, nan=0.0)
 
         results = {}
@@ -1505,13 +1402,7 @@ class Evaluator:
 
             # PA%K metrics
             pa_k_values = [10, 20, 50, 80]
-            pt_indices, pt_coverage = precompute_point_score_indices(
-                window_start_indices=ws_indices,
-                seq_length=self.config.seq_length,
-                patch_size=self.config.patch_size,
-                total_length=total_len,
-                num_patches=self.config.num_patches,
-            )
+            pt_flat_t, pt_flat_si, pt_coverage = self._get_point_score_indices()
 
             # PA%K AUROC: threshold sweep with voting
             flat = patch_scores.ravel()
@@ -1520,12 +1411,16 @@ class Evaluator:
 
             point_scores_all = vectorized_voting_for_all_thresholds(
                 scores=patch_scores,
-                point_indices=pt_indices,
+                point_indices=(pt_flat_t, pt_flat_si),
                 point_coverage=pt_coverage,
                 thresholds=thresholds_arr,
             )
 
             eval_mask = np.ones(total_len, dtype=bool)
+            # Compute voted predictions once (K-independent)
+            voted_preds = _compute_voted_point_predictions(
+                patch_scores, (pt_flat_t, pt_flat_si), pt_coverage, threshold, total_len
+            )
             for k in pa_k_values:
                 roc_result = _compute_single_pa_k_roc((
                     point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
@@ -1535,9 +1430,6 @@ class Evaluator:
                 results[f'pa_{k}_roc_auc'] = float(pa_auc)
 
                 # PA%K F1: point-level threshold + voting
-                voted_preds = _compute_voted_point_predictions(
-                    patch_scores, pt_indices, pt_coverage, threshold, total_len
-                )
                 pa_f1 = _compute_pa_k_f1_at_threshold(
                     voted_preds, pt_labels, self.test_dataset.anomaly_regions,
                     k, eval_mask

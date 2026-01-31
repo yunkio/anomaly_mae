@@ -17,7 +17,7 @@ from .dataset_sliding import (
 from .model import PositionalEncoding, SelfDistilledMAEMultivariate
 from .loss import SelfDistillationLoss
 from .trainer import Trainer
-from .evaluator import Evaluator
+from .evaluator import Evaluator, DatasetMetadata
 
 __all__ = [
     # Config

@@ -152,7 +152,7 @@ def main():
     # 5. Best Model Visualizations
     if not args.skip_model and exp_data['model_path']:
         best_dir = os.path.join(vis_dir, 'best_model')
-        model, config, test_loader, _ = load_best_model(exp_data['model_path'], args.num_test)
+        model, config, test_loader, _, _ = load_best_model(exp_data['model_path'], args.num_test)
         best_vis = BestModelVisualizer(model, config, test_loader, best_dir)
 
         # Get training history (if available)
