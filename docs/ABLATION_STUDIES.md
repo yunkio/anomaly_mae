@@ -1,6 +1,6 @@
 # Ablation Studies Documentation
 
-**Last Updated**: 2026-01-28
+**Last Updated**: 2026-02-05
 **Status**: ✅ Updated to reflect new ablation framework
 
 > **Note**: For the latest Phase 1/Phase 2 ablation experiment configurations, see [ABLATION_EXPERIMENTS.md](ABLATION_EXPERIMENTS.md).
@@ -18,16 +18,16 @@ This document describes the ablation studies used to validate the Self-Distilled
   - Conv1: num_features → d_model//2 (kernel_size=3, padding=1)
   - Conv2: d_model//2 → d_model (kernel_size=3, padding=1)
 - **Transformer**: Encoder-decoder architecture with self-distillation
-  - Encoder: 1 layer, 2 attention heads (t2s1 default)
+  - Encoder: 1 layer, 8 attention heads
   - Teacher Decoder: 2 layers
-  - Student Decoder: 1 layer
+  - Student Decoder: 2 layers
 
 **Pipeline** (patch_cnn mode):
-1. Input (batch, 100, 8) → Patchify → CNN per patch → (batch, 10, 64)
-2. Patches → Positional encoding → (batch, 10, 64)
+1. Input (batch, 500, 8) → Patchify → CNN per patch → (batch, 100, 128)
+2. Patches → Positional encoding → (batch, 100, 128)
 3. Patches + Positional encoding → Transformer encoder
 4. Latent → Teacher/Student decoders → Output projection
-5. Reconstruction (batch, 100, 8)
+5. Reconstruction (batch, 500, 8)
 
 ---
 
@@ -43,7 +43,7 @@ This document describes the ablation studies used to validate the Self-Distilled
 
 **Training**:
 - Loss: Reconstruction + Discrepancy
-- Random patch masking during training (20% of patches masked)
+- Random patch masking during training (15% of patches masked by default)
 - Both teacher and student models trained
 
 **Evaluation**:
@@ -162,22 +162,22 @@ Test the impact of different patchification strategies on anomaly detection:
 ### 8. Mask After Encoder Experiments
 
 **Configuration**:
-- `mask_after_encoder=False` (default): Mask tokens go through encoder
-- `mask_after_encoder=True`: Standard MAE - encode visible patches only
+- `mask_after_encoder=True` (default): Standard MAE - encode visible patches only
+- `mask_after_encoder=False`: Mask tokens go through encoder
 
 **Pipeline Comparison**:
 
 | Mode | Encoder Input | Mask Token Insertion |
 |------|---------------|---------------------|
-| False (current) | All patches (visible + mask tokens) | Before encoder |
-| True (standard MAE) | Only visible patches | Before decoder |
+| True (default, standard MAE) | Only visible patches | Before decoder |
+| False | All patches (visible + mask tokens) | Before encoder |
 
 **Purpose**:
-Test whether standard MAE masking architecture (encode visible only) outperforms the current approach.
+Test whether standard MAE masking architecture (encode visible only) outperforms the alternative approach.
 
 **Hypothesis**:
 - Standard MAE may learn better representations by not letting mask tokens influence encoding
-- Current approach may benefit from mask token attention patterns
+- Alternative approach may benefit from mask token attention patterns
 
 ---
 
@@ -232,11 +232,11 @@ Test whether independent mask representations help differentiate teacher/student
 - Too many patches (small patch size): May lack context, harder to reconstruct
 - Optimal: Balance between context and granularity
 
-### Masking Strategy Impact
-**Question**: Does feature-wise masking outperform patch masking?
+### Masking Impact
+**Question**: What is the optimal masking ratio?
 
-- Patch masking: All features masked at same patches
-- Feature-wise masking: Each feature masked at different patches
+- Lower masking ratios: Easier reconstruction, less regularization
+- Higher masking ratios: Harder reconstruction, more regularization
 
 ### Patchify Mode Impact
 **Question**: How does local feature extraction affect anomaly detection?
@@ -349,7 +349,6 @@ Stage 2 uses a 3-phase diverse selection strategy:
 - `patch_level_loss`: True (5) + False (5)
 - `margin_type`: hinge (5) + softplus (5) + dynamic (5)
 - `patchify_mode`: patch_cnn (5) + linear (5)
-- `masking_strategy`: patch (5) + feature_wise (5)
 - `masking_ratio`: each value (5)
 - `num_patches`: each value (5)
 - `mask_after_encoder`: True (5) + False (5)

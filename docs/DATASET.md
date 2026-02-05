@@ -1,6 +1,6 @@
 # Dataset Documentation
 
-**Last Updated**: 2026-01-28
+**Last Updated**: 2026-02-05
 
 ---
 
@@ -22,10 +22,10 @@ This project uses a **Sliding Window Time Series Dataset** that simulates server
    └── Inject anomalies at random intervals
 
 2. Sliding Window Extraction
-   ├── Window size: 100 timesteps
+   ├── Window size: 500 timesteps (configurable)
    ├── Train stride: Configurable (default 11)
    ├── Test stride: Always 1 (for point-level PA%K)
-   └── Total windows: ~20,000 (train), ~55,000 (test, stride=1)
+   └── Total windows: varies based on window size and stride
 
 3. Train/Test Split
    ├── Train: First 80% (220K timesteps, ~5% anomaly)
@@ -43,14 +43,14 @@ This project uses a **Sliding Window Time Series Dataset** that simulates server
 | Type | Label | Description |
 |------|-------|-------------|
 | **Pure Normal** | 0 | No anomaly anywhere in the window |
-| **Disturbing Normal** | 0 | Anomaly exists but NOT in last 10 timesteps |
-| **Anomaly** | 1 | Anomaly exists in last 10 timesteps |
+| **Disturbing Normal** | 0 | Anomaly exists but NOT in last patch_size timesteps |
+| **Anomaly** | 1 | Anomaly exists in last patch_size timesteps |
 
 ### Why "Disturbing Normal"?
 
 This represents a challenging case where:
 - The window contains anomalous patterns earlier in the sequence
-- But the evaluation region (last 10 timesteps) is normal
+- But the evaluation region (last patch_size timesteps, default 5) is normal
 - Tests if the model correctly ignores past anomalies when predicting the masked region
 
 ---
@@ -103,20 +103,20 @@ The evaluation aggregates window-level scores to point-level using one of four m
 
 ### Window Coverage
 
-For `seq_length=100` and `patch_size=10`:
+For `seq_length=500` and `patch_size=5`:
 
 ```
-Window w's last patch: timesteps [w+90, w+99]
+Window w's last patch: timesteps [w+495, w+499]
 
 Timestep t is covered by windows where:
-  w+90 ≤ t ≤ w+99
-  → w ∈ [t-99, t-90]
-  → Up to 10 windows per timestep
+  w+495 ≤ t ≤ w+499
+  → w ∈ [t-499, t-495]
+  → Up to 5 windows per timestep
 
 Coverage by position:
-  - Timesteps 0-89: Not covered (not in any last patch)
-  - Timesteps 90-99: 1-10 windows
-  - Timesteps 100+: 10 windows (full coverage)
+  - Timesteps 0-494: Not covered (not in any last patch)
+  - Timesteps 495-499: 1-5 windows
+  - Timesteps 500+: 5 windows (full coverage)
 ```
 
 ### Sample-Level vs Point-Level Metrics
@@ -712,12 +712,12 @@ from mae_anomaly import Config
 config = Config()
 
 # Key dataset parameters
-config.seq_length = 100                    # Window size
+config.seq_length = 500                    # Window size
 config.num_features = 8                    # Number of features
 config.sliding_window_total_length = 275000   # Total time series length (220K train + 55K test)
 config.sliding_window_stride = 11             # Train stride (89% overlap)
 config.anomaly_interval_scale = 0.75       # Controls anomaly density (2x frequency, ~13% anomaly)
-config.patch_size = 10                     # Patch size (also used for window labeling)
+config.patch_size = 5                      # Patch size (also used for window labeling)
 
 # Test set target ratios (for downsampling)
 config.test_ratio_pure_normal = 0.65      # 65%
@@ -830,9 +830,9 @@ test_loader = DataLoader(test_dataset, batch_size=1024, shuffle=False)
 
 for batch in train_loader:
     sequence, label, point_labels, sample_type, anomaly_type = batch
-    # sequence: (batch, 100, 8)
+    # sequence: (batch, 500, 8)
     # label: (batch,) - 0 or 1
-    # point_labels: (batch, 100) - per-timestep labels
+    # point_labels: (batch, 500) - per-timestep labels
     # sample_type: (batch,) - 0, 1, or 2
     # anomaly_type: (batch,) - 0-9 (0=normal, 1-6=value, 7-9=pattern)
 ```

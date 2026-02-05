@@ -1,6 +1,6 @@
 # Visualization Documentation
 
-**Last Updated**: 2026-01-29
+**Last Updated**: 2026-02-05
 **Status**: Complete
 
 ---
@@ -265,7 +265,6 @@ Full training results on selected diverse candidates, **with per-hyperparameter 
 | `learning_curves.png` | Training loss curves for top experiments |
 | `stage2_summary_dashboard.png` | Comprehensive Stage 2 summary dashboard |
 | `hyperparam_masking_ratio.png` | masking_ratio impact on Stage 2 ROC-AUC |
-| `hyperparam_masking_strategy.png` | masking_strategy impact on Stage 2 ROC-AUC |
 | `hyperparam_num_patches.png` | num_patches impact on Stage 2 ROC-AUC |
 | `hyperparam_margin_type.png` | margin_type impact on Stage 2 ROC-AUC |
 | `hyperparam_force_mask_anomaly.png` | force_mask_anomaly impact on Stage 2 ROC-AUC |
@@ -501,8 +500,6 @@ Stage 2 selects ~50-70 diverse candidates for full training using a 3-phase appr
 | margin_type=hinge | 5 | Best with hinge margin |
 | patchify_mode=patch_cnn | 5 | Best with patch-CNN patchify |
 | patchify_mode=linear | 5 | Best with linear patchify (MAE style) |
-| masking_strategy=patch | 5 | Best with patch masking strategy |
-| masking_strategy=feature_wise | 5 | Best with feature-wise masking strategy |
 | masking_ratio (각 값) | 5 | Best for each masking ratio value |
 | num_patches (각 값) | 5 | Best for each num_patches value |
 
@@ -515,8 +512,7 @@ Stage 2 selects ~50-70 diverse candidates for full training using a 3-phase appr
 | Column | Description |
 |--------|-------------|
 | combination_id | Unique identifier for parameter combination |
-| masking_ratio | Masking ratio (0.4, 0.7) |
-| masking_strategy | Masking strategy (patch, feature_wise) |
+| masking_ratio | Masking ratio (0.05, 0.1, 0.15, 0.2, etc.) |
 | num_patches | Number of patches (10, 25) |
 | margin_type | Margin type (hinge, softplus, dynamic) |
 | force_mask_anomaly | Whether to force mask anomaly patches (True/False) |
