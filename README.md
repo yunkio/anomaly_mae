@@ -9,33 +9,56 @@ Self-Distilled Masked Autoencoder (MAE) 구현으로, 다변량 시계열 데이
 ├── README.md                 # 메인 문서
 ├── requirements.txt          # Python 의존성
 ├── setup.py                  # 패키지 설정
+├── CLAUDE.md                 # Claude Code 작업 지침
+├── ablation_guideline.md     # Ablation 실험 가이드
 │
 ├── mae_anomaly/              # 메인 패키지
 │   ├── __init__.py
 │   ├── config.py             # 설정 클래스
-│   ├── dataset_sliding.py    # 슬라이딩 윈도우 데이터셋 (메인)
-│   ├── dataset.py            # 레거시 데이터셋 (deprecated)
+│   ├── dataset_sliding.py    # 슬라이딩 윈도우 데이터셋
 │   ├── model.py              # MAE 모델 아키텍처
 │   ├── loss.py               # Self-distillation loss
 │   ├── trainer.py            # 학습 로직
-│   └── evaluator.py          # 평가 로직
+│   ├── evaluator.py          # 평가 로직
+│   ├── datasets/             # 데이터셋 로더
+│   │   ├── loaders.py        # SWaT, WaDi, Simulation 데이터 로더
+│   │   └── noisy.py          # 노이즈 레이블 데이터셋
+│   ├── utils/                # 유틸리티
+│   │   ├── system.py         # GPU 메모리 관리
+│   │   └── experiment.py     # 실험 설정 헬퍼
+│   └── visualization/        # 시각화 모듈
+│       ├── base.py
+│       ├── best_model_visualizer.py
+│       └── training_visualizer.py
 │
 ├── scripts/                  # 실행 스크립트
-│   ├── run_experiments.py    # 2-stage 실험 (Quick Search → Full Training)
-│   └── visualize_all.py      # 결과 시각화
-│
-├── examples/                 # 사용 예제
-│   └── basic_usage.py
+│   ├── visualize_all.py      # 통합 시각화 스크립트
+│   └── ablation/
+│       ├── run_ablation.py   # 통합 ablation 실험 실행기
+│       └── configs/          # 실험 설정 파일
+│           ├── README.md     # 설정 시스템 가이드
+│           ├── simulation_test.py
+│           ├── swat_A1A2_test.py
+│           └── wadi_14days_A1_test.py
 │
 ├── docs/                     # 문서
 │   ├── ARCHITECTURE.md       # 모델 아키텍처 문서
 │   ├── ABLATION_STUDIES.md   # Ablation study 설명
+│   ├── ABLATION_EXPERIMENTS.md  # 실험 결과 문서
 │   ├── CHANGELOG.md          # 변경 이력
 │   ├── VISUALIZATIONS.md     # 시각화 가이드
-│   └── DATASET.md            # 데이터셋 문서
+│   ├── DATASET.md            # 데이터셋 문서
+│   └── INFERENCE_MODES.md    # 추론 모드 문서
+│
+├── comparison/               # 모델 비교 (실험 결과)
+│   ├── GUIDE.md              # 비교 가이드
+│   ├── MODELS.md             # 모델 정의
+│   └── results/              # 데이터셋별 비교 결과
 │
 └── results/                  # 실험 결과
-    └── experiments/          # 실험별 결과 저장
+    ├── experiments/          # Ablation 실험 결과
+    ├── SWaT/                 # SWaT 데이터셋 결과
+    └── WaDi/                 # WaDi 데이터셋 결과
 ```
 
 ## 주요 기능
@@ -98,21 +121,35 @@ dataset = SlidingWindowDataset(
 model = SelfDistilledMAEMultivariate(config)
 ```
 
-### 실험 실행
+### Ablation 실험 실행
+
+**통합 설정 기반 시스템** (모든 데이터셋에 단일 진입점):
 
 ```bash
-# 2-stage 실험 실행 (Quick Search → Full Training → Visualization)
-python scripts/run_experiments.py
+# Simulation 데이터 테스트
+python scripts/ablation/run_ablation.py --config scripts/ablation/configs/simulation_test.py
 
-# 기존 결과에 대해 시각화만 실행
+# SWaT A1+A2 실험
+python scripts/ablation/run_ablation.py --config scripts/ablation/configs/swat_A1A2_test.py
+
+# WaDi 14days + A1 실험
+python scripts/ablation/run_ablation.py --config scripts/ablation/configs/wadi_14days_A1_test.py
+
+# 시각화
 python scripts/visualize_all.py --experiment-dir results/experiments/YYYYMMDD_HHMMSS
 ```
 
-**실험 기본 설정**:
-| Stage | 시계열 길이 | train_ratio | Train 샘플 | Test 샘플 | Epochs | 모델 수 |
-|-------|------------|-------------|-----------|----------|--------|--------|
-| Stage 1 (Quick) | 200,000 | 0.3 | ~6,000 | 2,000 | 1 | 432 |
-| Stage 2 (Full) | 440,000 | 0.5 | ~22,000 | 2,000 | 2 | ~50-70 |
+**설정 파일 생성**:
+```bash
+# 템플릿 복사
+cp scripts/ablation/configs/simulation_test.py scripts/ablation/configs/my_experiment.py
+
+# 설정 편집 (DATASET_TYPE, BASE_CONFIG, EXPERIMENTS)
+# 실행
+python scripts/ablation/run_ablation.py --config scripts/ablation/configs/my_experiment.py
+```
+
+자세한 내용은 [ablation_guideline.md](ablation_guideline.md) 및 [scripts/ablation/configs/README.md](scripts/ablation/configs/README.md) 참조.
 
 ## 설정
 
@@ -200,4 +237,4 @@ MIT License
 
 ---
 
-**마지막 업데이트**: 2026-01-23
+**마지막 업데이트**: 2026-02-15

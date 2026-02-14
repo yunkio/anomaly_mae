@@ -1,7 +1,7 @@
 # Ablation Studies Documentation
 
-**Last Updated**: 2026-02-05
-**Status**: ✅ Updated to reflect new ablation framework
+**Last Updated**: 2026-02-15
+**Status**: ✅ Updated for unified config system
 
 > **Note**: For the latest Phase 1/Phase 2 ablation experiment configurations, see [ABLATION_EXPERIMENTS.md](ABLATION_EXPERIMENTS.md).
 
@@ -261,36 +261,55 @@ Based on the MAE and self-distillation literature:
 All ablations are now tested via the unified ablation framework in `scripts/ablation/run_ablation.py`:
 
 ```bash
-# Run Phase 1 ablation experiments
-python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py
+# Simulation 데이터 테스트
+python scripts/ablation/run_ablation.py --config scripts/ablation/configs/simulation_test.py
 
-# Run specific experiment group
-python scripts/ablation/run_ablation.py --config configs/phase1.py --start-from 50
+# SWaT A1+A2 실험
+python scripts/ablation/run_ablation.py --config scripts/ablation/configs/swat_A1A2_test.py
+
+# WaDi 14days + A1 실험
+python scripts/ablation/run_ablation.py --config scripts/ablation/configs/wadi_14days_A1_test.py
+
+# 특정 실험부터 재개
+python scripts/ablation/run_ablation.py --config <config>.py --start-from 50
 ```
 
 **Ablation Config Structure** (`scripts/ablation/configs/`):
 
 ```python
-# Example config file
+# Example config file (scripts/ablation/configs/my_experiment.py)
+DATASET_TYPE = 'swat_A1A2'  # 'simulation', 'swat_A1A2', 'wadi_14days_A1', etc.
+
+PHASE_NAME = "my_experiment"
+PHASE_DESCRIPTION = "Description of experiment"
+
+# 모든 실험에 적용되는 기본 설정
 BASE_CONFIG = {
-    'd_model': 64,
-    'nhead': 2,
-    'masking_ratio': 0.2,
-    'margin_type': 'dynamic',
-    # ... other defaults
+    'seq_length': 500,
+    'patch_size': 5,
+    'num_patches': 100,
+    'd_model': 128,
+    'nhead': 8,
+    'num_encoder_layers': 2,
+    'num_teacher_decoder_layers': 4,
+    'num_student_decoder_layers': 1,
+    'num_epochs': 50,
+    'learning_rate': 2e-3,
+    'batch_size': 256,
+    'sliding_window_stride': 11,
+    'sliding_window_test_stride': 1,
+    # ... other config params
 }
 
+# 실험 변형 (각각 BASE_CONFIG 상속)
 EXPERIMENTS = [
-    {'name': '001_baseline', 'd_model': 64},
-    {'name': '002_d128', 'd_model': 128},
-    {'name': '003_d256', 'd_model': 256},
-    # ... 170 total experiments
+    {'name': 'baseline', 'config': {}},
+    {'name': 'deeper_encoder', 'config': {'num_encoder_layers': 4}},
+    {'name': 'larger_model', 'config': {'d_model': 256}},
+    # ... more experiments
 ]
 
-# Each experiment is evaluated across 6 variants:
-# - 2 mask_after_encoder: [True, False]
-# - 3 scoring_mode: ['default', 'adaptive', 'normalized']
-# Total: 170 × 6 = 1020 results
+SCORING_MODES = ['default']  # or ['default', 'teacher_only', 'disc_only']
 ```
 
 Evaluation logic in `mae_anomaly/evaluator.py`:
