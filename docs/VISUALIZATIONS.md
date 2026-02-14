@@ -1,6 +1,6 @@
 # Visualization Documentation
 
-**Last Updated**: 2026-02-05
+**Last Updated**: 2026-02-15
 **Status**: Complete
 
 ---
@@ -134,47 +134,46 @@ For learning curve and comparison visualizations, use these consistent conventio
 
 ## Scripts
 
-### 1. run_experiments.py (Experiment Runner)
+### 1. run_ablation.py (Ablation Runner)
 
-Runs experiments and saves results. **Does NOT generate visualizations.**
+Runs ablation studies and saves results. **Generates visualizations in background by default.**
 
 ```bash
-# Run full experiment pipeline
-python scripts/run_experiments.py
+# Run ablation study
+python scripts/ablation/run_ablation.py --config configs/{config}.py
 
-# Custom parameters
-python scripts/run_experiments.py --quick-epochs 10 --full-epochs 50
+# Disable visualization
+python scripts/ablation/run_ablation.py --config configs/{config}.py --no-viz
 
 # Output
-results/experiments/YYYYMMDD_HHMMSS/
-├── quick_search_results.csv
-├── full_search_results.csv
+results/{Dataset}/{scenario}/
+├── experiment_metadata.json
 ├── best_model.pt
 ├── best_config.json
 ├── training_histories.json
-└── experiment_metadata.json
+├── best_model_detailed.csv
+├── anomaly_type_metrics.json
+└── dataset.md
 ```
 
 ### 2. visualize_all.py (Unified Visualization Script)
 
-Generates ALL visualizations from saved experiment results.
+Generates ALL visualizations from saved ablation results.
 
 ```bash
 # Auto-find latest experiment
 python scripts/visualize_all.py
 
 # Specify experiment directory
-python scripts/visualize_all.py --experiment-dir results/experiments/20260122_120000
+python scripts/visualize_all.py --experiment-dir results/WaDi/A1
 
 # Skip certain visualizations
 python scripts/visualize_all.py --skip-data --skip-architecture
 
 # Output
-results/experiments/YYYYMMDD_HHMMSS/visualization/
+results/{Dataset}/{scenario}/visualization/
 ├── data/           # DataVisualizer outputs
 ├── architecture/   # ArchitectureVisualizer outputs
-├── stage1/         # Stage 1 results visualization
-├── stage2/         # Stage 2 results visualization (incl. per-hyperparameter)
 └── best_model/     # Best model analysis
 ```
 
@@ -567,14 +566,14 @@ Consistent colors across all visualizations:
 ## Workflow
 
 ```
-1. Run experiments (no visualization):
-   python scripts/run_experiments.py
+1. Run ablation study (with background visualization by default):
+   python scripts/ablation/run_ablation.py --config configs/{config}.py
 
-2. Generate all visualizations:
-   python scripts/visualize_all.py
+2. Generate visualizations manually (if needed):
+   python scripts/visualize_all.py --experiment-dir results/{Dataset}/{scenario}
 
 3. Or generate specific visualizations:
-   python scripts/visualize_all.py --skip-data --skip-architecture
+   python scripts/visualize_all.py --experiment-dir results/{Dataset}/{scenario} --skip-data --skip-architecture
 ```
 
 ---

@@ -1,5 +1,7 @@
 # Inference: Score Computation Flow
 
+**Last Updated**: 2026-02-15
+
 This document explains the complete inference flow for Self-Distilled MAE anomaly detection.
 
 ## Overview

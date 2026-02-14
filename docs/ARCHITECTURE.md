@@ -1,6 +1,6 @@
 # Model Architecture Documentation
 
-**Last Updated**: 2026-02-05
+**Last Updated**: 2026-02-15
 **Model**: 1D-CNN + Transformer Self-Distilled MAE
 
 ---

@@ -5,29 +5,31 @@ This document describes the ablation study framework for the Self-Distilled MAE 
 ## Quick Start
 
 ```bash
-# Run unified Phase 1 experiments (170 experiments × 6 variants = 1020 results)
-python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py
+# Run ablation study with config file
+python scripts/ablation/run_ablation.py --config configs/20260131_121350_phase2.py
 
 # Run specific experiments only
-python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py \
+python scripts/ablation/run_ablation.py --config configs/20260131_121350_phase2.py \
     --experiments 001_default 022_d_model_128
 
 # Skip existing and disable visualization
-python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py \
+python scripts/ablation/run_ablation.py --config configs/20260131_121350_phase2.py \
     --no-viz
 
 # Run with background visualization (default)
-python scripts/ablation/run_ablation.py --config configs/20260127_052220_phase1.py
+python scripts/ablation/run_ablation.py --config configs/20260131_121350_phase2.py
 ```
 
 ## Directory Structure
 
 ```
 scripts/ablation/
-├── run_ablation.py                              # Unified runner (use this)
+├── run_ablation.py                              # Unified runner
 ├── configs/                                      # Configuration files
-│   └── 20260127_052220_phase1.py               # Unified Phase 1: 170 experiments
-└── run_ablation_experiments_*.py               # [DEPRECATED] Old scripts
+│   ├── 20260131_121350_phase2.py               # Phase 2 config
+│   ├── 000_best_model_rerun.py                 # Best model rerun config
+│   └── 001_simulation_normal_50.py             # Simulation config
+└── [Legacy scripts removed]
 ```
 
 ## Creating New Ablation Configs
@@ -160,26 +162,20 @@ BASE_CONFIG = {
 ## Output Structure
 
 ```
-results/experiments/{timestamp}_phase1/
-├── summary_results.csv                    # All metrics summary
-├── {exp_name}_mask_before_default/
-│   ├── best_model.pt                      # Model checkpoint
-│   ├── best_config.json                   # Config
-│   ├── training_histories.json            # Training history
-│   ├── best_model_detailed.csv            # Per-sample losses
-│   ├── anomaly_type_metrics.json          # Per-type metrics
-│   ├── experiment_metadata.json           # Experiment info
-│   └── visualization/
-│       └── best_model/
-│           ├── best_model_roc_curve.png
-│           ├── best_model_confusion_matrix.png
-│           ├── best_model_score_contribution.png
-│           └── ...
-├── {exp_name}_mask_before_adaptive/
-│   └── ...
-├── {exp_name}_mask_before_normalized/
-│   └── ...
-└── ...
+results/{Dataset}/{scenario}/
+├── experiment_metadata.json               # Experiment info
+├── best_model.pt                          # Model checkpoint
+├── best_config.json                       # Config
+├── training_histories.json                # Training history
+├── best_model_detailed.csv                # Per-sample losses
+├── anomaly_type_metrics.json              # Per-type metrics
+├── dataset.md                             # Dataset documentation
+└── visualization/
+    └── best_model/
+        ├── best_model_roc_curve.png
+        ├── best_model_confusion_matrix.png
+        ├── best_model_score_contribution.png
+        └── ...
 ```
 
 ## Key Metrics
