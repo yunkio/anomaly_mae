@@ -6,10 +6,18 @@ import pandas as pd
 from pathlib import Path
 from typing import Tuple, List, Dict, Optional
 
-from ..dataset_sliding import AnomalyRegion, SlidingWindowTimeSeriesGenerator
+from ..dataset_sliding import AnomalyRegion, SlidingWindowTimeSeriesGenerator, NormalDataComplexity
 
 # Project root (mae_anomaly package root)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+
+def clean_column_name(col: str) -> str:
+    """Clean raw column names (remove Windows path prefix)."""
+    if '\\' in col:
+        parts = col.split('\\')
+        return parts[-1]
+    return col
 
 
 def load_swat_combined():
@@ -452,30 +460,94 @@ def load_wadi_a2(preprocessed_path: str):
     return signals, point_labels, anomaly_regions, feature_cols
 
 
+def load_wadi_attack_5050(preprocessed_path: str, swap: bool = False):
+    """Load preprocessed WaDi attack dataset with 50:50 train/test split.
+
+    Front 50% → train, back 50% → test (or swapped if swap=True).
+
+    Returns:
+        signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+    """
+    scenario = 'A1' if 'A1' in str(preprocessed_path) else 'A2'
+    swap_str = ' [SWAP]' if swap else ''
+    print(f"\n{'='*60}")
+    print(f"Loading WaDi {scenario} attack data (50:50 split){swap_str}")
+    print(f"{'='*60}")
+
+    df = pd.read_csv(preprocessed_path)
+    label_col = 'label'
+    feature_cols = [c for c in df.columns if c != label_col]
+
+    signals = df[feature_cols].values.astype(np.float32)
+    point_labels = df[label_col].values.astype(np.int64)
+    n_total = len(signals)
+    mid = n_total // 2
+
+    if swap:
+        # Swap: back 50% → train, front 50% → test
+        signals = np.concatenate([signals[mid:], signals[:mid]], axis=0)
+        point_labels = np.concatenate([point_labels[mid:], point_labels[:mid]], axis=0)
+        print(f"  SWAP: back half → train, front half → test")
+
+    train_ratio = 0.5
+
+    # Extract anomaly regions
+    is_atk = (point_labels == 1).astype(int)
+    diff = np.diff(is_atk, prepend=0, append=0)
+    starts = np.where(diff == 1)[0]
+    ends = np.where(diff == -1)[0]
+    anomaly_regions = [AnomalyRegion(start=int(s), end=int(e), anomaly_type=1) for s, e in zip(starts, ends)]
+
+    split_idx = int(n_total * train_ratio)
+    train_labels = point_labels[:split_idx]
+    test_labels = point_labels[split_idx:]
+
+    data_info = {
+        'n_total': n_total,
+        'n_features': signals.shape[1],
+        'train_len': split_idx,
+        'test_len': n_total - split_idx,
+        'train_ratio': train_ratio,
+        'train_attack_ratio': float(np.mean(train_labels)),
+        'test_attack_ratio': float(np.mean(test_labels)),
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'swap': swap,
+    }
+
+    print(f"  Total: {n_total:,} samples, {signals.shape[1]} features")
+    print(f"  Train: {split_idx:,}, anomaly ratio: {data_info['train_attack_ratio']:.2%}")
+    print(f"  Test:  {n_total - split_idx:,}, anomaly ratio: {data_info['test_attack_ratio']:.2%}")
+    print(f"  Anomaly regions: {len(anomaly_regions)}")
+
+    return signals, point_labels, anomaly_regions, feature_cols, train_ratio, data_info
+
+
 def load_simulation(
     total_length: int = 275000,
     num_features: int = 8,
     train_ratio: float = 0.8,
     random_seed: int = 42,
 ):
-    """Generate simulation dataset using SlidingWindowTimeSeriesGenerator.
-    
+    """Generate simulation dataset (complexity=False).
+
     Returns:
         signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
     """
     print(f"\n{'='*60}")
-    print(f"Generating simulation dataset")
+    print(f"Generating simulation dataset (complexity=False)")
     print(f"{'='*60}")
-    
+
+    complexity = NormalDataComplexity(enable_complexity=False)
     generator = SlidingWindowTimeSeriesGenerator(
         total_length=total_length,
         num_features=num_features,
         random_seed=random_seed,
+        complexity=complexity,
     )
-    
+
     signals, point_labels, anomaly_regions = generator.generate()
     feature_names = [f'feature_{i}' for i in range(num_features)]
-    
+
     data_info = {
         'n_total': total_length,
         'n_features': num_features,
@@ -484,25 +556,75 @@ def load_simulation(
         'test_len': int(total_length * (1 - train_ratio)),
         'n_anomaly_regions_total': len(anomaly_regions),
         'dataset_type': 'simulation',
+        'complexity': False,
     }
-    
+
     print(f"  Generated: {total_length:,} samples, {num_features} features")
     print(f"  Anomaly regions: {len(anomaly_regions)}")
     print(f"  Train ratio: {train_ratio:.2%}")
-    
+
+    return signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+
+
+def load_simulation_complex(
+    total_length: int = 275000,
+    num_features: int = 8,
+    train_ratio: float = 0.8,
+    random_seed: int = 42,
+):
+    """Generate simulation dataset with complexity=True.
+
+    Returns:
+        signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+    """
+    print(f"\n{'='*60}")
+    print(f"Generating simulation dataset (complexity=True)")
+    print(f"{'='*60}")
+
+    complexity = NormalDataComplexity(enable_complexity=True)
+    generator = SlidingWindowTimeSeriesGenerator(
+        total_length=total_length,
+        num_features=num_features,
+        random_seed=random_seed,
+        complexity=complexity,
+    )
+
+    signals, point_labels, anomaly_regions = generator.generate()
+    feature_names = [f'feature_{i}' for i in range(num_features)]
+
+    data_info = {
+        'n_total': total_length,
+        'n_features': num_features,
+        'train_ratio': train_ratio,
+        'train_len': int(total_length * train_ratio),
+        'test_len': int(total_length * (1 - train_ratio)),
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'dataset_type': 'simulation_complex',
+        'complexity': True,
+    }
+
+    print(f"  Generated: {total_length:,} samples, {num_features} features")
+    print(f"  Anomaly regions: {len(anomaly_regions)}")
+    print(f"  Train ratio: {train_ratio:.2%}")
+
     return signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
 
 
 # Dataset Loader Registry
+_WADI_A1_PATH = str(PROJECT_ROOT / 'dataset' / 'WaDi' / 'WADI.A1_9 Oct 2017' / 'WADI_attackdata_preprocessed.csv')
+_WADI_A2_PATH = str(PROJECT_ROOT / 'dataset' / 'WaDi' / 'WADI.A2_19 Nov 2019' / 'WADI_attackdataLABLE_preprocessed.csv')
+
 DATASET_LOADERS = {
     'swat_A1A2': load_swat_combined,
     'swat_A1A2_swap': load_swat_combined_swap,
+    'wadi_A1': lambda: load_wadi_attack_5050(_WADI_A1_PATH, swap=False),
+    'wadi_A1_swap': lambda: load_wadi_attack_5050(_WADI_A1_PATH, swap=True),
+    'wadi_A2': lambda: load_wadi_attack_5050(_WADI_A2_PATH, swap=False),
+    'wadi_A2_swap': lambda: load_wadi_attack_5050(_WADI_A2_PATH, swap=True),
     'wadi_14days_A1': lambda: load_wadi_14days_combined('A1'),
     'wadi_14days_A2': lambda: load_wadi_14days_combined('A2'),
-    'wadi_A2': lambda: load_wadi_a2(
-        str(PROJECT_ROOT / 'dataset' / 'WADI' / 'WADI.A2_19 Nov 2019' / 'WADI_attackdataLABLE_preprocessed.csv')
-    ),
     'simulation': load_simulation,
+    'simulation_complex': load_simulation_complex,
 }
 
 

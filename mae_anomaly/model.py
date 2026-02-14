@@ -208,11 +208,13 @@ class SelfDistilledMAEMultivariate(nn.Module):
             else:
                 mid_channels, out_channels = cnn_channels
 
+            k = getattr(config, 'cnn_kernel_size', 3)
+            pad = k // 2  # same-padding
             self.patch_cnn = nn.Sequential(
-                nn.Conv1d(config.num_features, mid_channels, kernel_size=3, padding=1),
+                nn.Conv1d(config.num_features, mid_channels, kernel_size=k, padding=pad),
                 nn.BatchNorm1d(mid_channels),
                 nn.ReLU(),
-                nn.Conv1d(mid_channels, out_channels, kernel_size=3, padding=1),
+                nn.Conv1d(mid_channels, out_channels, kernel_size=k, padding=pad),
                 nn.BatchNorm1d(out_channels),
                 nn.ReLU()
             )

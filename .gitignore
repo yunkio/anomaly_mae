@@ -7,6 +7,10 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*.backup
+*.backup_*
+*_backup.py
+*_option*.py
 
 # Jupyter
 .ipynb_checkpoints/
@@ -32,7 +36,32 @@ Thumbs.db
 # Claude
 .claude/
 CLAUDE.md
-docs/CHANGELOG.md
+
+# Visualization (exclude from git - keep only core model)
+mae_anomaly/visualization/
+scripts/visualize_all.py
+
+# Ablation experiments (exclude from git)
+scripts/ablation/
+scripts/run_*.py
+scripts/eval_*.py
+scripts/preprocess_*.py
+scripts/profile_*.py
+scripts/rerun_*.py
+
+# Comparison framework (exclude from git)
+comparison/
+
+# Documentation (exclude most - keep only README.md)
+docs/
+ablation_guideline.md
+
+# Temporary files
+temp/
+.trash/
+
+# Dataset files (large binary files)
+dataset/
 
 # Marimo
 __marimo__/

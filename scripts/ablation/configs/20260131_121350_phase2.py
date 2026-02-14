@@ -39,7 +39,7 @@ CREATED_AT = "2026-01-31 12:13:50"
 # Scoring and Inference Modes
 # =============================================================================
 
-SCORING_MODES = ['default', 'normalized']
+SCORING_MODES = ['default', 'adaptive']
 MASK_SETTINGS = [True, False]  # mask_after_encoder=True and False
 
 # =============================================================================
@@ -61,7 +61,7 @@ BASE_CONFIG = {
     'nhead': 8,
     'num_encoder_layers': 1,
     'num_teacher_decoder_layers': 4,
-    'num_student_decoder_layers': 1,
+    'num_student_decoder_layers': 2,
     'num_shared_decoder_layers': 0,
     'dim_feedforward': 512,
     'dropout': 0.15,
@@ -215,6 +215,7 @@ def get_experiments() -> List[Dict]:
     exp = deepcopy(base)
     exp['name'] = '014_w500_d512'
     _set_dmodel(exp, 512)
+    exp['batch_size'] = 256  # Reduced: d512+w500 causes OOM at batch>=512 (12GB VRAM)
     experiments.append(exp)
 
     # 015: w100, d=64
@@ -621,12 +622,14 @@ def get_experiments() -> List[Dict]:
     exp = deepcopy(base)
     exp['name'] = '071_w500_p5'
     _set_window(exp, 500, 5)
+    exp['batch_size'] = 256  # np=100: GPU OOM at batch>=512 during eval forward
     experiments.append(exp)
 
     # 072: p=10, w=500 (50 patches)
     exp = deepcopy(base)
     exp['name'] = '072_w500_p10'
     _set_window(exp, 500, 10)
+    exp['batch_size'] = 512  # np=50: reduce for eval forward safety
     experiments.append(exp)
 
     # 073: p=25, w=500 (20 patches)
@@ -672,6 +675,7 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '079_w500_p5_d256'
     _set_window(exp, 500, 5)
     _set_dmodel(exp, 256)
+    exp['batch_size'] = 256  # np=100+d256: GPU OOM at higher batch
     experiments.append(exp)
 
     # 080: p=10, d=256
@@ -679,6 +683,7 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '080_w500_p10_d256'
     _set_window(exp, 500, 10)
     _set_dmodel(exp, 256)
+    exp['batch_size'] = 256  # np=50+d256: GPU OOM at higher batch
     experiments.append(exp)
 
     # 081: p=5, d=64 (many patches + small model)
@@ -686,6 +691,7 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '081_w500_p5_d64'
     _set_window(exp, 500, 5)
     _set_dmodel(exp, 64)
+    exp['batch_size'] = 256  # np=100: GPU OOM at higher batch during eval
     experiments.append(exp)
 
     # 082: p=25, d=64
@@ -701,6 +707,7 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '083_w500_p5_td2'
     _set_window(exp, 500, 5)
     exp['num_teacher_decoder_layers'] = 2
+    exp['batch_size'] = 256  # np=100: GPU OOM at higher batch during eval
     experiments.append(exp)
 
     # 084: p=5, td=6
@@ -708,6 +715,7 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '084_w500_p5_td6'
     _set_window(exp, 500, 5)
     exp['num_teacher_decoder_layers'] = 6
+    exp['batch_size'] = 256  # np=100: GPU OOM at higher batch during eval
     experiments.append(exp)
 
     # 085: p=25, td=2
@@ -864,6 +872,7 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '105_nh4_d512'
     exp['nhead'] = 4
     _set_dmodel(exp, 512)
+    exp['batch_size'] = 256  # Reduced: d512+w500 causes OOM at batch>=512 (12GB VRAM)
     experiments.append(exp)
 
     # 106: nh=16, d=512
@@ -871,6 +880,7 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '106_nh16_d512'
     exp['nhead'] = 16
     _set_dmodel(exp, 512)
+    exp['batch_size'] = 256  # Reduced: d512+w500 causes OOM at batch>=512 (12GB VRAM)
     experiments.append(exp)
 
     # 107: nh=8, w=100 (same as 005, cross-ref)
@@ -1097,6 +1107,7 @@ def get_experiments() -> List[Dict]:
     exp = deepcopy(base)
     exp['name'] = '138_d512_nh8'
     _set_dmodel(exp, 512)
+    exp['batch_size'] = 256  # Reduced: d512+w500 causes OOM at batch>=512 (12GB VRAM)
     experiments.append(exp)
 
     # 139: d=512, nh=16
@@ -1104,6 +1115,7 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '139_d512_nh16'
     _set_dmodel(exp, 512)
     exp['nhead'] = 16
+    exp['batch_size'] = 256  # Reduced: d512+w500 causes OOM at batch>=512 (12GB VRAM)
     experiments.append(exp)
 
     # 140: d=512, nh=4
@@ -1111,6 +1123,7 @@ def get_experiments() -> List[Dict]:
     exp['name'] = '140_d512_nh4'
     _set_dmodel(exp, 512)
     exp['nhead'] = 4
+    exp['batch_size'] = 256  # Reduced: d512+w500 causes OOM at batch>=512 (12GB VRAM)
     experiments.append(exp)
 
     # 141: d=256, nh=4
@@ -1196,6 +1209,7 @@ def get_experiments() -> List[Dict]:
     exp['num_encoder_layers'] = 3
     exp['num_teacher_decoder_layers'] = 5
     exp['masking_ratio'] = 0.1
+    exp['batch_size'] = 128  # d512+enc3+td5: GPU OOM at batch>=256 (12GB VRAM)
     experiments.append(exp)
 
     # =========================================================================

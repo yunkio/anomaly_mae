@@ -1418,9 +1418,9 @@ def run_ablation_study(
 
     set_seed(base_config.random_seed)
 
-    if dataset_type == 'simulation':
-        # Original simulation generation
-        complexity = NormalDataComplexity(enable_complexity=False)
+    if dataset_type in ('simulation', 'simulation_complex'):
+        enable_complexity = (dataset_type == 'simulation_complex')
+        complexity = NormalDataComplexity(enable_complexity=enable_complexity)
         generator = SlidingWindowTimeSeriesGenerator(
             total_length=base_config.sliding_window_total_length,
             num_features=base_config.num_features,
@@ -1431,7 +1431,7 @@ def run_ablation_study(
         signals, point_labels, anomaly_regions = generator.generate()
         feature_names = [f'feature_{i}' for i in range(base_config.num_features)]
         train_ratio = base_config.sliding_window_train_ratio
-        data_info = {'dataset_type': 'simulation'}
+        data_info = {'dataset_type': dataset_type, 'complexity': enable_complexity}
     else:
         # Use registered dataset loader
         loader = get_dataset_loader(dataset_type)
@@ -1450,8 +1450,13 @@ def run_ablation_study(
         # Update num_features in base_config
         base_config.num_features = signals.shape[1]
 
+    # Propagate actual num_features to all experiment configs
+    actual_num_features = signals.shape[1]
+    for exp in experiments:
+        exp['config']['num_features'] = actual_num_features
+
     print(f"  Signal shape: {signals.shape}")
-    print(f"  Features: {len(feature_names)}")
+    print(f"  Features: {actual_num_features}")
 
     # Apply label noise if configured
     noisy_point_labels = None

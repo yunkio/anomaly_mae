@@ -314,7 +314,13 @@ class Trainer:
             self.history['train_student_recon_anomaly'].append(epoch_losses['student_recon_anomaly'])
 
             # Compute and record contribution ratios by sample type (on test set)
-            contrib_ratios = self._compute_test_contrib_ratios()
+            eval_interval = getattr(self.config, 'eval_interval', 1)
+            is_eval_epoch = ((epoch + 1) % eval_interval == 0) or (epoch == self.config.num_epochs - 1)
+            if is_eval_epoch:
+                contrib_ratios = self._compute_test_contrib_ratios()
+                self._last_contrib_ratios = contrib_ratios
+            else:
+                contrib_ratios = getattr(self, '_last_contrib_ratios', self._compute_test_contrib_ratios())
             self.history['epoch_recon_ratio_normal'].append(contrib_ratios['recon_ratio_normal'])
             self.history['epoch_recon_ratio_disturbing'].append(contrib_ratios['recon_ratio_disturbing'])
             self.history['epoch_recon_ratio_anomaly'].append(contrib_ratios['recon_ratio_anomaly'])

@@ -71,6 +71,9 @@ class Config:
     # - None: Use default (d_model//2, d_model)
     # - (16, 32): Smaller CNN
     # - (64, 128): Larger CNN
+    cnn_kernel_size: int = 3  # Kernel size for patch_cnn Conv1d layers
+    # - 3: Default (receptive field = 3 per layer)
+    # - 5: Wider receptive field (better for larger patch_size)
 
     # Loss parameters
     margin: float = 0.5
@@ -96,6 +99,9 @@ class Config:
     weight_decay: float = 1e-5
     warmup_epochs: int = 10
     teacher_only_warmup_epochs: int = 3  # First N epochs train teacher only (no discrepancy/student loss)
+    eval_interval: int = 5  # Epoch interval for lightweight test evaluation (contrib ratios)
+    # - 1: Every epoch (most detailed, slower)
+    # - 5: Every 5 epochs (default, good balance)
     use_amp: bool = True  # Mixed Precision Training (Automatic Mixed Precision)
     # - True: Use float16 for forward pass, float32 for loss/gradients (faster on Tensor Core GPUs)
     # - False: Use float32 everywhere (more stable, required for older GPUs)
