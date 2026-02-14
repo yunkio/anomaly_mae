@@ -9,7 +9,7 @@ dist/
 build/
 *.backup
 *.backup_*
-*_backup.py
+*_backup*.py
 *_option*.py
 
 # Jupyter
