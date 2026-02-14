@@ -27,6 +27,7 @@ from mae_anomaly import (
     SlidingWindowTimeSeriesGenerator, SlidingWindowDataset,
     ANOMALY_TYPE_NAMES, SelfDistillationLoss, Trainer,
 )
+from mae_anomaly.evaluator import find_f1_optimal_idx
 from .base import get_anomaly_colors, SAMPLE_TYPE_COLORS, SAMPLE_TYPE_NAMES, VIS_COLORS
 
 class TrainingProgressVisualizer:
@@ -419,7 +420,7 @@ class TrainingProgressVisualizer:
         # Calculate per-epoch optimal thresholds
         def get_optimal_threshold(data):
             fpr, tpr, thresholds = roc_curve(data['labels'], data['scores'])
-            optimal_idx = np.argmax(tpr - fpr)
+            optimal_idx = find_f1_optimal_idx(fpr, tpr, data['labels'])
             return thresholds[optimal_idx]
 
         first_threshold = get_optimal_threshold(first_data)
@@ -610,7 +611,7 @@ Performance Improvement:
 
         # Get threshold
         fpr, tpr, thresholds = roc_curve(last_data['labels'], last_data['scores'])
-        optimal_idx = np.argmax(tpr - fpr)
+        optimal_idx = find_f1_optimal_idx(fpr, tpr, last_data['labels'])
         threshold = thresholds[optimal_idx]
 
         # Use actual anomaly type names from dataset
@@ -807,7 +808,7 @@ Performance Improvement:
         for epoch in epochs:
             data = self.checkpoint_data[epoch]
             fpr, tpr, ths = roc_curve(data['labels'], data['scores'])
-            optimal_idx = np.argmax(tpr - fpr)
+            optimal_idx = find_f1_optimal_idx(fpr, tpr, data['labels'])
             thresholds.append(ths[optimal_idx])
 
         ax.plot(epochs, thresholds, 'o-', color=VIS_COLORS['teacher'], lw=2, markersize=8)
@@ -855,7 +856,7 @@ Performance Improvement:
         # Per-epoch thresholds
         def get_optimal_threshold(data):
             fpr, tpr, thresholds = roc_curve(data['labels'], data['scores'])
-            optimal_idx = np.argmax(tpr - fpr)
+            optimal_idx = find_f1_optimal_idx(fpr, tpr, data['labels'])
             return thresholds[optimal_idx]
 
         first_threshold = get_optimal_threshold(first_data)

@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.gridspec import GridSpec
 import seaborn as sns
-from sklearn.metrics import roc_curve, auc, confusion_matrix, precision_recall_curve, f1_score
+from sklearn.metrics import roc_curve, auc, confusion_matrix, precision_recall_curve, f1_score, average_precision_score
 from scipy.stats import gaussian_kde
 from tqdm import tqdm
 
@@ -39,6 +39,7 @@ from mae_anomaly.evaluator import (
     vectorized_voting_for_all_thresholds,
     _compute_single_pa_k_roc,
     _compute_voted_point_predictions,
+    find_f1_optimal_idx,
 )
 from .base import (
     get_anomaly_colors, SAMPLE_TYPE_NAMES, SAMPLE_TYPE_COLORS,
@@ -74,14 +75,14 @@ def _get_subset_window_indices(dataset):
 class BestModelVisualizer:
     """Visualize best model analysis"""
 
-    def __init__(self, model, config: Config, test_loader, output_dir: str,
+    def __init__(self, model=None, config: Config = None, test_loader=None, output_dir: str = '',
                  pred_data: Dict = None, detailed_data: Dict = None):
         """Initialize BestModelVisualizer.
 
         Args:
-            model: Trained model
+            model: Trained model (optional if pred_data provided)
             config: Model configuration
-            test_loader: Test data loader
+            test_loader: Test data loader (optional if pred_data provided)
             output_dir: Output directory for visualizations
             pred_data: Pre-computed predictions (optional, skips GPU inference if provided)
             detailed_data: Pre-computed detailed data (optional, skips GPU inference if provided)
@@ -178,7 +179,7 @@ class BestModelVisualizer:
         # Cache ROC data (used in multiple plots)
         fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
         self._roc_data = {'fpr': fpr, 'tpr': tpr, 'thresholds': thresholds}
-        self._optimal_idx = np.argmax(tpr - fpr)
+        self._optimal_idx = find_f1_optimal_idx(fpr, tpr, self.pred_data['labels'])
 
     # === OPTIMIZATION: Data sampling for KDE and heatmaps ===
     MAX_SAMPLES_KDE = 3000  # Max samples for KDE computation
@@ -199,10 +200,10 @@ class BestModelVisualizer:
         return data[indices]
 
     def _compute_threshold(self):
-        """Compute optimal threshold from current scores using ROC analysis."""
+        """Compute optimal threshold from current scores using F1-optimal ROC analysis."""
         from sklearn.metrics import roc_curve
         fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
-        optimal_idx = np.argmax(tpr - fpr)
+        optimal_idx = find_f1_optimal_idx(fpr, tpr, self.pred_data['labels'])
         self.threshold = thresholds[optimal_idx]
 
     def recompute_scores(self, scoring_mode: str):
@@ -361,7 +362,7 @@ class BestModelVisualizer:
         ax.plot(fpr, tpr, color=VIS_COLORS['anomaly'], lw=2, label=f'ROC curve (AUC = {roc_auc:.4f})')
         ax.plot([0, 1], [0, 1], color=VIS_COLORS['reference'], lw=2, linestyle='--')
         ax.scatter(fpr[optimal_idx], tpr[optimal_idx], s=100, c=VIS_COLORS['threshold'], zorder=5,
-                  label=f'Optimal (threshold={optimal_threshold:.4f})')
+                  label=f'Best F1 (threshold={optimal_threshold:.4f})')
         ax.set_xlim([0.0, 1.0])
         ax.set_ylim([0.0, 1.05])
         ax.set_xlabel('False Positive Rate')
@@ -374,6 +375,41 @@ class BestModelVisualizer:
         plt.savefig(os.path.join(self.output_dir, 'best_model_roc_curve.png'), dpi=150, bbox_inches='tight')
         plt.close()
         print("  - best_model_roc_curve.png")
+
+    def plot_prc_curve(self):
+        """Plot Precision-Recall curve"""
+        labels = self.pred_data['labels']
+        scores = self.pred_data['scores']
+
+        prec, rec, thresholds = precision_recall_curve(labels, scores)
+        # Use average_precision_score for proper PRC-AUC (consistent with evaluator.py)
+        prc_auc = average_precision_score(labels, scores)
+
+        # Find F1-optimal point on PR curve
+        f1_scores = 2 * prec * rec / (prec + rec + 1e-10)
+        optimal_idx = np.argmax(f1_scores)
+
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.plot(rec, prec, color=VIS_COLORS['anomaly'], lw=2, label=f'PR curve (AUC = {prc_auc:.4f})')
+
+        # Baseline: fraction of positives
+        baseline = labels.sum() / len(labels)
+        ax.axhline(y=baseline, color=VIS_COLORS['reference'], lw=2, linestyle='--', label=f'Baseline ({baseline:.4f})')
+
+        ax.scatter(rec[optimal_idx], prec[optimal_idx], s=100, c=VIS_COLORS['threshold'], zorder=5,
+                  label=f'Best F1 (F1={f1_scores[optimal_idx]:.4f})')
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('Recall')
+        ax.set_ylabel('Precision')
+        ax.set_title('Precision-Recall Curve', fontsize=12, fontweight='bold')
+        ax.legend(loc='lower left')
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'best_model_prc_curve.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - best_model_prc_curve.png")
 
     def plot_confusion_matrix(self):
         """Plot confusion matrix"""
@@ -660,7 +696,7 @@ class BestModelVisualizer:
             # Optimal threshold
             if len(np.unique(labels)) > 1:
                 fpr, tpr, thresholds = roc_curve(labels, scores)
-                optimal_idx = np.argmax(tpr - fpr)
+                optimal_idx = find_f1_optimal_idx(fpr, tpr, labels)
                 threshold = thresholds[optimal_idx]
             else:
                 threshold = np.median(scores)
@@ -1729,10 +1765,10 @@ Margin:    {margin:+.6f}
         print("  - learning_curve.png")
 
     def _get_optimal_threshold(self):
-        """Get the optimal threshold from ROC curve."""
+        """Get the F1-optimal threshold from ROC curve."""
         from sklearn.metrics import roc_curve
         fpr, tpr, thresholds = roc_curve(self.pred_data['labels'], self.pred_data['scores'])
-        optimal_idx = np.argmax(tpr - fpr)
+        optimal_idx = find_f1_optimal_idx(fpr, tpr, self.pred_data['labels'])
         return thresholds[optimal_idx]
 
     def _get_scores(self):
@@ -2235,6 +2271,159 @@ Margin:    {margin:+.6f}
         plt.close()
         print("  - best_model_score_contribution.png")
 
+    def plot_performance_by_pa_k(self):
+        """Plot PA%K performance analysis with varying K.
+
+        Creates two subplots:
+        1. All PA%K Methods Comparison: Grouped bar chart comparing detection rates
+           at K=0, 10, 20, 50, 80, 100 for each scoring method.
+        2. F1 Score vs K: Line plot showing how F1 score changes as K varies
+           from 0 to 100 (step=5), for each scoring method. Includes AUF1
+           (Area Under F1 curve) in legend.
+
+        Uses the same optimal threshold per scoring method as other evaluations.
+        Requires segment-based PA%K (dataset with anomaly_regions and window_start_indices).
+        """
+        raw_dataset = self.test_loader.dataset if hasattr(self.test_loader, 'dataset') else None
+        base_dataset = _unwrap_subset(raw_dataset) if raw_dataset is not None else None
+        can_use = (
+            base_dataset is not None and
+            hasattr(base_dataset, 'anomaly_regions') and
+            hasattr(base_dataset, 'point_labels') and
+            hasattr(base_dataset, 'window_start_indices') and
+            len(base_dataset.anomaly_regions) > 0
+        )
+        if not can_use:
+            print("  - performance_by_PA_K.png (SKIPPED: no segment info)")
+            return
+
+        # Prepare data
+        labels = self.pred_data['labels']
+        patch_recon = self.pred_data['recon_errors']
+        patch_student = self.pred_data['student_errors']
+        patch_disc = self.pred_data['discrepancies']
+        patch_combined = self.pred_data['patch_scores']
+
+        total_length = len(base_dataset.point_labels)
+        point_labels = np.array(base_dataset.point_labels)
+        anomaly_regions = base_dataset.anomaly_regions
+        _, window_start_indices = _get_subset_window_indices(raw_dataset)
+
+        n_windows = self.pred_data.get('n_windows', len(window_start_indices))
+        num_patches = self.pred_data.get('num_patches', getattr(self.config, 'num_patches', 10))
+
+        def prepare_scores(scores):
+            return scores.reshape(n_windows, num_patches)
+
+        scoring_methods = [
+            ('Anomaly Score', prepare_scores(patch_combined), VIS_COLORS['total']),
+            ('Discrepancy', prepare_scores(patch_disc), VIS_COLORS['discrepancy']),
+            ('Teacher Recon', prepare_scores(patch_recon), VIS_COLORS['teacher']),
+            ('Student Recon', prepare_scores(patch_student), VIS_COLORS['student']),
+        ]
+
+        # Precompute point indices (shared)
+        pt_flat_t, pt_flat_si, point_coverage = precompute_point_score_indices(
+            window_start_indices=window_start_indices,
+            seq_length=self.config.seq_length,
+            patch_size=self.config.patch_size,
+            total_length=total_length,
+            num_patches=num_patches,
+        )
+        eval_type_mask = np.ones(total_length, dtype=bool)
+
+        # K values for the two plots
+        k_bar = [0, 10, 20, 50, 80, 100]  # For grouped bar chart
+        k_line = list(range(0, 101, 5))     # For F1 vs K line plot
+
+        # Use the union of both K lists for computation
+        all_k = sorted(set(k_bar + k_line))
+        n_thresholds = 50
+
+        # Compute F1 at each K for each scoring method
+        method_results = {}  # method_name -> {k: (auc, f1)}
+        for name, scores, color in scoring_methods:
+            min_score, max_score = scores.min(), scores.max()
+            thresholds = np.linspace(min_score - 0.01, max_score + 0.01, n_thresholds)
+
+            point_scores_all = vectorized_voting_for_all_thresholds(
+                scores=scores,
+                point_indices=(pt_flat_t, pt_flat_si),
+                point_coverage=point_coverage,
+                thresholds=thresholds,
+            )
+
+            k_metrics = {}
+            for k in all_k:
+                result = _compute_single_pa_k_roc((
+                    point_scores_all, point_labels, anomaly_regions,
+                    eval_type_mask, k, None, True
+                ))
+                _, _, pa_roc_auc, pa_prc_auc, pa_f1 = result
+                k_metrics[k] = (pa_roc_auc, pa_prc_auc, pa_f1)
+            method_results[name] = k_metrics
+
+        # Create figure with 2 subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
+
+        # --- Subplot 1: Grouped bar chart (K=0,10,20,50,80,100) ---
+        x = np.arange(len(k_bar))
+        n_methods = len(scoring_methods)
+        width = 0.8 / n_methods
+
+        for i, (name, _, color) in enumerate(scoring_methods):
+            f1_vals = [method_results[name][k][2] for k in k_bar]
+            offset = (i - (n_methods - 1) / 2) * width
+            bars = ax1.bar(x + offset, f1_vals, width, label=name, color=color, alpha=0.8)
+            for bar, val in zip(bars, f1_vals):
+                if val > 0.01:
+                    ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005,
+                            f'{val:.3f}', ha='center', va='bottom', fontsize=7, rotation=45)
+
+        ax1.set_xlabel('PA%K')
+        ax1.set_ylabel('Optimal F1 Score')
+        ax1.set_title('All PA%K Methods Comparison', fontweight='bold')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels([f'K={k}' for k in k_bar])
+        ax1.set_ylim(0, min(1.05, max(
+            max(method_results[name][k][2] for k in k_bar)
+            for name, _, _ in scoring_methods
+        ) * 1.2 + 0.05))
+        ax1.legend(loc='upper right', fontsize=9)
+        ax1.grid(True, alpha=0.3, axis='y')
+
+        # --- Subplot 2: F1 vs K line plot ---
+        for name, _, color in scoring_methods:
+            f1_vals = [method_results[name][k][2] for k in k_line]
+            # Compute AUF1 (Area Under F1 curve, normalized to [0,1])
+            auf1 = np.trapz(f1_vals, k_line) / 100.0  # Normalize by K range
+            ax2.plot(k_line, f1_vals, color=color, lw=2, marker='o', markersize=3,
+                    label=f'{name} (AUF1={auf1:.4f})')
+
+        ax2.set_xlabel('K (PA%K)')
+        ax2.set_ylabel('Optimal F1 Score')
+        ax2.set_title('F1 Score with Varying K', fontweight='bold')
+        ax2.set_xlim(-2, 102)
+        ax2.set_ylim(0, min(1.05, max(
+            max(method_results[name][k][2] for k in k_line)
+            for name, _, _ in scoring_methods
+        ) * 1.15 + 0.02))
+        ax2.legend(loc='upper right', fontsize=9)
+        ax2.grid(True, alpha=0.3)
+
+        # Add vertical reference lines at commonly used K values
+        for k_ref in [10, 20, 50, 80]:
+            ax2.axvline(x=k_ref, color='gray', linestyle=':', alpha=0.3)
+
+        scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        fig.suptitle(f'PA%K Performance Analysis (Scoring: {scoring_mode})',
+                    fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'performance_by_PA_K.png'),
+                   dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - performance_by_PA_K.png")
+
     def generate_all(self, experiment_dir: str = None, history: Dict = None):
         """Generate all best model visualizations
 
@@ -2244,6 +2433,7 @@ Margin:    {margin:+.6f}
         """
         print("\n  Generating Best Model Visualizations...")
         self.plot_roc_curve()
+        self.plot_prc_curve()
         self.plot_confusion_matrix()
         self.plot_score_contribution_analysis(experiment_dir)
         self.plot_reconstruction_examples()
@@ -2265,8 +2455,9 @@ Margin:    {margin:+.6f}
         # Anomaly type score trends over epochs (requires history with epoch_anomaly_type_scores)
         self.plot_score_contribution_epoch_trends(experiment_dir, history)
 
-        # ROC curve comparison (different score types)
+        # ROC and PRC curve comparisons (different score types)
         self.plot_roc_curve_comparison()
+        self.plot_prc_curve_comparison()
         self.plot_roc_curve_pa80_comparison()
 
         # Performance by anomaly type comparison (different score types)
@@ -2490,8 +2681,8 @@ Margin:    {margin:+.6f}
                 roc_auc = auc(fpr, tpr)
                 ax.plot(fpr, tpr, color=color, lw=2, label=f'{name} (AUC={roc_auc:.4f})')
 
-                # Find optimal point and compute F1
-                optimal_idx = np.argmax(tpr - fpr)
+                # Find F1-optimal point
+                optimal_idx = find_f1_optimal_idx(fpr, tpr, labels)
                 optimal_threshold = thresholds[optimal_idx]
                 predictions = (scores > optimal_threshold).astype(int)
                 f1 = f1_score(labels, predictions)
@@ -2528,6 +2719,73 @@ Margin:    {margin:+.6f}
         plt.savefig(os.path.join(self.output_dir, 'best_model_roc_curve_comparison.png'), dpi=150, bbox_inches='tight')
         plt.close()
         print("  - best_model_roc_curve_comparison.png")
+
+    def plot_prc_curve_comparison(self):
+        """Plot Precision-Recall curves comparing different scoring methods."""
+        labels = self.pred_data['labels']
+        combined_scores = self.pred_data['scores']
+        recon_errors = self.pred_data.get('point_recon', self.pred_data['recon_errors'])
+        student_errors = self.pred_data.get('point_student', self.pred_data['student_errors'])
+        discrepancies = self.pred_data.get('point_disc', self.pred_data['discrepancies'])
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+
+        scoring_methods = [
+            ('Anomaly Score (combined)', combined_scores, VIS_COLORS['total']),
+            ('Discrepancy Only', discrepancies, VIS_COLORS['discrepancy']),
+            ('Teacher Recon Only', recon_errors, VIS_COLORS['teacher']),
+            ('Student Recon Only', student_errors, VIS_COLORS['student']),
+        ]
+
+        annotation_offsets = [
+            (0.02, 0.02), (-0.18, -0.08), (0.02, -0.08), (-0.18, 0.02),
+        ]
+        short_names = ['Anomaly', 'Discr.', 'Teacher', 'Student']
+
+        for idx, (name, scores, color) in enumerate(scoring_methods):
+            if len(np.unique(labels)) > 1:
+                prec, rec, thresholds = precision_recall_curve(labels, scores)
+                # sklearn returns recall in descending order, reverse for proper AUC and plotting
+                rec = rec[::-1]
+                prec = prec[::-1]
+                prc_auc_val = auc(rec, prec)
+                ax.plot(rec, prec, color=color, lw=2, label=f'{name} (AUC={prc_auc_val:.4f})')
+
+                # Find F1-optimal point
+                f1_scores = 2 * prec * rec / (prec + rec + 1e-10)
+                opt_idx = np.argmax(f1_scores)
+                opt_rec = rec[opt_idx]
+                opt_prec = prec[opt_idx]
+                f1 = f1_scores[opt_idx]
+                ax.scatter(opt_rec, opt_prec, s=80, color=color, zorder=5, marker='o')
+
+                offset_x, offset_y = annotation_offsets[idx]
+                short_name = short_names[idx]
+                ax.annotate(f'{short_name}\nAUC={prc_auc_val:.3f}\nF1={f1:.3f}',
+                           xy=(opt_rec, opt_prec),
+                           xytext=(opt_rec + offset_x, opt_prec + offset_y),
+                           fontsize=8, color=color, fontweight='bold',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor=color),
+                           arrowprops=dict(arrowstyle='->', color=color, lw=0.5))
+
+        # Baseline
+        baseline = labels.sum() / len(labels)
+        ax.axhline(y=baseline, color=VIS_COLORS['reference'], lw=2, linestyle='--', label=f'Baseline ({baseline:.4f})')
+
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('Recall')
+        ax.set_ylabel('Precision')
+
+        scoring_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        ax.set_title(f'Precision-Recall Curve Comparison\n(Scoring Mode: {scoring_mode})', fontsize=12, fontweight='bold')
+        ax.legend(loc='lower left', fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'best_model_prc_curve_comparison.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("  - best_model_prc_curve_comparison.png")
 
     def plot_roc_curve_pa80_comparison(self):
         """Plot PA%80 ROC curves comparing different scoring methods.
@@ -2634,7 +2892,7 @@ Margin:    {margin:+.6f}
                 True  # return_optimal_f1
             ))
 
-            fprs_sorted, tprs_sorted, pa80_auc, pa80_f1 = result
+            fprs_sorted, tprs_sorted, pa80_auc, _, pa80_f1 = result
 
             ax.plot(fprs_sorted, tprs_sorted, color=color, lw=2,
                    label=f'{name} (AUC={pa80_auc:.4f}, F1={pa80_f1:.4f})')

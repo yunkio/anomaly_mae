@@ -57,8 +57,14 @@ class SelfDistilledMAEMultivariate(nn.Module):
         # Build embedding layers based on patchify_mode
         self._build_embedding_layers(config)
 
-        # Positional encoding
+        # Positional encoding (for encoder)
         self.pos_encoder = PositionalEncoding(config.d_model)
+
+        # Decoder positional encoding (only for TransformerEncoder decoder)
+        if config.use_transformer_encoder_decoder:
+            self.decoder_pos_encoder = PositionalEncoding(config.d_model)
+        else:
+            self.decoder_pos_encoder = None
 
         # Encoder
         encoder_layer = nn.TransformerEncoderLayer(
@@ -71,50 +77,96 @@ class SelfDistilledMAEMultivariate(nn.Module):
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.num_encoder_layers)
 
         # Shared decoder (optional, trained with teacher)
+        # Option 2: Use TransformerEncoder (self-attention only, MAE-style)
         self.num_shared_decoder_layers = getattr(config, 'num_shared_decoder_layers', 0)
         self.shared_decoder = None
         if self.num_shared_decoder_layers > 0:
-            shared_decoder_layer = nn.TransformerDecoderLayer(
-                d_model=config.d_model,
-                nhead=config.nhead,
-                dim_feedforward=config.dim_feedforward,
-                dropout=config.dropout,
-                batch_first=False
-            )
-            self.shared_decoder = nn.TransformerDecoder(
-                shared_decoder_layer,
-                num_layers=self.num_shared_decoder_layers
-            )
+            if config.use_transformer_encoder_decoder:
+                # TransformerEncoder (self-attention only)
+                shared_decoder_layer = nn.TransformerEncoderLayer(
+                    d_model=config.d_model,
+                    nhead=config.nhead,
+                    dim_feedforward=config.dim_feedforward,
+                    dropout=config.dropout,
+                    batch_first=False
+                )
+                self.shared_decoder = nn.TransformerEncoder(
+                    shared_decoder_layer,
+                    num_layers=self.num_shared_decoder_layers
+                )
+            else:
+                # TransformerDecoder (cross-attention with encoder memory)
+                shared_decoder_layer = nn.TransformerDecoderLayer(
+                    d_model=config.d_model,
+                    nhead=config.nhead,
+                    dim_feedforward=config.dim_feedforward,
+                    dropout=config.dropout,
+                    batch_first=False
+                )
+                self.shared_decoder = nn.TransformerDecoder(
+                    shared_decoder_layer,
+                    num_layers=self.num_shared_decoder_layers
+                )
 
         # Teacher decoder
         self.teacher_decoder = None
         if config.use_teacher:
-            teacher_decoder_layer = nn.TransformerDecoderLayer(
-                d_model=config.d_model,
-                nhead=config.nhead,
-                dim_feedforward=config.dim_feedforward,
-                dropout=config.dropout,
-                batch_first=False
-            )
-            self.teacher_decoder = nn.TransformerDecoder(
-                teacher_decoder_layer,
-                num_layers=config.num_teacher_decoder_layers
-            )
+            if config.use_transformer_encoder_decoder:
+                # TransformerEncoder (self-attention only, MAE-style)
+                teacher_decoder_layer = nn.TransformerEncoderLayer(
+                    d_model=config.d_model,
+                    nhead=config.nhead,
+                    dim_feedforward=config.dim_feedforward,
+                    dropout=config.dropout,
+                    batch_first=False
+                )
+                self.teacher_decoder = nn.TransformerEncoder(
+                    teacher_decoder_layer,
+                    num_layers=config.num_teacher_decoder_layers
+                )
+            else:
+                # TransformerDecoder (cross-attention with encoder output)
+                teacher_decoder_layer = nn.TransformerDecoderLayer(
+                    d_model=config.d_model,
+                    nhead=config.nhead,
+                    dim_feedforward=config.dim_feedforward,
+                    dropout=config.dropout,
+                    batch_first=False
+                )
+                self.teacher_decoder = nn.TransformerDecoder(
+                    teacher_decoder_layer,
+                    num_layers=config.num_teacher_decoder_layers
+                )
 
         # Student decoder
         self.student_decoder = None
         if config.use_student:
-            student_decoder_layer = nn.TransformerDecoderLayer(
-                d_model=config.d_model,
-                nhead=config.nhead,
-                dim_feedforward=config.dim_feedforward,
-                dropout=config.dropout,
-                batch_first=False
-            )
-            self.student_decoder = nn.TransformerDecoder(
-                student_decoder_layer,
-                num_layers=config.num_student_decoder_layers
-            )
+            if config.use_transformer_encoder_decoder:
+                # TransformerEncoder (self-attention only, MAE-style)
+                student_decoder_layer = nn.TransformerEncoderLayer(
+                    d_model=config.d_model,
+                    nhead=config.nhead,
+                    dim_feedforward=config.dim_feedforward,
+                    dropout=config.dropout,
+                    batch_first=False
+                )
+                self.student_decoder = nn.TransformerEncoder(
+                    student_decoder_layer,
+                    num_layers=config.num_student_decoder_layers
+                )
+            else:
+                # TransformerDecoder (cross-attention with encoder output)
+                student_decoder_layer = nn.TransformerDecoderLayer(
+                    d_model=config.d_model,
+                    nhead=config.nhead,
+                    dim_feedforward=config.dim_feedforward,
+                    dropout=config.dropout,
+                    batch_first=False
+                )
+                self.student_decoder = nn.TransformerDecoder(
+                    student_decoder_layer,
+                    num_layers=config.num_student_decoder_layers
+                )
 
         # Output projections
         if self.use_patch:
@@ -165,14 +217,21 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 nn.ReLU()
             )
 
-            # If out_channels != d_model, need projection
-            if out_channels != config.d_model:
-                self.cnn_projection = nn.Linear(out_channels, config.d_model)
-            else:
+            # Choose embedding method based on config
+            if config.use_flatten_linear_embedding:
+                # Flatten + Linear projection (preserves patch structure)
+                # CNN output: (batch * num_patches, out_channels, patch_size)
+                # After flatten: (batch * num_patches, out_channels * patch_size)
+                # Linear: (out_channels * patch_size) -> d_model
+                self.cnn_flatten_proj = nn.Linear(out_channels * config.patch_size, config.d_model)
                 self.cnn_projection = None
-            # Pool/flatten CNN output to get d_model embedding
-            # CNN output: (batch * num_patches, d_model, patch_size)
-            # After mean pooling: (batch * num_patches, d_model)
+            else:
+                # Mean pooling (simple averaging over patch dimension)
+                # CNN output: (batch * num_patches, out_channels, patch_size)
+                # After mean: (batch * num_patches, out_channels)
+                # Linear: out_channels -> d_model
+                self.cnn_flatten_proj = None
+                self.cnn_projection = nn.Linear(out_channels, config.d_model)
 
         elif self.patchify_mode == 'linear':
             # Simple linear embedding (MAE original style)
@@ -207,12 +266,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 # Apply CNN per patch
                 x_cnn = self.patch_cnn(x_patches)  # (batch * num_patches, out_channels, patch_size)
 
-                # Mean pooling over patch_size dimension
-                x_embed = x_cnn.mean(dim=2)  # (batch * num_patches, out_channels)
-
-                # Apply projection if needed (when out_channels != d_model)
-                if self.cnn_projection is not None:
-                    x_embed = self.cnn_projection(x_embed)  # (batch * num_patches, d_model)
+                # Choose embedding method based on config
+                if self.config.use_flatten_linear_embedding:
+                    # Flatten + Linear (preserves patch structure)
+                    x_flat = x_cnn.reshape(batch_size * self.num_patches, -1)  # (batch*num_patches, out_channels*patch_size)
+                    x_embed = self.cnn_flatten_proj(x_flat)  # (batch * num_patches, d_model)
+                else:
+                    # Mean pooling (simple averaging)
+                    x_mean = x_cnn.mean(dim=2)  # (batch * num_patches, out_channels)
+                    x_embed = self.cnn_projection(x_mean)  # (batch * num_patches, d_model)
 
                 # Reshape back: (batch * num_patches, d_model) -> (batch, num_patches, d_model)
                 x_embed = x_embed.reshape(batch_size, self.num_patches, -1)
@@ -272,11 +334,13 @@ class SelfDistilledMAEMultivariate(nn.Module):
             x_masked: masked input
             mask: binary mask (1=keep, 0=masked) - (seq_len, batch_size)
         """
-        if not self.config.use_masking or masking_ratio == 0:
+        # Handle masking_ratio as either scalar or tensor
+        masking_val = masking_ratio.item() if torch.is_tensor(masking_ratio) else masking_ratio
+        if not self.config.use_masking or masking_val == 0:
             return x, torch.ones(x.size(0), x.size(1), device=x.device)
 
         seq_len, batch_size, d_model = x.shape
-        num_keep = round(seq_len * (1 - masking_ratio))
+        num_keep = round(seq_len * (1 - masking_val))
 
         # Random selection of patches to keep
         noise = torch.rand(seq_len, batch_size, device=x.device)
@@ -487,7 +551,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
             latent = self.encoder(x_masked)
 
         # === Decoding ===
-        tgt = self.pos_encoder(torch.zeros_like(x_embed))
+        # Option 2: No separate tgt - decoder uses self-attention on full sequence with PE
 
         teacher_output = None
         student_output = None
@@ -499,14 +563,31 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 teacher_latent = self._insert_mask_tokens_and_unshuffle(
                     latent_visible, ids_restore, seq_len, teacher_mask_token
                 )
+                # Add decoder positional encoding (only for TransformerEncoder)
+                if self.config.use_transformer_encoder_decoder:
+                    teacher_latent = teacher_latent + self.decoder_pos_encoder.pe[:seq_len]
             else:
                 teacher_latent = latent
+                # Add decoder positional encoding (only for TransformerEncoder)
+                if self.config.use_transformer_encoder_decoder:
+                    teacher_latent = teacher_latent + self.decoder_pos_encoder.pe[:seq_len]
 
             # Apply shared decoder first if exists (trained with teacher)
             if self.shared_decoder is not None:
-                teacher_latent = self.shared_decoder(tgt, teacher_latent)
+                if self.config.use_transformer_encoder_decoder:
+                    # TransformerEncoder: single input
+                    teacher_latent = self.shared_decoder(teacher_latent)
+                else:
+                    # TransformerDecoder: (tgt, memory)
+                    teacher_latent = self.shared_decoder(teacher_latent, latent_visible)
 
-            teacher_hidden = self.teacher_decoder(tgt, teacher_latent)
+            # Apply teacher decoder
+            if self.config.use_transformer_encoder_decoder:
+                # TransformerEncoder: self-attention only
+                teacher_hidden = self.teacher_decoder(teacher_latent)
+            else:
+                # TransformerDecoder: cross-attention with encoder output
+                teacher_hidden = self.teacher_decoder(teacher_latent, latent_visible)
             teacher_output = self.teacher_output_projection(teacher_hidden)
             teacher_output = teacher_output.transpose(0, 1)
 
@@ -521,12 +602,24 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 student_latent = self._insert_mask_tokens_and_unshuffle(
                     latent_visible.detach(), ids_restore, seq_len, student_mask_token
                 )
+                # Add decoder positional encoding (only for TransformerEncoder)
+                if self.config.use_transformer_encoder_decoder:
+                    student_latent = student_latent + self.decoder_pos_encoder.pe[:seq_len]
             else:
                 # Detach encoder output to prevent encoder updates from student loss
                 student_latent = latent.detach()
+                # Add decoder positional encoding (only for TransformerEncoder)
+                if self.config.use_transformer_encoder_decoder:
+                    student_latent = student_latent + self.decoder_pos_encoder.pe[:seq_len]
 
             # Student uses its own decoder directly (no shared decoder)
-            student_hidden = self.student_decoder(tgt, student_latent)
+            if self.config.use_transformer_encoder_decoder:
+                # TransformerEncoder: self-attention only
+                student_hidden = self.student_decoder(student_latent)
+            else:
+                # TransformerDecoder: cross-attention with encoder output
+                # Use detached encoder output for memory
+                student_hidden = self.student_decoder(student_latent, latent_visible.detach())
             student_output = self.student_output_projection(student_hidden)
             student_output = student_output.transpose(0, 1)
 

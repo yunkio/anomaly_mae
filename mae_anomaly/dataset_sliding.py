@@ -1000,20 +1000,21 @@ class SlidingWindowDataset(Dataset):
             )
 
     def _extract_windows(self):
-        """Extract all windows and compute labels"""
-        self.windows = []
-        self.seq_labels = []  # 0 or 1 (based on last mask_last_n)
-        self.window_point_labels = []
-        self.sample_types = []  # 0: pure_normal, 1: disturbing_normal, 2: anomaly
-        self.anomaly_type_labels = []  # Which anomaly type (0 for normal)
-        self.window_start_indices = []  # Start index of each window (for point-level aggregation)
+        """Extract window metadata (labels, types) without copying signal data.
+
+        Signal data is accessed lazily in __getitem__ via self.signals[start:end],
+        avoiding ~16GB memory for 85K windows of size 500x96.
+        """
+        seq_labels = []
+        sample_types = []  # 0: pure_normal, 1: disturbing_normal, 2: anomaly
+        anomaly_type_labels = []  # Which anomaly type (0 for normal)
+        window_start_indices = []  # Start index of each window (for point-level aggregation)
 
         series_length = len(self.signals)
 
         for start in range(0, series_length - self.window_size + 1, self.stride):
             end = start + self.window_size
 
-            window = self.signals[start:end]
             window_pl = self.point_labels[start:end]
 
             # Check last mask_last_n region
@@ -1043,19 +1044,15 @@ class SlidingWindowDataset(Dataset):
                         anomaly_type = region.anomaly_type
                         break
 
-            self.windows.append(window)
-            self.seq_labels.append(seq_label)
-            self.window_point_labels.append(window_pl)
-            self.sample_types.append(sample_type)
-            self.anomaly_type_labels.append(anomaly_type)
-            self.window_start_indices.append(start)
+            seq_labels.append(seq_label)
+            sample_types.append(sample_type)
+            anomaly_type_labels.append(anomaly_type)
+            window_start_indices.append(start)
 
-        self.windows = np.array(self.windows, dtype=np.float32)
-        self.seq_labels = np.array(self.seq_labels, dtype=np.int64)
-        self.window_point_labels = np.array(self.window_point_labels, dtype=np.int64)
-        self.sample_types = np.array(self.sample_types, dtype=np.int64)
-        self.anomaly_type_labels = np.array(self.anomaly_type_labels, dtype=np.int64)
-        self.window_start_indices = np.array(self.window_start_indices, dtype=np.int64)
+        self.seq_labels = np.array(seq_labels, dtype=np.int64)
+        self.sample_types = np.array(sample_types, dtype=np.int64)
+        self.anomaly_type_labels = np.array(anomaly_type_labels, dtype=np.int64)
+        self.window_start_indices = np.array(window_start_indices, dtype=np.int64)
 
     def _downsample_for_ratio(
         self,
@@ -1114,24 +1111,24 @@ class SlidingWindowDataset(Dataset):
             return
 
         # Apply downsampling
-        self.windows = self.windows[keep_indices]
         self.seq_labels = self.seq_labels[keep_indices]
-        self.window_point_labels = self.window_point_labels[keep_indices]
         self.sample_types = self.sample_types[keep_indices]
         self.anomaly_type_labels = self.anomaly_type_labels[keep_indices]
         self.window_start_indices = self.window_start_indices[keep_indices]
 
     def __len__(self) -> int:
-        return len(self.windows)
+        return len(self.window_start_indices)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns (sequence, label, point_labels, sample_type, anomaly_type)
         """
+        start = self.window_start_indices[idx]
+        end = start + self.window_size
         return (
-            torch.from_numpy(self.windows[idx]),
+            torch.from_numpy(self.signals[start:end].astype(np.float32, copy=False)),
             torch.tensor(self.seq_labels[idx], dtype=torch.long),
-            torch.from_numpy(self.window_point_labels[idx]),
+            torch.from_numpy(self.point_labels[start:end].copy()),
             torch.tensor(self.sample_types[idx], dtype=torch.long),
             torch.tensor(self.anomaly_type_labels[idx], dtype=torch.long),
         )

@@ -133,7 +133,7 @@ PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 **Purpose**: Process patches and learn global context
 
 **Structure**:
-- Layers: 1
+- Layers: 2 (enc2, optimal from ablation study)
 - Attention heads: 8
 - d_model: 128
 - Feedforward dim: 512
@@ -151,14 +151,14 @@ PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 **Purpose**: Heavy decoder for accurate reconstruction
 
 **Structure**:
-- Layers: 2
+- Layers: 4 (td4, optimal from ablation study)
 - Attention heads: 8
 - d_model: 128
 - Feedforward dim: 512
 - Dropout: 0.1
 
 **Details**:
-- More capacity for complex patterns
+- Deep decoder for high-quality reconstruction
 - Used in discrepancy computation
 - Cross-attention to encoder outputs
 
@@ -169,14 +169,14 @@ PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 **Purpose**: Lightweight decoder for efficient anomaly detection
 
 **Structure**:
-- Layers: 2
+- Layers: 1 (sd1, shallow for better discrepancy signal)
 - Attention heads: 8
 - d_model: 128
 - Feedforward dim: 512
 - Dropout: 0.1
 
 **Details**:
-- Same layer count as teacher (both use 2 layers by default)
+- Shallow decoder creates larger capacity gap with teacher
 - Discrepancy with teacher reveals anomalies
 - Decoder layer count can be varied in ablation studies
 
@@ -217,9 +217,9 @@ Input: (batch, 500, 8)
     ↓
 [Positional Encoding]
     ↓
-[Transformer Encoder (1 layer)]
+[Transformer Encoder (2 layers)]
     ↓
-[Teacher Decoder (2 layers)] | [Student Decoder (2 layers)]
+[Teacher Decoder (4 layers)] | [Student Decoder (1 layer)]
     ↓                           ↓
 [Output Projection]         [Output Projection]
     ↓                           ↓
@@ -558,9 +558,9 @@ All scoring formulas above produce **patch-level** scores (n_windows × num_patc
 | masking_ratio | 0.15 | Training masking ratio |
 | mask_after_encoder | True | Standard MAE: encode visible only, insert mask before decoder |
 | shared_mask_token | False | Separate mask tokens for teacher/student |
-| num_encoder_layers | 1 | Encoder layers |
-| num_teacher_decoder_layers | 2 | Teacher decoder layers (td2) |
-| num_student_decoder_layers | 2 | Student decoder layers (sd2) |
+| num_encoder_layers | 2 | Encoder layers (enc2) |
+| num_teacher_decoder_layers | 4 | Teacher decoder layers (td4) |
+| num_student_decoder_layers | 1 | Student decoder layers (sd1) |
 | margin | 0.5 | Discrepancy margin (fixed) |
 | lambda_disc | 2.0 | Discrepancy loss weight |
 | margin_type | dynamic | Margin loss type (dynamic/hinge/softplus) |

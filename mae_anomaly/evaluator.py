@@ -15,15 +15,217 @@ Point-level PA%K:
 
 import numpy as np
 import torch
+from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torch.amp import autocast
 from typing import Dict, Tuple, List, Optional
 from sklearn.metrics import (
     precision_score, recall_score, f1_score,
-    roc_auc_score, roc_curve
+    roc_auc_score, roc_curve, average_precision_score
 )
 
 from .dataset_sliding import ANOMALY_TYPE_NAMES
+
+
+# ============================================================================
+# F1_T (Time-series F1) - From QuoVadisTAD / TimeSeAD
+# Source: https://github.com/ssarfraz/QuoVadisTAD
+# Based on: Tatbul et al. (2018), Wagner et al. (2023)
+# ============================================================================
+
+def _compute_window_indices(binary_labels: np.ndarray) -> List[Tuple[int, int]]:
+    """Compute a list of indices where anomaly windows begin and end.
+
+    Args:
+        binary_labels: 1-D array with 1 for anomaly, 0 for normal
+
+    Returns:
+        List of (start, end) tuples where end is exclusive
+    """
+    differences = np.diff(binary_labels, prepend=0)
+    indices = np.nonzero(differences)[0]
+    if len(indices) % 2 != 0:
+        indices = np.append(indices, binary_labels.size)
+    return [(indices[i], indices[i + 1]) for i in range(0, len(indices), 2)]
+
+
+def _constant_bias_fn(inputs: np.ndarray) -> float:
+    """Constant bias - average overlap."""
+    if inputs.shape[0] == 0:
+        return 0.0
+    return np.sum(inputs) / inputs.shape[0]
+
+
+def _improved_cardinality_fn(cardinality: int, gt_length: int) -> float:
+    """Recall-consistent cardinality function from TimeSeAD (Wagner et al. 2023).
+
+    Penalizes ground truth windows covered by many predictions.
+    """
+    if gt_length <= 1:
+        return 1.0
+    return ((gt_length - 1) / gt_length) ** (cardinality - 1)
+
+
+def _compute_ts_overlap(
+    preds: np.ndarray,
+    pred_indices: List[Tuple[int, int]],
+    gt_indices: List[Tuple[int, int]],
+    alpha: float,
+    use_window_weight: bool = False
+) -> float:
+    """Compute overlap score using two-pointer approach (O(n) complexity).
+
+    From QuoVadisTAD/TimeSeAD implementation.
+    """
+    n_gt_windows = len(gt_indices)
+    n_pred_windows = len(pred_indices)
+
+    if n_gt_windows == 0:
+        return 0.0
+
+    total_score = 0.0
+    total_gt_points = 0
+
+    i = j = 0
+    while i < n_gt_windows and j < n_pred_windows:
+        gt_start, gt_end = gt_indices[i]
+        window_length = gt_end - gt_start
+        total_gt_points += window_length
+        i += 1
+
+        cardinality = 0
+        while j < n_pred_windows and pred_indices[j][1] <= gt_start:
+            j += 1
+        while j < n_pred_windows and pred_indices[j][0] < gt_end:
+            j += 1
+            cardinality += 1
+
+        if cardinality == 0:
+            continue
+
+        # The last predicted window that overlaps could also overlap the next window
+        j -= 1
+
+        cardinality_multiplier = _improved_cardinality_fn(cardinality, window_length)
+
+        prediction_inside_ground_truth = preds[gt_start:gt_end]
+        omega = _constant_bias_fn(prediction_inside_ground_truth)
+
+        weight = window_length if use_window_weight else 1
+
+        # Existence reward (if cardinality > 0 then this is certainly 1)
+        total_score += alpha * weight
+        # Overlap reward
+        total_score += (1 - alpha) * cardinality_multiplier * omega * weight
+
+    # Handle remaining GT windows (no overlapping predictions)
+    while i < n_gt_windows:
+        gt_start, gt_end = gt_indices[i]
+        window_length = gt_end - gt_start
+        total_gt_points += window_length
+        i += 1
+
+    denom = total_gt_points if use_window_weight else n_gt_windows
+    if denom == 0:
+        return 0.0
+
+    return total_score / denom
+
+
+def ts_precision_and_recall(
+    labels: np.ndarray,
+    predictions: np.ndarray,
+    alpha: float = 0,
+    weighted_precision: bool = True,
+    label_ranges: Optional[List[Tuple[int, int]]] = None
+) -> Tuple[float, float]:
+    """Compute time-series precision and recall (Tatbul et al. 2018).
+
+    Uses improved cardinality function from TimeSeAD (Wagner et al. 2023).
+
+    Args:
+        labels: Ground truth binary labels
+        predictions: Binary predictions
+        alpha: Weight for existence term (0 = pure overlap)
+        weighted_precision: Weight precision by window length
+        label_ranges: Pre-computed label ranges (optional, for efficiency)
+
+    Returns:
+        (precision, recall) tuple
+    """
+    has_anomalies = np.any(labels > 0)
+    has_predictions = np.any(predictions > 0)
+
+    if not has_predictions and not has_anomalies:
+        return 1.0, 1.0
+    elif not has_predictions or not has_anomalies:
+        return 0.0, 0.0
+
+    if label_ranges is None:
+        label_ranges = _compute_window_indices(labels)
+    pred_ranges = _compute_window_indices(predictions)
+
+    # Recall: for each GT window, how much is covered by predictions
+    recall = _compute_ts_overlap(
+        predictions, pred_ranges, label_ranges,
+        alpha, use_window_weight=False
+    )
+
+    # Precision: for each predicted window, how much overlaps with GT
+    precision = _compute_ts_overlap(
+        labels, label_ranges, pred_ranges,
+        0, use_window_weight=weighted_precision
+    )
+
+    return precision, recall
+
+
+def compute_f1_t_at_threshold(
+    labels: np.ndarray,
+    scores: np.ndarray,
+    threshold: float,
+    weighted_precision: bool = True
+) -> Tuple[float, float, float]:
+    """Compute F1_T (time-series F1) at a given threshold.
+
+    Uses the same threshold as point-level F1 for consistency.
+
+    Args:
+        labels: Ground truth binary labels
+        scores: Continuous anomaly scores
+        threshold: Threshold for binary predictions (from point-level F1)
+        weighted_precision: Weight precision by window length
+
+    Returns:
+        (f1_t, precision_t, recall_t)
+    """
+    predictions = (scores > threshold).astype(int)
+    prec, rec = ts_precision_and_recall(
+        labels, predictions,
+        alpha=0,
+        weighted_precision=weighted_precision
+    )
+
+    if prec + rec > 0:
+        f1 = 2 * prec * rec / (prec + rec)
+    else:
+        f1 = 0.0
+
+    return float(f1), float(prec), float(rec)
+
+
+def find_f1_optimal_idx(fpr, tpr, labels):
+    """Find threshold index that maximizes F1 score on ROC curve.
+
+    Unlike Youden's J (argmax TPR-FPR), this accounts for class imbalance
+    by optimizing precision-recall balance directly.
+    """
+    n_pos = np.sum(labels)
+    n_neg = len(labels) - n_pos
+    precision = (tpr * n_pos) / (tpr * n_pos + fpr * n_neg + 1e-10)
+    recall = tpr
+    f1 = 2 * precision * recall / (precision + recall + 1e-10)
+    return np.argmax(f1)
 
 
 def _build_aggregation_map(
@@ -375,8 +577,9 @@ def _compute_single_pa_k_roc(args: tuple):
         eval_type_mask: (total_length,) bool mask for which points to evaluate
         k_percent: PA%K threshold percentage
         anomaly_type: int or None (None = all types)
-        return_mode: True → (fprs, tprs, auc, f1),
-                     'all' → (fprs, tprs, auc, optimal_thresh_idx, f1)
+        return_mode: True → (fprs, tprs, roc_auc, prc_auc, f1),
+                     'prc' → (precisions_sorted, recalls_sorted, prc_auc, f1),
+                     'all' → (fprs, tprs, roc_auc, prc_auc, optimal_thresh_idx, f1)
 
     Returns:
         Tuple depending on return_mode
@@ -404,12 +607,15 @@ def _compute_single_pa_k_roc(args: tuple):
         empty_fprs = np.array([0.0, 1.0])
         empty_tprs = np.array([0.0, 1.0])
         if return_mode == 'all':
-            return empty_fprs, empty_tprs, 0.5, 0, 0.0
-        return empty_fprs, empty_tprs, 0.5, 0.0
+            return empty_fprs, empty_tprs, 0.5, 0.0, 0, 0.0
+        if return_mode == 'prc':
+            return np.array([0.0, 1.0]), np.array([0.0, 1.0]), 0.0, 0.0
+        return empty_fprs, empty_tprs, 0.5, 0.0, 0.0
 
     k_ratio = k_percent / 100.0
     tprs = np.zeros(n_thresholds)
     fprs = np.zeros(n_thresholds)
+    precisions = np.zeros(n_thresholds)
     f1s = np.zeros(n_thresholds)
 
     # Pre-extract region boundaries for vectorized segment processing
@@ -446,24 +652,38 @@ def _compute_single_pa_k_roc(args: tuple):
         tprs[t_idx] = tp / n_positive if n_positive > 0 else 0
         fprs[t_idx] = fp / n_negative if n_negative > 0 else 0
 
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        precisions[t_idx] = tp / (tp + fp) if (tp + fp) > 0 else 1.0  # precision=1 when no predictions (recall=0)
         recall = tprs[t_idx]
-        f1s[t_idx] = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        f1s[t_idx] = 2 * precisions[t_idx] * recall / (precisions[t_idx] + recall) if (precisions[t_idx] + recall) > 0 else 0
 
-    # Sort by FPR
+    # Sort by FPR for ROC
     sorted_idx = np.argsort(fprs)
     fprs_sorted = fprs[sorted_idx]
     tprs_sorted = tprs[sorted_idx]
 
-    auc = float(np.trapz(tprs_sorted, fprs_sorted))
+    roc_auc_val = float(np.trapz(tprs_sorted, fprs_sorted))
+
+    # Sort by recall for PRC
+    prc_sorted_idx = np.argsort(tprs)
+    recalls_sorted = tprs[prc_sorted_idx]
+    precisions_sorted = precisions[prc_sorted_idx]
+
+    # Ensure PR curve starts at (recall=0, precision=1) for proper AUC calculation
+    if len(recalls_sorted) == 0 or recalls_sorted[0] > 0:
+        recalls_sorted = np.concatenate([[0.0], recalls_sorted])
+        precisions_sorted = np.concatenate([[1.0], precisions_sorted])
+
+    prc_auc_val = float(np.trapz(precisions_sorted, recalls_sorted))
 
     # Find optimal threshold (max F1)
     optimal_idx = int(np.argmax(f1s))
     best_f1 = float(f1s[optimal_idx])
 
     if return_mode == 'all':
-        return fprs_sorted, tprs_sorted, auc, optimal_idx, best_f1
-    return fprs_sorted, tprs_sorted, auc, best_f1
+        return fprs_sorted, tprs_sorted, roc_auc_val, prc_auc_val, optimal_idx, best_f1
+    if return_mode == 'prc':
+        return precisions_sorted, recalls_sorted, prc_auc_val, best_f1
+    return fprs_sorted, tprs_sorted, roc_auc_val, prc_auc_val, best_f1
 
 
 def _compute_voted_point_predictions(
@@ -509,7 +729,7 @@ def _compute_pa_k_f1_at_threshold(
     anomaly_regions,
     k_percent: int,
     eval_mask: np.ndarray,
-) -> float:
+) -> Tuple[float, float, float]:
     """Compute PA%K F1 score from voted binary predictions at a fixed threshold.
 
     Args:
@@ -520,7 +740,7 @@ def _compute_pa_k_f1_at_threshold(
         eval_mask: (total_length,) bool mask for which points to evaluate
 
     Returns:
-        PA%K F1 score
+        Tuple of (f1, precision, recall) for PA%K
     """
     preds = voted_preds.copy()
     total_length = len(preds)
@@ -551,7 +771,7 @@ def _compute_pa_k_f1_at_threshold(
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
-    return f1
+    return f1, precision, recall
 
 
 def compute_segment_pa_k_detection_rate(
@@ -875,7 +1095,7 @@ class Evaluator:
         num_patches = self.config.num_patches
 
         with torch.no_grad(), autocast('cuda', enabled=self.use_amp):
-            for batch in self.test_loader:
+            for batch in tqdm(self.test_loader, desc="Patch scores", leave=False):
                 if len(batch) == 5:
                     sequences, window_labels, point_labels, sample_types, anomaly_types = batch
                 elif len(batch) == 4:
@@ -890,7 +1110,10 @@ class Evaluator:
                 batch_size, seq_length, num_features = sequences.shape
 
                 # Process patches in batches for memory efficiency
-                patch_batch_size = 4  # Fixed: process 4 patches at a time
+                # Adaptive batch size: larger batches = fewer forward passes = faster
+                # Memory: batch_size * patch_batch_size * seq_len * features * 4 bytes
+                # With 12GB GPU, we can handle much larger batches
+                patch_batch_size = min(num_patches, 4)  # Conservative batch size to prevent GPU OOM
                 batch_recon_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
                 batch_disc_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
                 batch_student_recon_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
@@ -1063,7 +1286,7 @@ class Evaluator:
             return {}
 
         fpr, tpr, thresholds_arr = roc_curve(pt_labels, point_scores)
-        optimal_idx = np.argmax(tpr - fpr)
+        optimal_idx = find_f1_optimal_idx(fpr, tpr, pt_labels)
         threshold = thresholds_arr[optimal_idx]
         point_predictions = (point_scores > threshold).astype(int)
 
@@ -1127,6 +1350,7 @@ class Evaluator:
 
             if len(np.unique(type_labels)) > 1:
                 type_results['roc_auc'] = float(roc_auc_score(type_labels, type_scores))
+                type_results['prc_auc'] = float(average_precision_score(type_labels, type_scores))
                 type_results['precision'] = float(precision_score(type_labels, type_predictions, zero_division=0))
                 type_results['recall'] = float(recall_score(type_labels, type_predictions, zero_division=0))
                 type_results['f1_score'] = float(f1_score(type_labels, type_predictions, zero_division=0))
@@ -1138,21 +1362,24 @@ class Evaluator:
 
                 type_regions = [r for r in anomaly_regions if r.anomaly_type == atype_idx]
 
-                for k in [10, 20, 50, 80]:
-                    # PA%K AUROC: sweep
+                for k in range(0, 101, 5):
+                    # PA%K AUROC + PRC-AUC: sweep
                     roc_result = _compute_single_pa_k_roc((
                         point_scores_all, pt_labels, anomaly_regions,
                         eval_type_mask, k, atype_idx, True
                     ))
-                    _, _, pa_auc, _ = roc_result
-                    type_results[f'pa_{k}_roc_auc'] = float(pa_auc)
+                    _, _, pa_roc_auc, pa_prc_auc, _ = roc_result
+                    type_results[f'pa_{k}_roc_auc'] = float(pa_roc_auc)
+                    type_results[f'pa_{k}_prc_auc'] = float(pa_prc_auc)
 
-                    # PA%K F1: fixed threshold + voting
-                    pa_f1 = _compute_pa_k_f1_at_threshold(
+                    # PA%K F1, precision, recall: fixed threshold + voting
+                    pa_f1, pa_precision, pa_recall = _compute_pa_k_f1_at_threshold(
                         voted_preds, pt_labels, anomaly_regions,
                         k, eval_type_mask
                     )
                     type_results[f'pa_{k}_f1'] = float(pa_f1)
+                    type_results[f'pa_{k}_precision'] = float(pa_precision)
+                    type_results[f'pa_{k}_recall'] = float(pa_recall)
 
                     # PA%K segment detection rate: same voted_preds (single threshold) for all K
                     pa_det_rate = compute_segment_pa_k_detection_rate(
@@ -1168,7 +1395,7 @@ class Evaluator:
                 # All points in eval set are anomaly (no normal points have this type)
                 type_results['detection_rate'] = float(type_predictions.mean())
 
-                for k in [10, 20, 50, 80]:
+                for k in range(0, 101, 5):
                     pa_rate = compute_segment_pa_k_detection_rate(
                         point_scores=voted_preds,
                         point_labels=pt_labels,
@@ -1219,12 +1446,14 @@ class Evaluator:
         if not (self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions')):
             # Cannot compute point-level: return zeros
             return {
-                'roc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
+                'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
                 'f1_score': 0.0, 'optimal_threshold': 0.0,
-                'pa_10_f1': 0.0, 'pa_10_roc_auc': 0.0,
-                'pa_20_f1': 0.0, 'pa_20_roc_auc': 0.0,
-                'pa_50_f1': 0.0, 'pa_50_roc_auc': 0.0,
-                'pa_80_f1': 0.0, 'pa_80_roc_auc': 0.0,
+                'f1_t': 0.0, 'precision_t': 0.0, 'recall_t': 0.0,
+                **{f'pa_{k}_f1': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_roc_auc': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_prc_auc': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_precision': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_recall': 0.0 for k in range(0, 101, 5)},
             }
 
         ws_indices = np.array(self.test_dataset.window_start_indices)
@@ -1241,8 +1470,9 @@ class Evaluator:
         # === Point-level ROC and threshold ===
         if len(np.unique(pt_labels)) > 1:
             roc_auc = roc_auc_score(pt_labels, point_scores)
+            prc_auc = average_precision_score(pt_labels, point_scores)
             fpr, tpr, thresholds = roc_curve(pt_labels, point_scores)
-            optimal_idx = np.argmax(tpr - fpr)
+            optimal_idx = find_f1_optimal_idx(fpr, tpr, pt_labels)
             threshold = thresholds[optimal_idx]
 
             predictions = (point_scores > threshold).astype(int)
@@ -1250,16 +1480,25 @@ class Evaluator:
             recall = recall_score(pt_labels, predictions, zero_division=0)
             f1 = f1_score(pt_labels, predictions, zero_division=0)
 
+            # F1_T (time-series F1) using the same threshold
+            f1_t, precision_t, recall_t = compute_f1_t_at_threshold(
+                pt_labels, point_scores, threshold
+            )
+
             results = {
                 'roc_auc': roc_auc,
+                'prc_auc': prc_auc,
                 'precision': precision,
                 'recall': recall,
                 'f1_score': f1,
                 'optimal_threshold': threshold,
+                'f1_t': f1_t,
+                'precision_t': precision_t,
+                'recall_t': recall_t,
             }
 
             # === PA%K metrics ===
-            pa_k_values = [10, 20, 50, 80]
+            pa_k_values = list(range(0, 101, 5))
 
             # Precompute point indices for voting (cached)
             pt_flat_t, pt_flat_si, pt_coverage = self._get_point_score_indices()
@@ -1282,28 +1521,33 @@ class Evaluator:
                 patch_scores, (pt_flat_t, pt_flat_si), pt_coverage, threshold, total_len
             )
             for k in pa_k_values:
-                # PA%K AUROC via threshold sweep
+                # PA%K AUROC + PRC-AUC via threshold sweep
                 roc_result = _compute_single_pa_k_roc((
                     point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
                     eval_mask, k, None, True
                 ))
-                _, _, pa_auc, _ = roc_result
-                results[f'pa_{k}_roc_auc'] = float(pa_auc)
+                _, _, pa_roc_auc, pa_prc_auc, _ = roc_result
+                results[f'pa_{k}_roc_auc'] = float(pa_roc_auc)
+                results[f'pa_{k}_prc_auc'] = float(pa_prc_auc)
 
-                # PA%K F1: use point-level threshold with voting
-                pa_f1 = _compute_pa_k_f1_at_threshold(
+                # PA%K F1, precision, recall: use point-level threshold with voting
+                pa_f1, pa_precision, pa_recall = _compute_pa_k_f1_at_threshold(
                     voted_preds, pt_labels, self.test_dataset.anomaly_regions,
                     k, eval_mask
                 )
                 results[f'pa_{k}_f1'] = float(pa_f1)
+                results[f'pa_{k}_precision'] = float(pa_precision)
+                results[f'pa_{k}_recall'] = float(pa_recall)
         else:
             results = {
-                'roc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
+                'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
                 'f1_score': 0.0, 'optimal_threshold': 0.0,
-                'pa_10_f1': 0.0, 'pa_10_roc_auc': 0.0,
-                'pa_20_f1': 0.0, 'pa_20_roc_auc': 0.0,
-                'pa_50_f1': 0.0, 'pa_50_roc_auc': 0.0,
-                'pa_80_f1': 0.0, 'pa_80_roc_auc': 0.0,
+                'f1_t': 0.0, 'precision_t': 0.0, 'recall_t': 0.0,
+                **{f'pa_{k}_f1': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_roc_auc': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_prc_auc': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_precision': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_recall': 0.0 for k in range(0, 101, 5)},
             }
 
         # Disturbing normal performance (window-level, descriptive)
@@ -1343,7 +1587,7 @@ class Evaluator:
 
         Returns:
             Dict with roc_auc, f1_score, precision, recall, optimal_threshold,
-            and pa_K_roc_auc, pa_K_f1 for K in [10, 20, 50, 80]
+            and pa_K_roc_auc, pa_K_f1 for K in range(0, 101, 5)
         """
         cached = self._get_cached_scores()
 
@@ -1358,12 +1602,14 @@ class Evaluator:
 
         if not (self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions')):
             return {
-                'roc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
+                'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
                 'f1_score': 0.0, 'optimal_threshold': 0.0,
-                'pa_10_f1': 0.0, 'pa_10_roc_auc': 0.0,
-                'pa_20_f1': 0.0, 'pa_20_roc_auc': 0.0,
-                'pa_50_f1': 0.0, 'pa_50_roc_auc': 0.0,
-                'pa_80_f1': 0.0, 'pa_80_roc_auc': 0.0,
+                'f1_t': 0.0, 'precision_t': 0.0, 'recall_t': 0.0,
+                **{f'pa_{k}_f1': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_roc_auc': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_prc_auc': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_precision': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_recall': 0.0 for k in range(0, 101, 5)},
             }
 
         ws_indices = np.array(self.test_dataset.window_start_indices)
@@ -1379,21 +1625,32 @@ class Evaluator:
 
         if len(np.unique(pt_labels)) > 1:
             roc_auc_val = roc_auc_score(pt_labels, point_scores)
+            prc_auc_val = average_precision_score(pt_labels, point_scores)
             fpr, tpr, thresholds = roc_curve(pt_labels, point_scores)
-            optimal_idx = np.argmax(tpr - fpr)
+            optimal_idx = find_f1_optimal_idx(fpr, tpr, pt_labels)
             threshold = thresholds[optimal_idx]
 
             predictions = (point_scores > threshold).astype(int)
+
+            # F1_T (time-series F1) using the same threshold
+            f1_t, precision_t, recall_t = compute_f1_t_at_threshold(
+                pt_labels, point_scores, threshold
+            )
+
             results = {
                 'roc_auc': float(roc_auc_val),
+                'prc_auc': float(prc_auc_val),
                 'precision': float(precision_score(pt_labels, predictions, zero_division=0)),
                 'recall': float(recall_score(pt_labels, predictions, zero_division=0)),
                 'f1_score': float(f1_score(pt_labels, predictions, zero_division=0)),
                 'optimal_threshold': float(threshold),
+                'f1_t': f1_t,
+                'precision_t': precision_t,
+                'recall_t': recall_t,
             }
 
             # PA%K metrics
-            pa_k_values = [10, 20, 50, 80]
+            pa_k_values = list(range(0, 101, 5))
             pt_flat_t, pt_flat_si, pt_coverage = self._get_point_score_indices()
 
             # PA%K AUROC: threshold sweep with voting
@@ -1418,23 +1675,28 @@ class Evaluator:
                     point_scores_all, pt_labels, self.test_dataset.anomaly_regions,
                     eval_mask, k, None, True
                 ))
-                _, _, pa_auc, _ = roc_result
-                results[f'pa_{k}_roc_auc'] = float(pa_auc)
+                _, _, pa_roc_auc, pa_prc_auc, _ = roc_result
+                results[f'pa_{k}_roc_auc'] = float(pa_roc_auc)
+                results[f'pa_{k}_prc_auc'] = float(pa_prc_auc)
 
-                # PA%K F1: point-level threshold + voting
-                pa_f1 = _compute_pa_k_f1_at_threshold(
+                # PA%K F1, precision, recall: point-level threshold + voting
+                pa_f1, pa_precision, pa_recall = _compute_pa_k_f1_at_threshold(
                     voted_preds, pt_labels, self.test_dataset.anomaly_regions,
                     k, eval_mask
                 )
                 results[f'pa_{k}_f1'] = float(pa_f1)
+                results[f'pa_{k}_precision'] = float(pa_precision)
+                results[f'pa_{k}_recall'] = float(pa_recall)
         else:
             results = {
-                'roc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
+                'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
                 'f1_score': 0.0, 'optimal_threshold': 0.0,
-                'pa_10_f1': 0.0, 'pa_10_roc_auc': 0.0,
-                'pa_20_f1': 0.0, 'pa_20_roc_auc': 0.0,
-                'pa_50_f1': 0.0, 'pa_50_roc_auc': 0.0,
-                'pa_80_f1': 0.0, 'pa_80_roc_auc': 0.0,
+                'f1_t': 0.0, 'precision_t': 0.0, 'recall_t': 0.0,
+                **{f'pa_{k}_f1': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_roc_auc': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_prc_auc': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_precision': 0.0 for k in range(0, 101, 5)},
+                **{f'pa_{k}_recall': 0.0 for k in range(0, 101, 5)},
             }
 
         return results

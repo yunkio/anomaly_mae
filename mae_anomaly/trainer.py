@@ -287,7 +287,13 @@ class Trainer:
         self.model.train()  # Restore training mode
         return results
 
-    def train(self) -> Dict:
+    def train(self, epoch_callback=None) -> Dict:
+        """Train the model for num_epochs.
+
+        Args:
+            epoch_callback: Optional callable(epoch, model, history) invoked at end of each epoch.
+                           Use for lightweight epoch-wise test evaluation.
+        """
         teacher_warmup = getattr(self.config, 'teacher_only_warmup_epochs', 1)
         for epoch in range(self.config.num_epochs):
             # First N epochs are warm-up: train teacher only (no discrepancy/student loss)
@@ -331,5 +337,9 @@ class Trainer:
             self.history['epoch_raw_disc_anomaly'].append(contrib_ratios['raw_disc_anomaly'])
             # Scores by anomaly type
             self.history['epoch_anomaly_type_scores'].append(contrib_ratios['anomaly_type_scores'])
+
+            # Epoch callback (for epoch-wise test evaluation)
+            if epoch_callback is not None:
+                epoch_callback(epoch, self.model, self.history)
 
         return self.history

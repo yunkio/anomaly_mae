@@ -22,6 +22,8 @@ import sys
 import json
 import time
 import shutil
+import signal
+import atexit
 import builtins
 import importlib.util
 import multiprocessing as mp
@@ -60,6 +62,177 @@ from mae_anomaly import (
     SelfDistilledMAEMultivariate, SelfDistillationLoss,
     Trainer, Evaluator, SLIDING_ANOMALY_TYPE_NAMES
 )
+from mae_anomaly.datasets import get_dataset_loader
+
+
+# =============================================================================
+# Label Noise Support
+# =============================================================================
+
+class NoisyLabelSlidingWindowDataset(SlidingWindowDataset):
+    """SlidingWindowDataset with noisy labels (anomalies relabeled as normal).
+
+    This wrapper modifies point_labels to simulate label noise while keeping
+    the actual data unchanged.
+    """
+
+    def __init__(
+        self,
+        signals: np.ndarray,
+        point_labels: np.ndarray,
+        noisy_point_labels: np.ndarray,  # Labels with noise
+        anomaly_regions: list,
+        window_size: int,
+        stride: int,
+        mask_last_n: int = 0,
+        split: str = 'train',
+        train_ratio: float = 0.8,
+        seed: int = 42
+    ):
+        # Store noisy labels for training
+        self.noisy_point_labels = noisy_point_labels
+        self.use_noisy_labels = (split == 'train')
+
+        super().__init__(
+            signals=signals,
+            point_labels=point_labels,  # Original labels for proper window classification
+            anomaly_regions=anomaly_regions,
+            window_size=window_size,
+            stride=stride,
+            mask_last_n=mask_last_n,
+            split=split,
+            train_ratio=train_ratio,
+            seed=seed
+        )
+
+    def __getitem__(self, idx):
+        """Override to return noisy labels during training."""
+        item = super().__getitem__(idx)
+
+        if self.use_noisy_labels:
+            # Replace point_labels with noisy version
+            window_start = self.window_start_indices[idx]
+            window_end = window_start + self.window_size
+            noisy_window_labels = self.noisy_point_labels[window_start:window_end].astype(np.float32)
+
+            # item = (signals, window_label, point_labels, sample_type, anomaly_type)
+            return (item[0], item[1], noisy_window_labels, item[3], item[4])
+
+        return item
+
+
+def apply_label_noise(
+    point_labels: np.ndarray,
+    anomaly_regions: list,
+    train_ratio: float,
+    noise_ratio: float = 0.5,
+    noise_seed: int = 123,
+) -> np.ndarray:
+    """Apply label noise by relabeling a fraction of training anomaly regions as normal.
+
+    Args:
+        point_labels: Original point-level labels (0=normal, 1=anomaly)
+        anomaly_regions: List of AnomalyRegion objects
+        train_ratio: Fraction of data used for training
+        noise_ratio: Fraction of anomaly regions to relabel as normal
+        noise_seed: Random seed for reproducibility
+
+    Returns:
+        noisy_point_labels: Modified labels with noise applied to training data
+    """
+    total_length = len(point_labels)
+    train_end = int(total_length * train_ratio)
+
+    # Identify anomaly regions in training data
+    train_regions = [r for r in anomaly_regions if r.start < train_end]
+
+    print(f"  Label noise: {noise_ratio*100:.0f}% of training anomaly regions")
+    print(f"    Total anomaly regions: {len(anomaly_regions)}")
+    print(f"    Regions in training: {len(train_regions)}")
+
+    # Randomly select regions to relabel
+    np.random.seed(noise_seed)
+    n_regions_to_relabel = int(len(train_regions) * noise_ratio)
+    indices_to_relabel = np.random.choice(
+        len(train_regions), n_regions_to_relabel, replace=False
+    )
+
+    # Create noisy labels
+    noisy_point_labels = point_labels.copy()
+
+    relabeled_timestamps = 0
+    for idx in indices_to_relabel:
+        region = train_regions[idx]
+        # Only relabel training portion
+        end_idx = min(region.end, train_end)
+        noisy_point_labels[region.start:end_idx] = 0
+        relabeled_timestamps += (end_idx - region.start)
+
+    old_train_anomaly_ratio = point_labels[:train_end].mean()
+    new_train_anomaly_ratio = noisy_point_labels[:train_end].mean()
+
+    print(f"    Regions relabeled: {n_regions_to_relabel}")
+    print(f"    Timestamps relabeled: {relabeled_timestamps:,}")
+    print(f"    Original train anomaly ratio: {old_train_anomaly_ratio:.2%}")
+    print(f"    Noisy train anomaly ratio: {new_train_anomaly_ratio:.2%}")
+
+    return noisy_point_labels
+
+
+# =============================================================================
+# Process Cleanup (prevent orphan processes on crash/OOM kill)
+# =============================================================================
+
+_active_pool = None  # Track active ProcessPoolExecutor for cleanup
+
+
+def _cleanup_children():
+    """Kill all child processes on exit to prevent orphans."""
+    global _active_pool
+    if _active_pool is not None:
+        try:
+            _active_pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        _active_pool = None
+
+    # Also clean up background viz processes (defined later in module)
+    try:
+        for p in _background_viz_processes:
+            try:
+                if p.is_alive():
+                    p.kill()
+            except Exception:
+                pass
+    except NameError:
+        pass
+
+
+def _signal_handler(signum, frame):
+    """Handle SIGTERM/SIGINT: clean up children then exit."""
+    _cleanup_children()
+    sys.exit(1)
+
+
+# Register cleanup: atexit for normal exit, signals for abnormal termination
+atexit.register(_cleanup_children)
+# Note: signal handlers registered later in _run_parallel_mode to avoid
+# interfering with ProcessPoolExecutor worker initialization
+
+
+def _check_system_memory(min_free_gb=2.0):
+    """Check if system has enough free memory. Returns (ok, free_gb)."""
+    try:
+        with open('/proc/meminfo') as f:
+            meminfo = f.read()
+        available = 0
+        for line in meminfo.split('\n'):
+            if line.startswith('MemAvailable:'):
+                available = int(line.split()[1]) / 1024 / 1024  # KB -> GB
+                break
+        return available >= min_free_gb, available
+    except Exception:
+        return True, -1  # Can't check, assume OK
 
 
 # =============================================================================
@@ -489,15 +662,16 @@ def _cpu_eval_worker(args):
     from mae_anomaly.evaluator import DatasetMetadata
     total_length = len(signals)
     train_end = int(total_length * config.sliding_window_train_ratio)
-    test_signals = signals[train_end:]
-    test_length = len(test_signals)
+    test_point_labels = point_labels[train_end:]
+    test_length = len(test_point_labels)
     stride = config.sliding_window_test_stride
     window_size = config.seq_length
     n_windows = max(0, (test_length - window_size) // stride + 1)
-    window_start_indices = [train_end + i * stride for i in range(n_windows)]
+    # Use relative indices (0-based within test split), matching SlidingWindowDataset
+    window_start_indices = [i * stride for i in range(n_windows)]
 
     dataset_meta = DatasetMetadata(
-        point_labels=point_labels,
+        point_labels=test_point_labels,
         window_start_indices=window_start_indices,
         anomaly_regions=anomaly_regions,
     )
@@ -891,6 +1065,8 @@ def load_config_module(config_path: str):
         'experiments': module.EXPERIMENTS,
         'scoring_modes': getattr(module, 'SCORING_MODES', ['default']),
         'mask_settings': mask_settings,
+        'label_noise_ratio': getattr(module, 'LABEL_NOISE_RATIO', 0.0),  # 0.0 = no noise
+        'dataset_type': getattr(module, 'DATASET_TYPE', 'simulation'),  # Default: simulation
     }
 
     return config
@@ -913,7 +1089,8 @@ class SingleExperimentRunner:
         train_ratio: float = None,  # None = use config.sliding_window_train_ratio
         point_aggregation_method: str = 'voting',
         scoring_modes: List[str] = None,
-        eval_only: bool = False
+        eval_only: bool = False,
+        noisy_point_labels: np.ndarray = None,  # For label noise experiments
     ):
         self.exp_config = exp_config
         self.output_base_dir = output_base_dir
@@ -924,12 +1101,21 @@ class SingleExperimentRunner:
         self.point_aggregation_method = point_aggregation_method
         self.scoring_modes = scoring_modes or ['default']
         self.eval_only = eval_only
+        self.noisy_point_labels = noisy_point_labels  # None = no label noise
 
     def _create_config(self) -> Config:
         """Create Config object from experiment configuration."""
         config = Config()
 
-        for key, value in self.exp_config.items():
+        # Handle both old format (top-level keys) and new format ('config' sub-dict)
+        if 'config' in self.exp_config:
+            # New format: {'name': ..., 'config': {...}}
+            config_dict = self.exp_config['config']
+        else:
+            # Old format: {'name': ..., key1: val1, ...}
+            config_dict = self.exp_config
+
+        for key, value in config_dict.items():
             if key == 'name':
                 continue
             if hasattr(config, key):
@@ -998,17 +1184,32 @@ class SingleExperimentRunner:
                     hist_data = json.load(f)
                     history = hist_data.get('0')
         else:
-            train_dataset = SlidingWindowDataset(
-                signals=self.signals,
-                point_labels=self.point_labels,
-                anomaly_regions=self.anomaly_regions,
-                window_size=config.seq_length,
-                stride=config.sliding_window_stride,
-                mask_last_n=config.patch_size,
-                split='train',
-                train_ratio=self.train_ratio,
-                seed=config.random_seed
-            )
+            # Use NoisyLabelSlidingWindowDataset if label noise is enabled
+            if self.noisy_point_labels is not None:
+                train_dataset = NoisyLabelSlidingWindowDataset(
+                    signals=self.signals,
+                    point_labels=self.point_labels,
+                    noisy_point_labels=self.noisy_point_labels,
+                    anomaly_regions=self.anomaly_regions,
+                    window_size=config.seq_length,
+                    stride=config.sliding_window_stride,
+                    mask_last_n=config.patch_size,
+                    split='train',
+                    train_ratio=self.train_ratio,
+                    seed=config.random_seed
+                )
+            else:
+                train_dataset = SlidingWindowDataset(
+                    signals=self.signals,
+                    point_labels=self.point_labels,
+                    anomaly_regions=self.anomaly_regions,
+                    window_size=config.seq_length,
+                    stride=config.sliding_window_stride,
+                    mask_last_n=config.patch_size,
+                    split='train',
+                    train_ratio=self.train_ratio,
+                    seed=config.random_seed
+                )
             train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
 
             # Set primary scoring mode BEFORE training
@@ -1016,7 +1217,7 @@ class SingleExperimentRunner:
 
             train_start = time.time()
             model = SelfDistilledMAEMultivariate(config)
-            trainer = Trainer(model, config, train_loader, test_loader, verbose=False)
+            trainer = Trainer(model, config, train_loader, test_loader, verbose=True)
             trainer.train()
             train_time = time.time() - train_start
             history = trainer.history
@@ -1142,9 +1343,24 @@ def run_ablation_study(
     # Load configuration
     ablation_config = load_config_module(config_path)
     phase_name = ablation_config['phase_name']
-    experiments = ablation_config['experiments']
+    experiments_raw = ablation_config['experiments']
     scoring_modes = ablation_config['scoring_modes']
     mask_settings = ablation_config['mask_settings']
+    label_noise_ratio = ablation_config.get('label_noise_ratio', 0.0)
+    base_config_dict = ablation_config['base_config']
+
+    # Merge BASE_CONFIG with each experiment config
+    experiments = []
+    for exp in experiments_raw:
+        merged_exp = {}
+        merged_exp['name'] = exp['name']
+        # Merge: BASE_CONFIG + experiment-specific config
+        merged_config = {}
+        merged_config.update(base_config_dict)
+        if 'config' in exp:
+            merged_config.update(exp['config'])
+        merged_exp['config'] = merged_config
+        experiments.append(merged_exp)
 
     print(f"{'='*80}")
     print(f"Ablation Study: {phase_name}")
@@ -1153,6 +1369,8 @@ def run_ablation_study(
     print(f"Total experiments: {len(experiments)}")
     print(f"Mask settings: {['mask_before' if not m else 'mask_after' for m in mask_settings]}")
     print(f"Scoring modes: {scoring_modes}")
+    if label_noise_ratio > 0:
+        print(f"Label noise ratio: {label_noise_ratio*100:.0f}%")
     print(f"Skip existing: {skip_existing}")
     print(f"Eval only: {eval_only}")
     print(f"Parallel workers: {parallel_workers}")
@@ -1187,21 +1405,65 @@ def run_ablation_study(
     print(f"Info directory: {info_dir}")
     print()
 
-    # Generate dataset
-    print("Generating dataset...", flush=True)
+    # Load dataset (based on DATASET_TYPE from config)
+    dataset_type = ablation_config['dataset_type']
+    print(f"Loading dataset (type: {dataset_type})...", flush=True)
+
+    # Create base_config and apply BASE_CONFIG from config file
     base_config = Config()
+    base_config_dict = ablation_config['base_config']
+    for key, value in base_config_dict.items():
+        if hasattr(base_config, key):
+            setattr(base_config, key, value)
+
     set_seed(base_config.random_seed)
 
-    complexity = NormalDataComplexity(enable_complexity=False)
-    generator = SlidingWindowTimeSeriesGenerator(
-        total_length=base_config.sliding_window_total_length,
-        num_features=base_config.num_features,
-        interval_scale=base_config.anomaly_interval_scale,
-        complexity=complexity,
-        seed=base_config.random_seed
-    )
-    signals, point_labels, anomaly_regions = generator.generate()
+    if dataset_type == 'simulation':
+        # Original simulation generation
+        complexity = NormalDataComplexity(enable_complexity=False)
+        generator = SlidingWindowTimeSeriesGenerator(
+            total_length=base_config.sliding_window_total_length,
+            num_features=base_config.num_features,
+            interval_scale=base_config.anomaly_interval_scale,
+            complexity=complexity,
+            seed=base_config.random_seed
+        )
+        signals, point_labels, anomaly_regions = generator.generate()
+        feature_names = [f'feature_{i}' for i in range(base_config.num_features)]
+        train_ratio = base_config.sliding_window_train_ratio
+        data_info = {'dataset_type': 'simulation'}
+    else:
+        # Use registered dataset loader
+        loader = get_dataset_loader(dataset_type)
+        result = loader()
+
+        # Handle different return signatures
+        if len(result) == 6:
+            signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info = result
+        elif len(result) == 4:
+            signals, point_labels, anomaly_regions, feature_names = result
+            train_ratio = base_config.sliding_window_train_ratio
+            data_info = {'dataset_type': dataset_type}
+        else:
+            raise ValueError(f"Unexpected loader return length: {len(result)}")
+
+        # Update num_features in base_config
+        base_config.num_features = signals.shape[1]
+
     print(f"  Signal shape: {signals.shape}")
+    print(f"  Features: {len(feature_names)}")
+
+    # Apply label noise if configured
+    noisy_point_labels = None
+    if label_noise_ratio > 0:
+        print(f"\nApplying label noise ({label_noise_ratio*100:.0f}%)...")
+        noisy_point_labels = apply_label_noise(
+            point_labels=point_labels,
+            anomaly_regions=anomaly_regions,
+            train_ratio=base_config.sliding_window_train_ratio,
+            noise_ratio=label_noise_ratio,
+            noise_seed=123,
+        )
 
     # Save dataset information to 000_ablation_info/dataset.md
     if not eval_only:
@@ -1235,6 +1497,7 @@ def run_ablation_study(
             enable_viz=enable_viz,
             background_viz=background_viz,
             ablation_config=ablation_config,
+            noisy_point_labels=noisy_point_labels,
         )
 
     # =========================================================================
@@ -1279,7 +1542,8 @@ def run_ablation_study(
                     point_labels=point_labels,
                     anomaly_regions=anomaly_regions,
                     scoring_modes=scoring_modes,
-                    eval_only=eval_only
+                    eval_only=eval_only,
+                    noisy_point_labels=noisy_point_labels,
                 )
 
                 results = runner.run()
@@ -1432,7 +1696,8 @@ def _run_parallel_mode(
     experiments, mask_settings, scoring_modes, output_dir, info_dir,
     signals, point_labels, anomaly_regions,
     skip_existing, eval_only, parallel_workers,
-    enable_viz, background_viz, ablation_config
+    enable_viz, background_viz, ablation_config,
+    noisy_point_labels=None,
 ):
     """Run ablation study with parallel CPU evaluation pipeline.
 
@@ -1455,7 +1720,13 @@ def _run_parallel_mode(
     n_gpu_done = 0
     n_cpu_done = 0
 
+    global _active_pool
+    # Register signal handlers for clean shutdown
+    prev_sigterm = signal.signal(signal.SIGTERM, _signal_handler)
+    prev_sigint = signal.signal(signal.SIGINT, _signal_handler)
+
     with ProcessPoolExecutor(max_workers=parallel_workers) as pool:
+        _active_pool = pool
         futures = []  # list of (exp_label, future)
 
         for mask_after_encoder in mask_settings:
@@ -1525,17 +1796,37 @@ def _run_parallel_mode(
                                 hist_data = json.load(f)
                                 history = hist_data.get('0')
                     else:
+                        # Check system memory before training
+                        mem_ok, free_gb = _check_system_memory(min_free_gb=3.0)
+                        if not mem_ok:
+                            print(f"SKIP (low RAM: {free_gb:.1f}GB free)")
+                            errors.append((exp_label, f"Low system RAM: {free_gb:.1f}GB"))
+                            continue
+
                         # Train model
                         set_seed(config.random_seed)
-                        train_dataset = SlidingWindowDataset(
-                            signals=signals, point_labels=point_labels,
-                            anomaly_regions=anomaly_regions,
-                            window_size=config.seq_length,
-                            stride=config.sliding_window_stride,
-                            mask_last_n=config.patch_size, split='train',
-                            train_ratio=config.sliding_window_train_ratio,
-                            seed=config.random_seed
-                        )
+                        # Use NoisyLabelSlidingWindowDataset if label noise is enabled
+                        if noisy_point_labels is not None:
+                            train_dataset = NoisyLabelSlidingWindowDataset(
+                                signals=signals, point_labels=point_labels,
+                                noisy_point_labels=noisy_point_labels,
+                                anomaly_regions=anomaly_regions,
+                                window_size=config.seq_length,
+                                stride=config.sliding_window_stride,
+                                mask_last_n=config.patch_size, split='train',
+                                train_ratio=config.sliding_window_train_ratio,
+                                seed=config.random_seed
+                            )
+                        else:
+                            train_dataset = SlidingWindowDataset(
+                                signals=signals, point_labels=point_labels,
+                                anomaly_regions=anomaly_regions,
+                                window_size=config.seq_length,
+                                stride=config.sliding_window_stride,
+                                mask_last_n=config.patch_size, split='train',
+                                train_ratio=config.sliding_window_train_ratio,
+                                seed=config.random_seed
+                            )
                         train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
 
                         t_train_start = time.time()
@@ -1550,7 +1841,7 @@ def _run_parallel_mode(
                             seed=config.random_seed
                         )
                         test_loader_for_train = DataLoader(test_dataset_for_train, batch_size=config.batch_size, shuffle=False)
-                        trainer = Trainer(model, config, train_loader, test_loader_for_train, verbose=False)
+                        trainer = Trainer(model, config, train_loader, test_loader_for_train, verbose=True)
                         trainer.train()
                         train_time = time.time() - t_train_start
                         history = trainer.history
@@ -1678,6 +1969,10 @@ def _run_parallel_mode(
                 collected_labels.add(exp_label)
                 n_cpu_done = len(collected_labels)
 
+    _active_pool = None
+    # Restore original signal handlers
+    signal.signal(signal.SIGTERM, prev_sigterm)
+    signal.signal(signal.SIGINT, prev_sigint)
     total_time = time.time() - total_start
 
     # Save final summary

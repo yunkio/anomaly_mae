@@ -1,5 +1,130 @@
 # Changelog
 
+## 2026-02-15 (Update 47): Script Consolidation — Unified Config System
+
+### Summary
+
+Consolidated 10 separate run_*.py scripts (4,742 lines) into a unified config-based system with single entry point. This eliminates code duplication, reduces maintenance burden, and enables easy experiment reproduction via config files.
+
+### Changes
+
+**New Modules:**
+- `mae_anomaly/datasets/loaders.py` - Centralized dataset loaders with registry pattern
+- `mae_anomaly/datasets/noisy.py` - NoisyLabelSlidingWindowDataset
+- `mae_anomaly/utils/system.py` - GPU memory utilities (free_gpu, mem_status)
+- `mae_anomaly/utils/experiment.py` - Config creation helper (make_config)
+
+**Updated Scripts:**
+- `scripts/ablation/run_ablation.py` - Extended to support multiple dataset types via DATASET_TYPE config parameter
+- `scripts/run_base_experiments.py` - Updated imports to use new modules
+
+**Config System:**
+```bash
+# Single entry point for all datasets
+python scripts/ablation/run_ablation.py --config scripts/ablation/configs/<config>.py
+```
+
+**Dataset Types:**
+- `simulation` - Generated time series (default)
+- `swat_A1A2` - SWaT A1+A2 combined
+- `swat_A1A2_swap` - SWaT with swapped halves
+- `wadi_14days_A1` - WaDi 14 days + A1
+- `wadi_14days_A2` - WaDi 14 days + A2
+- `wadi_A2` - WaDi A2 only
+
+**Template Configs:**
+- `scripts/ablation/configs/simulation_test.py`
+- `scripts/ablation/configs/swat_A1A2_test.py`
+- `scripts/ablation/configs/wadi_14days_A1_test.py`
+- `scripts/ablation/configs/README.md` - Migration guide
+
+### Files Modified
+
+- `mae_anomaly/datasets/` - New module (loaders.py, noisy.py, __init__.py)
+- `mae_anomaly/utils/` - New module (system.py, experiment.py, __init__.py)
+- `scripts/ablation/run_ablation.py` - Dataset type support (lines 1337-1354, 1386-1425, 1106-1125)
+- `scripts/run_base_experiments.py` - Import updates (lines 42-52, 635)
+- `scripts/ablation/configs/` - New config templates and README
+- `ablation_guideline.md` - Section 7 added (Unified Config System)
+
+### Archived Scripts
+
+Moved to `.trash/20260215_run_scripts/` (10 files, 4,742 lines):
+- run_mae_baseline.py, run_mae_normal50.py
+- run_swat_ablation.py, run_swat_A1A2_swap.py, run_swat_A1A2_normal50.py
+- run_wadi_ablation.py, run_wadi_14days_ablation.py, run_wadi_14days_normal50.py, run_wadi.py
+- run_base_experiments.py (old version)
+
+### Benefits
+
+- ✅ Single codebase eliminates ~4,700 duplicate lines
+- ✅ Easy experiment reproduction (share config file)
+- ✅ Centralized bug fixes and improvements
+- ✅ Type-safe config validation
+- ✅ Backward compatible (DATASET_TYPE defaults to 'simulation')
+
+---
+
+## 2026-02-09 (Update 46): Default Parameter Update — enc2, td4, sd1
+
+### Summary
+
+Updated default model parameters based on WaDi 14days ablation study results. The new defaults (enc=2, td=4, sd=1, p=5, d=128) showed +30.7% PRC-AUC improvement on A1_14days and +13.5% on A2_14days compared to original training data.
+
+### New Default Parameters
+
+| Parameter | New Default | Previous | Reason |
+|-----------|-------------|----------|--------|
+| num_encoder_layers | **2** | 1 | enc=2 +21.7% PRC on A1_14days |
+| num_teacher_decoder_layers | **4** | 2 | td=4 optimal for reconstruction |
+| num_student_decoder_layers | **1** | 2 | sd=1 creates better discrepancy signal |
+| patch_size | 5 | 5 | Maintained (fine-grained best) |
+| d_model | 128 | 128 | Maintained |
+
+### Files Modified
+
+- `mae_anomaly/config.py` - Core default values
+- `scripts/run_mae_baseline.py`, `run_mae_normal50.py` - Training scripts
+- `scripts/run_wadi_ablation.py`, `run_wadi_14days_ablation.py` - WaDi scripts
+- `docs/ARCHITECTURE.md` - Architecture documentation
+- `docs/PROJECT_SUMMARY.md` - Project summary
+
+### Key Insight
+
+With 14days normal training data, enc=2 gains +21.7% PRC-AUC for A1, making deeper encoders beneficial when more normal patterns are available. The shallow student (sd=1) with deep teacher (td=4) creates optimal capacity gap for discrepancy-based anomaly detection.
+
+---
+
+## 2026-02-05 (Update 45): WaDi A2 Ablation Study Complete
+
+### Summary
+
+Completed 40 ablation experiments on WaDi A2 dataset (172,803 timesteps, 96 features, 7 attack segments). Best configuration: w100_p5_td3_sd1 (F1=0.5728, ROC-AUC=0.9396). Key finding: td3_sd1 outperforms td4_sd1 on A2 (unlike A1), suggesting moderate teacher depth generalizes better for heterogeneous attack types.
+
+### Key Results
+
+| Metric | Best Value | Configuration |
+|--------|------------|---------------|
+| F1 Score | 0.5728 | w100_p5_td3_sd1 |
+| ROC-AUC | 0.9396 | w100_p5_td3_sd1 |
+| PRC-AUC | 0.6146 | w500_p5_td3_sd1 |
+
+### A1 vs A2 Comparison
+
+| Parameter | A1 Optimal | A2 Optimal |
+|-----------|------------|------------|
+| Teacher Decoder | 4 layers | 3 layers |
+| Best F1 | 0.6065 | 0.5728 |
+
+### New Files
+
+| File | Description |
+|------|-------------|
+| `docs/ablation/WaDi/A2_ANALYSIS.md` | Comprehensive analysis document |
+| `results/WaDi/A2/ablation_results.csv` | All experiment metrics in CSV format |
+
+---
+
 ## 2026-01-31 (Update 44): Fix Phase 2 Defaults — enc1, lr=2e-3
 
 ### Summary

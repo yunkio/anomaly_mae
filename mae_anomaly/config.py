@@ -23,7 +23,7 @@ class Config:
     # Sliding window dataset parameters
     use_sliding_window_dataset: bool = True  # Use new sliding window dataset
     sliding_window_total_length: int = 275000  # Total length (220K train + 55K test)
-    sliding_window_stride: int = 11  # Stride for train window extraction (overlapping windows)
+    sliding_window_stride: int = 3  # Stride for train window extraction (overlapping windows)
     sliding_window_test_stride: int = 1  # Stride for test window extraction (stride=1 for PA%K)
     sliding_window_train_ratio: float = 0.8  # Train ratio (220K/275K = 0.8, test = 55K)
     anomaly_interval_scale: float = 0.75  # Scale factor for anomaly intervals (2x frequency, ~13% anomaly)
@@ -37,29 +37,37 @@ class Config:
     # Model parameters
     d_model: int = 128
     nhead: int = 8
-    num_encoder_layers: int = 1
-    num_teacher_decoder_layers: int = 4  # t4s1 decoder
-    num_student_decoder_layers: int = 1
+    num_encoder_layers: int = 2  # enc2 (optimal from ablation study)
+    num_teacher_decoder_layers: int = 4  # td4 decoder (optimal from ablation study)
+    num_student_decoder_layers: int = 1  # sd1 (shallow student for better discrepancy)
     num_shared_decoder_layers: int = 0  # Shared decoder layers before teacher/student decoders
     # - 0: No shared decoder (default)
     # - >0: Shared decoder trained with teacher, separate mask tokens for student
     dim_feedforward: int = 512  # 4 * d_model
     dropout: float = 0.15
     masking_ratio: float = 0.15
-    num_patches: int = 25  # seq_length / patch_size (dynamically computed when window size changes)
-    patch_size: int = 20  # Fixed patch size; num_patches = seq_length / patch_size
+    num_patches: int = 100  # seq_length / patch_size (dynamically computed when window size changes)
+    patch_size: int = 5  # Fixed patch size; num_patches = seq_length / patch_size
     patchify_mode: str = 'patch_cnn'  # 'patch_cnn', 'linear'
     # - 'patch_cnn': Patchify first, then CNN per patch (no cross-patch leakage)
     # - 'linear': Patchify then linear embedding (MAE original style, no CNN)
-    mask_after_encoder: bool = False  # Standard MAE masking architecture
+    mask_after_encoder: bool = True  # Standard MAE masking architecture
     # - False: Mask tokens go through encoder (current behavior)
     # - True: Encode visible patches only, insert mask tokens before decoder (standard MAE)
     shared_mask_token: bool = False  # Share mask token between teacher and student
     # - True: Single mask token shared (current behavior)
     # - False: Separate mask tokens for teacher and student decoders
 
+    # MAE architecture variants (ablation study options)
+    use_transformer_encoder_decoder: bool = True  # Use TransformerEncoder for decoder (MAE-style)
+    # - True: TransformerEncoder (self-attention only, no cross-attention with encoder output)
+    # - False: TransformerDecoder (cross-attention with encoder output via memory)
+    use_flatten_linear_embedding: bool = True  # Use flatten+linear for patch embedding
+    # - True: Flatten patch then linear projection (preserves patch structure)
+    # - False: Mean pooling over patch dimension (simple averaging)
+
     # CNN architecture for patch_cnn mode
-    cnn_channels: tuple = None  # (mid_channels, out_channels) for patch_cnn, None=default based on d_model
+    cnn_channels: tuple = (64, 128)  # (mid_channels, out_channels) for patch_cnn
     # - None: Use default (d_model//2, d_model)
     # - (16, 32): Smaller CNN
     # - (64, 128): Larger CNN
@@ -77,14 +85,14 @@ class Config:
     # - 2.0/3.0/5.0: Stronger interference on anomaly samples
 
     # Anomaly score computation mode
-    anomaly_score_mode: str = 'default'
+    anomaly_score_mode: str = 'adaptive'
     # - 'default': recon + lambda_disc * disc (original)
     # - 'adaptive': Auto-scaled lambda (recon + (mean_recon/mean_disc) * disc)
 
     # Training parameters
-    batch_size: int = 1024  # Batch size for training
+    batch_size: int = 256  # Batch size for training
     num_epochs: int = 50
-    learning_rate: float = 2e-3
+    learning_rate: float = 2e-3  # Default learning rate
     weight_decay: float = 1e-5
     warmup_epochs: int = 10
     teacher_only_warmup_epochs: int = 3  # First N epochs train teacher only (no discrepancy/student loss)
@@ -104,7 +112,7 @@ class Config:
     use_teacher: bool = True
     use_student: bool = True
     use_masking: bool = True
-    force_mask_anomaly: bool = False  # Force mask patches containing anomalies during training
+    force_mask_anomaly: bool = True  # Force mask patches containing anomalies during training
 
     # Reproducibility
     random_seed: int = 42
