@@ -27,9 +27,15 @@ Self-Distilled Masked Autoencoder (MAE) 구현으로, 다변량 시계열 데이
 │   │   ├── system.py         # GPU 메모리 관리
 │   │   └── experiment.py     # 실험 설정 헬퍼
 │   └── visualization/        # 시각화 모듈
-│       ├── base.py
-│       ├── best_model_visualizer.py
-│       └── training_visualizer.py
+│       ├── __init__.py
+│       ├── base.py                      # 시각화 베이스 클래스
+│       ├── data_visualizer.py           # 데이터 시각화
+│       ├── architecture_visualizer.py   # 아키텍처 시각화
+│       ├── experiment_visualizer.py     # 실험 결과 시각화
+│       ├── stage2_visualizer.py         # Stage 2 시각화
+│       ├── best_model_visualizer.py     # 최고 모델 분석
+│       ├── training_visualizer.py       # 학습 진행 시각화
+│       └── parallel.py                  # 병렬 처리 유틸
 │
 ├── scripts/                  # 실행 스크립트
 │   ├── visualize_all.py      # 통합 시각화 스크립트
