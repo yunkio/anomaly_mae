@@ -1316,11 +1316,15 @@ class Evaluator:
             point_anomaly_types[region.start:end] = region.anomaly_type
 
         # Precompute eval_type_mask for each anomaly type (exclude other types' regions)
-        # Start with all True, then for each type mask out other types
-        base_mask = np.ones(total_len, dtype=bool)
+        # Discover all anomaly types from actual data (supports >9 types, e.g. TEP)
+        unique_atypes = sorted(set(
+            r.anomaly_type for r in anomaly_regions if r.anomaly_type > 0
+        ))
+        max_atype = max(unique_atypes) if unique_atypes else 0
+
         # Build mask of each type's region coverage
         type_region_masks = {}  # atype_idx -> bool mask of regions belonging to this type
-        for atype_idx in range(1, len(ANOMALY_TYPE_NAMES)):
+        for atype_idx in unique_atypes:
             type_region_masks[atype_idx] = (point_anomaly_types == atype_idx)
 
         # For each type, eval_type_mask = ~(union of other types' anomaly regions)
@@ -1328,9 +1332,12 @@ class Evaluator:
 
         results = {}
 
-        # Skip index 0 ('normal') — only evaluate actual anomaly types
-        for atype_idx in range(1, len(ANOMALY_TYPE_NAMES)):
-            atype_name = ANOMALY_TYPE_NAMES[atype_idx]
+        # Evaluate each anomaly type found in the data
+        for atype_idx in unique_atypes:
+            if atype_idx < len(ANOMALY_TYPE_NAMES):
+                atype_name = ANOMALY_TYPE_NAMES[atype_idx]
+            else:
+                atype_name = f'fault_{atype_idx}'
             type_anomaly_mask = type_region_masks[atype_idx]
 
             if not type_anomaly_mask.any():
@@ -1555,6 +1562,7 @@ class Evaluator:
         window_scores = self._apply_scoring_formula(
             cached['window_recon'], cached['window_disc'], score_mode
         )
+        window_scores = np.nan_to_num(window_scores, nan=0.0)
         disturbing_mask = (sample_types == 0) | (sample_types == 1)
         if disturbing_mask.sum() > 0 and 'optimal_threshold' in results:
             disturbing_scores = window_scores[disturbing_mask]

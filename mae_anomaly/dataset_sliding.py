@@ -943,7 +943,8 @@ class SlidingWindowDataset(Dataset):
         target_anomaly_ratio: Optional[float] = None,  # For test set downsampling (legacy, disabled by default)
         target_counts: Optional[Dict[str, int]] = None,  # Explicit counts per sample type (disabled by default)
         seed: Optional[int] = None,
-        force_stride_1_for_test: bool = True  # Force stride=1 for test split (for point-level PA%K)
+        force_stride_1_for_test: bool = True,  # Force stride=1 for test split (for point-level PA%K)
+        run_boundaries: Optional[List[int]] = None,  # Positions where independent runs end (windows must not cross)
     ):
         self.window_size = window_size
         self.mask_last_n = mask_last_n
@@ -974,6 +975,19 @@ class SlidingWindowDataset(Dataset):
             self.signals = signals[train_end:]
             self.point_labels = point_labels[train_end:]
             offset = train_end
+
+        # Filter and adjust run boundaries for this split
+        self.run_boundaries = None
+        if run_boundaries is not None:
+            adjusted = []
+            split_start = 0 if split == 'train' else train_end
+            split_end = train_end if split == 'train' else total_length
+            for b in sorted(run_boundaries):
+                b_adj = b - offset
+                if 0 < b_adj < (split_end - split_start):
+                    adjusted.append(b_adj)
+            if adjusted:
+                self.run_boundaries = sorted(adjusted)
 
         # Filter anomaly regions for this split
         self.anomaly_regions = []
@@ -1012,8 +1026,21 @@ class SlidingWindowDataset(Dataset):
 
         series_length = len(self.signals)
 
+        # Precompute boundary set for O(1) lookup
+        boundary_set = set(self.run_boundaries) if self.run_boundaries else None
+
         for start in range(0, series_length - self.window_size + 1, self.stride):
             end = start + self.window_size
+
+            # Skip windows that cross run boundaries
+            if boundary_set is not None:
+                crosses = False
+                for b in boundary_set:
+                    if start < b < end:
+                        crosses = True
+                        break
+                if crosses:
+                    continue
 
             window_pl = self.point_labels[start:end]
 

@@ -1,4 +1,4 @@
-"""Dataset loaders for SWaT, WaDi, and Simulation datasets."""
+"""Dataset loaders for SWaT, WaDi, Simulation, and TEP datasets."""
 
 import os
 import numpy as np
@@ -541,7 +541,7 @@ def load_simulation(
     generator = SlidingWindowTimeSeriesGenerator(
         total_length=total_length,
         num_features=num_features,
-        random_seed=random_seed,
+        seed=random_seed,
         complexity=complexity,
     )
 
@@ -585,7 +585,7 @@ def load_simulation_complex(
     generator = SlidingWindowTimeSeriesGenerator(
         total_length=total_length,
         num_features=num_features,
-        random_seed=random_seed,
+        seed=random_seed,
         complexity=complexity,
     )
 
@@ -610,6 +610,440 @@ def load_simulation_complex(
     return signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
 
 
+# =============================================================================
+# TEP (Tennessee Eastman Process) Dataset Loader
+# =============================================================================
+
+# TEP fault type names (20 fault types)
+TEP_FAULT_NAMES = [
+    'normal',                          # 0: Normal operation
+    'A/C feed ratio (stream 4)',       # 1: Step change
+    'B composition (stream 4)',        # 2: Step change
+    'D feed temperature (stream 2)',   # 3: Step change
+    'Reactor cooling water inlet temp',# 4: Step change
+    'Condenser cooling water inlet temp',# 5: Step change
+    'A feed loss (stream 1)',          # 6: Step change
+    'C header pressure loss (stream 4)',# 7: Step change
+    'A,B,C composition (stream 4)',    # 8: Random variation
+    'D feed temperature (stream 2)',   # 9: Random variation
+    'C feed temperature (stream 4)',   # 10: Random variation
+    'Reactor cooling water inlet temp',# 11: Random variation
+    'Condenser cooling water inlet temp',# 12: Random variation
+    'Reaction kinetics',               # 13: Slow drift
+    'Reactor cooling water valve',     # 14: Sticking
+    'Condenser cooling water valve',   # 15: Sticking
+    'Unknown',                         # 16
+    'Unknown',                         # 17
+    'Unknown',                         # 18
+    'Unknown',                         # 19
+    'Unknown',                         # 20
+]
+
+
+def load_tep(
+    fault_types: Optional[List[int]] = None,
+    n_train_runs: int = 50,
+    n_test_runs: int = 50,
+    seed: int = 42,
+):
+    """Load TEP (Tennessee Eastman Process) dataset for anomaly detection.
+
+    Constructs a continuous time series from independent simulation runs:
+    - Training: fault-free testing runs (960 samples/run, all normal)
+    - Testing: faulty testing runs (960 samples/run, fault onset at sample 160)
+
+    Run boundaries are tracked to prevent sliding windows from crossing them.
+
+    Args:
+        fault_types: List of fault type numbers (1-20) to include. None = all 20.
+        n_train_runs: Number of fault-free runs for training (max 500).
+        n_test_runs: Number of faulty runs per fault type for testing (max 500).
+        seed: Random seed for run selection.
+
+    Returns:
+        signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+    """
+    import pyreadr
+
+    data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'TEP')
+    rng = np.random.RandomState(seed)
+
+    if fault_types is None:
+        fault_types = list(range(1, 21))
+    fault_types = sorted(fault_types)
+
+    fault_types_str = ','.join(str(f) for f in fault_types)
+    print(f"\n{'='*60}")
+    print(f"Loading TEP dataset")
+    print(f"  Fault types: {fault_types_str}")
+    print(f"  Train runs: {n_train_runs}, Test runs/fault: {n_test_runs}")
+    print(f"{'='*60}")
+
+    # ---- Load fault-free testing data (for training) ----
+    print(f"  Loading fault-free testing data...")
+    ff_test_path = os.path.join(data_dir, 'TEP_FaultFree_Testing.RData')
+    ff_data = pyreadr.read_r(ff_test_path)
+    df_ff = list(ff_data.values())[0]
+
+    # Identify feature columns (exclude metadata)
+    meta_cols = {'faultNumber', 'simulationRun', 'sample'}
+    feature_cols = [c for c in df_ff.columns if c not in meta_cols]
+
+    # Select training runs
+    available_train_runs = sorted(df_ff['simulationRun'].unique())
+    n_train_runs = min(n_train_runs, len(available_train_runs))
+    selected_train_runs = sorted(rng.choice(available_train_runs, size=n_train_runs, replace=False))
+    print(f"    Selected {n_train_runs} fault-free runs (of {len(available_train_runs)} available)")
+
+    # Extract training data: concatenate selected runs sequentially
+    train_signals_list = []
+    train_labels_list = []
+    train_boundaries = []
+    cumulative_len = 0
+
+    for run_id in selected_train_runs:
+        run_data = df_ff[df_ff['simulationRun'] == run_id].sort_values('sample')
+        run_features = run_data[feature_cols].values.astype(np.float32)
+        run_len = len(run_features)
+
+        train_signals_list.append(run_features)
+        train_labels_list.append(np.zeros(run_len, dtype=np.int64))
+
+        cumulative_len += run_len
+        train_boundaries.append(cumulative_len)
+
+    train_signals = np.concatenate(train_signals_list, axis=0)
+    train_labels = np.concatenate(train_labels_list, axis=0)
+    train_len = len(train_signals)
+    # Remove last boundary (end of data, not an internal boundary)
+    train_boundaries = train_boundaries[:-1]
+
+    print(f"    Training: {train_len:,} samples ({n_train_runs} runs × ~960)")
+
+    # Free fault-free data
+    del df_ff, ff_data
+
+    # ---- Load faulty testing data (for testing) ----
+    print(f"  Loading faulty testing data...")
+    faulty_test_path = os.path.join(data_dir, 'TEP_Faulty_Testing.RData')
+    faulty_data = pyreadr.read_r(faulty_test_path)
+    df_faulty = list(faulty_data.values())[0]
+
+    # Fault onset: sample 160 (1-indexed) → index 159 (0-indexed)
+    FAULT_ONSET_SAMPLE = 160  # 1-indexed, as per TEP description
+
+    test_signals_list = []
+    test_labels_list = []
+    test_boundaries = []
+    anomaly_regions = []
+    test_cumulative_len = 0
+
+    for fault_num in fault_types:
+        df_fault = df_faulty[df_faulty['faultNumber'] == fault_num]
+        available_test_runs = sorted(df_fault['simulationRun'].unique())
+        n_select = min(n_test_runs, len(available_test_runs))
+        selected_runs = sorted(rng.choice(available_test_runs, size=n_select, replace=False))
+
+        for run_id in selected_runs:
+            run_data = df_fault[df_fault['simulationRun'] == run_id].sort_values('sample')
+            run_features = run_data[feature_cols].values.astype(np.float32)
+            run_samples = run_data['sample'].values
+            run_len = len(run_features)
+
+            # Construct labels: normal before fault onset, anomaly after
+            run_labels = np.zeros(run_len, dtype=np.int64)
+            fault_onset_idx = np.searchsorted(run_samples, FAULT_ONSET_SAMPLE)
+            run_labels[fault_onset_idx:] = 1
+
+            # Anomaly region (offset by train_len + cumulative test position)
+            region_start = train_len + test_cumulative_len + fault_onset_idx
+            region_end = train_len + test_cumulative_len + run_len
+            anomaly_regions.append(AnomalyRegion(
+                start=int(region_start),
+                end=int(region_end),
+                anomaly_type=int(fault_num),
+            ))
+
+            test_signals_list.append(run_features)
+            test_labels_list.append(run_labels)
+
+            test_cumulative_len += run_len
+            test_boundaries.append(train_len + test_cumulative_len)
+
+    test_signals = np.concatenate(test_signals_list, axis=0)
+    test_labels = np.concatenate(test_labels_list, axis=0)
+    test_len = len(test_signals)
+    # Remove last boundary
+    test_boundaries = test_boundaries[:-1]
+
+    print(f"    Testing: {test_len:,} samples "
+          f"({len(fault_types)} faults × {n_test_runs} runs × ~960)")
+
+    # Free faulty data
+    del df_faulty, faulty_data
+
+    # ---- Combine train + test ----
+    all_signals_raw = np.concatenate([train_signals, test_signals], axis=0)
+    all_labels = np.concatenate([train_labels, test_labels], axis=0)
+    n_total = len(all_signals_raw)
+    train_ratio = train_len / n_total
+
+    # All run boundaries (internal only)
+    run_boundaries = sorted(train_boundaries + test_boundaries)
+
+    print(f"\n  Combined: {n_total:,} samples, {len(feature_cols)} features")
+    print(f"  Run boundaries: {len(run_boundaries)}")
+
+    # ---- Remove constant columns ----
+    stds = np.std(all_signals_raw, axis=0)
+    constant_mask = stds == 0
+    n_constant = int(np.sum(constant_mask))
+    if n_constant > 0:
+        print(f"  Removing {n_constant} constant columns")
+        all_signals_raw = all_signals_raw[:, ~constant_mask]
+        feature_cols = [f for f, m in zip(feature_cols, constant_mask) if not m]
+
+    # ---- Handle NaN ----
+    nan_count = int(np.sum(np.isnan(all_signals_raw)))
+    if nan_count > 0:
+        print(f"  Handling {nan_count:,} NaN values (forward-fill + backward-fill)")
+        df_temp = pd.DataFrame(all_signals_raw)
+        df_temp = df_temp.ffill().bfill()
+        all_signals_raw = df_temp.values.astype(np.float32)
+
+    # ---- Min-max normalization ----
+    print("  Applying min-max normalization...")
+    mins = np.min(all_signals_raw, axis=0, keepdims=True)
+    maxs = np.max(all_signals_raw, axis=0, keepdims=True)
+    ranges = maxs - mins
+    ranges[ranges == 0] = 1
+    all_signals = ((all_signals_raw - mins) / ranges).astype(np.float32)
+
+    # ---- Compute statistics ----
+    split_idx = int(n_total * train_ratio)
+    test_labels_split = all_labels[split_idx:]
+
+    data_info = {
+        'dataset_type': 'tep',
+        'fault_types': fault_types,
+        'n_train_runs': n_train_runs,
+        'n_test_runs': n_test_runs,
+        'n_total': n_total,
+        'n_features': all_signals.shape[1],
+        'train_len': train_len,
+        'test_len': test_len,
+        'train_ratio': train_ratio,
+        'train_attack_ratio': 0.0,  # Training is all normal
+        'test_attack_ratio': float(np.mean(test_labels_split)) if len(test_labels_split) > 0 else 0.0,
+        'test_normal': int(np.sum(test_labels_split == 0)),
+        'test_attack': int(np.sum(test_labels_split == 1)),
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'run_boundaries': run_boundaries,
+        'fault_onset_sample': FAULT_ONSET_SAMPLE,
+    }
+
+    print(f"\n  Train/Test split:")
+    print(f"    Train: {train_len:,} samples (all normal)")
+    print(f"    Test:  {test_len:,} samples")
+    print(f"    train_ratio: {train_ratio:.4f}")
+    print(f"    Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
+    print(f"  Features: {data_info['n_features']}")
+    print(f"  Anomaly regions: {len(anomaly_regions)}")
+
+    return all_signals, all_labels, anomaly_regions, feature_cols, train_ratio, data_info
+
+
+# =============================================================================
+# SMD (Server Machine Dataset) Loader
+# =============================================================================
+
+# All 28 machine IDs in SMD
+SMD_MACHINE_NAMES = [
+    'machine-1-1', 'machine-1-2', 'machine-1-3', 'machine-1-4',
+    'machine-1-5', 'machine-1-6', 'machine-1-7', 'machine-1-8',
+    'machine-2-1', 'machine-2-2', 'machine-2-3', 'machine-2-4',
+    'machine-2-5', 'machine-2-6', 'machine-2-7', 'machine-2-8',
+    'machine-2-9',
+    'machine-3-1', 'machine-3-2', 'machine-3-3', 'machine-3-4',
+    'machine-3-5', 'machine-3-6', 'machine-3-7', 'machine-3-8',
+    'machine-3-9', 'machine-3-10', 'machine-3-11',
+]
+
+
+def load_smd(
+    machines: Optional[List[str]] = None,
+):
+    """Load SMD (Server Machine Dataset) for anomaly detection.
+
+    Each machine has separate train (all normal) and test (with anomalies) files.
+    Data is concatenated as [all_train | all_test] so train_ratio splits correctly.
+
+    When multiple machines are loaded, run_boundaries prevent sliding windows
+    from crossing machine boundaries.
+
+    Args:
+        machines: List of machine IDs to load (e.g. ['machine-1-1']).
+                  None = all 28 machines.
+
+    Returns:
+        signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+    """
+    data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'SMD')
+
+    if machines is None:
+        machines = list(SMD_MACHINE_NAMES)
+    machines = sorted(machines)
+
+    print(f"\n{'='*60}")
+    print(f"Loading SMD dataset")
+    print(f"  Machines: {len(machines)} ({machines[0]}...{machines[-1]})" if len(machines) > 3
+          else f"  Machines: {machines}")
+    print(f"{'='*60}")
+
+    # ---- Load all machines' train and test data separately ----
+    all_train_signals = []
+    all_test_signals = []
+    all_test_labels = []
+    train_lengths = []  # Per-machine train lengths
+    test_lengths = []   # Per-machine test lengths
+
+    num_features = None
+
+    for machine_id in machines:
+        train_path = os.path.join(data_dir, 'train', f'{machine_id}.txt')
+        test_path = os.path.join(data_dir, 'test', f'{machine_id}.txt')
+        label_path = os.path.join(data_dir, 'test_label', f'{machine_id}.txt')
+
+        # Load train (comma-separated, no header)
+        train_data = np.loadtxt(train_path, delimiter=',', dtype=np.float32)
+        test_data = np.loadtxt(test_path, delimiter=',', dtype=np.float32)
+        test_labels = np.loadtxt(label_path, dtype=np.int64)
+
+        if num_features is None:
+            num_features = train_data.shape[1]
+
+        all_train_signals.append(train_data)
+        all_test_signals.append(test_data)
+        all_test_labels.append(test_labels)
+        train_lengths.append(len(train_data))
+        test_lengths.append(len(test_data))
+
+    total_train = sum(train_lengths)
+    total_test = sum(test_lengths)
+    n_total = total_train + total_test
+
+    print(f"  Loaded {len(machines)} machines, {num_features} features each")
+    print(f"  Total train: {total_train:,} samples (all normal)")
+    print(f"  Total test:  {total_test:,} samples")
+
+    # ---- Concatenate: [all_train | all_test] ----
+    # This ensures train_ratio splits correctly at the boundary
+    train_concat = np.concatenate(all_train_signals, axis=0)
+    test_concat = np.concatenate(all_test_signals, axis=0)
+    test_labels_concat = np.concatenate(all_test_labels, axis=0)
+
+    all_signals_raw = np.concatenate([train_concat, test_concat], axis=0)
+    all_labels = np.concatenate([
+        np.zeros(total_train, dtype=np.int64),
+        test_labels_concat,
+    ], axis=0)
+
+    train_ratio = total_train / n_total
+
+    # ---- Compute run boundaries ----
+    # Train internal boundaries (between machines in train portion)
+    run_boundaries = []
+    cumulative = 0
+    for i, tl in enumerate(train_lengths):
+        cumulative += tl
+        if i < len(train_lengths) - 1:  # Skip last (= total_train boundary = train/test split)
+            run_boundaries.append(cumulative)
+
+    # Test internal boundaries (between machines in test portion)
+    cumulative = total_train
+    for i, tl in enumerate(test_lengths):
+        cumulative += tl
+        if i < len(test_lengths) - 1:  # Skip last (= end of data)
+            run_boundaries.append(cumulative)
+
+    # ---- Compute anomaly regions (in test portion, offset by total_train) ----
+    anomaly_regions = []
+    test_offset = total_train
+    for test_labels_machine in all_test_labels:
+        is_atk = (test_labels_machine == 1).astype(int)
+        diff = np.diff(is_atk, prepend=0, append=0)
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0]
+        for s, e in zip(starts, ends):
+            anomaly_regions.append(AnomalyRegion(
+                start=int(test_offset + s),
+                end=int(test_offset + e),
+                anomaly_type=1,
+            ))
+        test_offset += len(test_labels_machine)
+
+    print(f"  Anomaly regions: {len(anomaly_regions)}")
+    print(f"  Run boundaries: {len(run_boundaries)}")
+
+    # ---- Feature names (anonymous) ----
+    feature_names = [f'feature_{i}' for i in range(num_features)]
+
+    # ---- Remove constant columns ----
+    stds = np.std(all_signals_raw, axis=0)
+    constant_mask = stds == 0
+    n_constant = int(np.sum(constant_mask))
+    if n_constant > 0:
+        print(f"  Removing {n_constant} constant columns")
+        all_signals_raw = all_signals_raw[:, ~constant_mask]
+        feature_names = [f for f, m in zip(feature_names, constant_mask) if not m]
+        num_features = len(feature_names)
+
+    # ---- Handle NaN ----
+    nan_count = int(np.sum(np.isnan(all_signals_raw)))
+    if nan_count > 0:
+        print(f"  Handling {nan_count:,} NaN values (forward-fill + backward-fill)")
+        df_temp = pd.DataFrame(all_signals_raw)
+        df_temp = df_temp.ffill().bfill()
+        all_signals_raw = df_temp.values.astype(np.float32)
+
+    # ---- Min-max normalization ----
+    print("  Applying min-max normalization...")
+    mins = np.min(all_signals_raw, axis=0, keepdims=True)
+    maxs = np.max(all_signals_raw, axis=0, keepdims=True)
+    ranges = maxs - mins
+    ranges[ranges == 0] = 1
+    all_signals = ((all_signals_raw - mins) / ranges).astype(np.float32)
+
+    # ---- Compute statistics ----
+    test_labels_split = all_labels[total_train:]
+
+    data_info = {
+        'dataset_type': 'smd',
+        'machines': machines,
+        'n_machines': len(machines),
+        'n_total': n_total,
+        'n_features': num_features,
+        'train_len': total_train,
+        'test_len': total_test,
+        'train_ratio': train_ratio,
+        'train_attack_ratio': 0.0,
+        'test_attack_ratio': float(np.mean(test_labels_split)) if len(test_labels_split) > 0 else 0.0,
+        'test_normal': int(np.sum(test_labels_split == 0)),
+        'test_attack': int(np.sum(test_labels_split == 1)),
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'run_boundaries': run_boundaries if run_boundaries else None,
+    }
+
+    print(f"\n  Train/Test split:")
+    print(f"    Train: {total_train:,} samples (all normal)")
+    print(f"    Test:  {total_test:,} samples")
+    print(f"    train_ratio: {train_ratio:.4f}")
+    print(f"    Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
+    print(f"  Features: {num_features}")
+
+    return all_signals, all_labels, anomaly_regions, feature_names, train_ratio, data_info
+
+
 # Dataset Loader Registry
 _WADI_A1_PATH = str(PROJECT_ROOT / 'dataset' / 'WaDi' / 'WADI.A1_9 Oct 2017' / 'WADI_attackdata_preprocessed.csv')
 _WADI_A2_PATH = str(PROJECT_ROOT / 'dataset' / 'WaDi' / 'WADI.A2_19 Nov 2019' / 'WADI_attackdataLABLE_preprocessed.csv')
@@ -625,7 +1059,19 @@ DATASET_LOADERS = {
     'wadi_14days_A2': lambda: load_wadi_14days_combined('A2'),
     'simulation': load_simulation,
     'simulation_complex': load_simulation_complex,
+    # TEP dataset loaders
+    'tep': lambda: load_tep(),
+    # SMD dataset loaders
+    'smd': lambda: load_smd(),
 }
+# Add per-fault TEP loaders dynamically (tep_fault1 through tep_fault20)
+for _fn in range(1, 21):
+    DATASET_LOADERS[f'tep_fault{_fn}'] = (lambda fn=_fn: load_tep(fault_types=[fn]))
+del _fn  # Clean up loop variable
+# Add per-machine SMD loaders dynamically (smd_machine-1-1 through smd_machine-3-11)
+for _mn in SMD_MACHINE_NAMES:
+    DATASET_LOADERS[f'smd_{_mn}'] = (lambda mn=_mn: load_smd(machines=[mn]))
+del _mn  # Clean up loop variable
 
 
 def get_dataset_loader(dataset_type: str):

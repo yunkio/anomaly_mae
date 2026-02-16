@@ -166,6 +166,8 @@ class Trainer:
             'recon_score_normal': 0.0, 'disc_score_normal': 0.0,
             'recon_score_disturbing': 0.0, 'disc_score_disturbing': 0.0,
             'recon_score_anomaly': 0.0, 'disc_score_anomaly': 0.0,
+            'raw_recon_normal': 0.0, 'raw_recon_disturbing': 0.0, 'raw_recon_anomaly': 0.0,
+            'raw_disc_normal': 0.0, 'raw_disc_disturbing': 0.0, 'raw_disc_anomaly': 0.0,
             'anomaly_type_scores': {}
         }
 
@@ -260,8 +262,13 @@ class Trainer:
         # Compute scores by anomaly type (only for anomaly samples, sample_type=2)
         anomaly_type_scores = {}
         anomaly_mask = (sample_types_all == 2)
-        for atype_idx in range(len(SLIDING_ANOMALY_TYPE_NAMES)):
-            atype_name = SLIDING_ANOMALY_TYPE_NAMES[atype_idx]
+        # Discover all anomaly types from actual data (supports >9 types, e.g. TEP)
+        unique_atypes = sorted(set(int(x) for x in anomaly_types_all[anomaly_mask].unique().cpu().numpy())) if anomaly_mask.any() else []
+        for atype_idx in unique_atypes:
+            if atype_idx < len(SLIDING_ANOMALY_TYPE_NAMES):
+                atype_name = SLIDING_ANOMALY_TYPE_NAMES[atype_idx]
+            else:
+                atype_name = f'fault_{atype_idx}'
             atype_mask = anomaly_mask & (anomaly_types_all == atype_idx)
             if atype_mask.sum() > 0:
                 anomaly_type_scores[atype_name] = {

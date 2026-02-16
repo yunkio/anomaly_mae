@@ -1,4 +1,4 @@
-"""Dataset loaders and utilities for various datasets (SWaT, WaDi, Simulation)."""
+"""Dataset loaders and utilities for various datasets (SWaT, WaDi, Simulation, TEP)."""
 
 from .loaders import (
     get_dataset_loader,
@@ -8,6 +8,10 @@ from .loaders import (
     load_wadi_14days_combined,
     load_wadi_a2,
     load_simulation,
+    load_tep,
+    TEP_FAULT_NAMES,
+    load_smd,
+    SMD_MACHINE_NAMES,
 )
 from .noisy import NoisyLabelSlidingWindowDataset
 
@@ -19,5 +23,9 @@ __all__ = [
     'load_wadi_14days_combined',
     'load_wadi_a2',
     'load_simulation',
+    'load_tep',
+    'TEP_FAULT_NAMES',
+    'load_smd',
+    'SMD_MACHINE_NAMES',
     'NoisyLabelSlidingWindowDataset',
 ]
