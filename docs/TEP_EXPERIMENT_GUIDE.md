@@ -150,8 +150,8 @@ dataset/TEP/
 
 > **Note**: `train_ratio`는 로더가 자동 계산하므로 BASE_CONFIG에 설정 불필요.
 
-> **Note**: TEP, SWaT, WaDi, SMD 모두 훈련 데이터는 정상만 포함 (Unsupervised).
-> `force_mask_anomaly`와 `anomaly_loss_weight`는 훈련 이상이 있는 Simulation 전용 기능이다.
+> **Note**: TEP, SWaT, WaDi, SMD는 훈련 데이터에 이상 윈도우가 없으므로
+> `force_mask_anomaly`와 `anomaly_loss_weight`는 실질적으로 발동하지 않는다. 설정값은 그대로 두면 된다.
 
 ---
 
