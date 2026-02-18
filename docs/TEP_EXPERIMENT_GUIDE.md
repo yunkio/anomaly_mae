@@ -23,15 +23,28 @@
 
 ### 1.1 모델 목적
 
-Self-Distilled MAE는 **비지도/반지도 이상 탐지** 모델이다.
+Self-Distilled MAE는 **Semi-supervised 이상 탐지** 모델이다.
+훈련 데이터에 이상 레이블이 포함되며, 이를 supervision 신호로 활용한다.
 
-- **학습**: 정상 데이터만 사용 (anomaly-free training)
-- **탐지 원리**:
-  - Masked Autoencoder가 정상 패턴의 재구성(reconstruction)을 학습
-  - Teacher decoder: 복잡한 decoder로 정확하게 재구성
-  - Student decoder: 얕은 decoder로 근사 재구성
-  - **이상 신호**: teacher-student 불일치(discrepancy)가 정상 대비 크게 발생
+**학습 방식 (훈련 시)**:
+- `force_mask_anomaly=True`: 이상 패치는 항상 마스킹 → 이상값 자체를 재구성 대상에서 제외
+- `anomaly_loss_weight=2.0`: 이상 윈도우에서 discrepancy loss 가중치를 높여 teacher-student 불일치를 명시적으로 키움
+- Reconstruction loss: 정상 패치의 재구성 품질을 학습 (teacher 기준)
+
+**탐지 원리 (추론 시)**:
+- 학습하지 못한 이상 패턴 → teacher-student 불일치(discrepancy) 증가
+- Teacher decoder: 복잡한 구조로 더 잘 재구성
+- Student decoder: 얕은 구조로 근사 재구성 → 이상 시 teacher와 차이 발생
 - **이상 점수**: `score = recon_loss + λ × discrepancy_loss`
+
+**Dataset별 훈련 레이블 유무**:
+
+| Dataset | 훈련 이상 비율 | 레이블 사용 여부 |
+|---------|-------------|---------------|
+| Simulation | ~13% (anomaly_interval_scale=0.75) | 사용 (force_mask_anomaly, anomaly_loss_weight) |
+| SWaT A1+A2 | A1 기간: 0% | 레이블 있음, 비율은 로더에서 결정 |
+| WaDi 14days+A1 | 14days 기간: ~0% | 레이블 있음 |
+| TEP (fault-free train) | 0% | 레이블 없음 (all normal) |
 
 ### 1.2 실험 프레임워크 구조
 
@@ -135,6 +148,11 @@ dataset/TEP/
 | train_ratio | ≈ 0.50 |
 
 > **Note**: `train_ratio`는 로더가 자동 계산하므로 BASE_CONFIG에 설정 불필요.
+
+> **Note (TEP 특이사항)**: TEP 훈련 데이터는 fault-free runs (이상 없음)이므로,
+> `force_mask_anomaly`와 `anomaly_loss_weight`가 훈련 시 적용되지 않는다.
+> TEP 실험은 실질적으로 **Unsupervised** (reconstruction 학습만) 방식으로 동작한다.
+> Simulation/SWaT/WaDi와 달리 훈련 중 이상 supervision signal이 없음.
 
 ---
 
