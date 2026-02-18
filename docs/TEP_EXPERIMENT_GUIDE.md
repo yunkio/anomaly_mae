@@ -37,14 +37,15 @@ Self-Distilled MAE는 **Semi-supervised 이상 탐지** 모델이다.
 - Student decoder: 얕은 구조로 근사 재구성 → 이상 시 teacher와 차이 발생
 - **이상 점수**: `score = recon_loss + λ × discrepancy_loss`
 
-**Dataset별 훈련 레이블 유무**:
+**Dataset별 훈련 이상 포함 여부**:
 
-| Dataset | 훈련 이상 비율 | 레이블 사용 여부 |
-|---------|-------------|---------------|
-| Simulation | ~13% (anomaly_interval_scale=0.75) | 사용 (force_mask_anomaly, anomaly_loss_weight) |
-| SWaT A1+A2 | A1 기간: 0% | 레이블 있음, 비율은 로더에서 결정 |
-| WaDi 14days+A1 | 14days 기간: ~0% | 레이블 있음 |
-| TEP (fault-free train) | 0% | 레이블 없음 (all normal) |
+| Dataset | 훈련 이상 비율 | 학습 방식 |
+|---------|-------------|---------|
+| Simulation | ~13% (anomaly_interval_scale=0.75) | Semi-supervised (force_mask_anomaly, anomaly_loss_weight 활성) |
+| SWaT A1+A2 | 0% (A1 = 정상 기간만) | Unsupervised (이상 supervision 없음) |
+| WaDi 14days+A1 | 0% (14days = 정상 기간만) | Unsupervised (이상 supervision 없음) |
+| TEP | 0% (fault-free runs만) | Unsupervised (이상 supervision 없음) |
+| SMD | 0% (train 파일 = 정상만) | Unsupervised (이상 supervision 없음) |
 
 ### 1.2 실험 프레임워크 구조
 
@@ -149,10 +150,8 @@ dataset/TEP/
 
 > **Note**: `train_ratio`는 로더가 자동 계산하므로 BASE_CONFIG에 설정 불필요.
 
-> **Note (TEP 특이사항)**: TEP 훈련 데이터는 fault-free runs (이상 없음)이므로,
-> `force_mask_anomaly`와 `anomaly_loss_weight`가 훈련 시 적용되지 않는다.
-> TEP 실험은 실질적으로 **Unsupervised** (reconstruction 학습만) 방식으로 동작한다.
-> Simulation/SWaT/WaDi와 달리 훈련 중 이상 supervision signal이 없음.
+> **Note**: TEP, SWaT, WaDi, SMD 모두 훈련 데이터는 정상만 포함 (Unsupervised).
+> `force_mask_anomaly`와 `anomaly_loss_weight`는 훈련 이상이 있는 Simulation 전용 기능이다.
 
 ---
 
