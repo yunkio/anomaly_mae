@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-02-17 (Update 50): TEP Experiment Guide + save_dataset_info Fix
+
+### Summary
+
+Added comprehensive TEP experiment guidelines and config files. Fixed `save_dataset_info` bug where fault types >= 10 caused IndexError. Three config files cover quick test, single fault, and all-faults scenarios.
+
+### Changes
+
+**Fixed `scripts/ablation/run_ablation.py`:**
+- `save_dataset_info`: Added `_atype_to_name()` helper to safely convert anomaly_type
+  - Fault types 1-9: maps to simulation type names (backward compatible)
+  - Fault types 10+: maps to `fault_N` (supports TEP fault types 10-20)
+- Replaced hardcoded `SLIDING_ANOMALY_TYPE_NAMES` indexing with dynamic type set from `anomaly_regions`
+
+**New `docs/TEP_EXPERIMENT_GUIDE.md`:**
+- Part 1: Current model/experiment framework understanding
+- Part 2: TEP dataset structure (960 samples/run, fault onset at sample 160, 20 faults)
+- Part 3: Dataset comparison (SWaT vs WaDi vs TEP)
+- Part 4: Recommended hyperparameters (seq_length=160, stride=5)
+- Part 5: Three experiment scenarios (Quick/Single/All)
+- Part 6: Execution instructions and result structure
+
+**New config files (`scripts/ablation/configs/`):**
+- `tep_quick_test.py`: 1 epoch, fault1 only, stride=11 test (pipeline verification)
+- `tep_single_fault.py`: 50 epochs, configurable fault type, full PA%K evaluation
+- `tep_all_faults.py`: 50 epochs, all 20 faults, full evaluation
+
+### Key Design Decisions
+
+- `seq_length=160`: aligns with fault onset period (samples 0-159 normal, 160-959 anomalous)
+- `patch_size=8, num_patches=20`: efficient patch granularity for 160-sample windows
+- `sliding_window_stride=5` (train): ~161 windows per 960-sample run
+- `run_boundaries` handled automatically by loader (data_info['run_boundaries'])
+
+---
+
 ## 2026-02-17 (Update 49): SMD (Server Machine Dataset) Loader
 
 ### Summary
