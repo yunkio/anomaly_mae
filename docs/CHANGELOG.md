@@ -1,5 +1,77 @@
 # Changelog
 
+## 2026-02-24 (Update 52): Point-Level Epoch Eval + Detailed Timing + Batch Profiling
+
+### Summary
+
+Replaced window-level epoch monitoring with point-level metrics. Added comprehensive timing measurement across all pipeline stages. Added first-N-batch per-component profiling (replaces PyTorch Profiler).
+
+### Changes
+
+**`mae_anomaly/trainer.py`:**
+- `train_epoch`: Added per-epoch timing (forward_approx, backward_approx, epoch_total) with CUDA sync at epoch boundaries only (~1% overhead)
+- `train_epoch`: Added `profile_batches` param — first N batches of epoch 1 get per-component `cuda.synchronize()` timing (data→GPU, model_forward, loss_compute, backward, optimizer_step)
+- `train`: Accepts `profile_n_batches`, passes to epoch 0 only. Stores results in `history['batch_profiling']`
+- `train`: Records per-epoch timing for train_epoch, contrib_ratios, callback → `history['epoch_timings']`
+
+**`scripts/run_base_experiments.py`:**
+- `compute_epoch_test_metrics`: Returns inference_time vs eval_time breakdown in metrics dict
+- `save_batch_profiling` (NEW): Formats per-batch timing into profiler-like summary table + JSON. Saves `batch_profiling.json` + `batch_profiling.txt`
+- Removed `run_profiling` (PyTorch Profiler) — replaced with in-training batch profiling
+- Epoch callback: Logs `(infer=Ns eval=Ns)` per eval, accumulates callback_total_time
+- Training timing: Separates `pure_train_time` (excludes callback), `contrib_ratios_time`, `epoch_eval_time`
+- Final inference: Separates `patch_scores_time` vs `viz_collect_time`
+- timing dict: Expanded with all phase timings (wall_time, pure_train_time, epoch_eval_time, etc.)
+- Removed dead code: `_cpu_epoch_pointlevel_worker`, `_merge_epoch_pointlevel`, `_epoch_pl_processes`
+- `plot_epoch_metrics`: Rewritten for point-level (4 PNGs: prc_auc, f1_t, pa_k_f1, dashboard)
+
+**`mae_anomaly/dataset_sliding.py`:**
+- Fixed `train_end` alignment bug (removed stride-dependent boundary shift)
+
+**`set_guideline.md`:**
+- Updated epoch callback, epoch_metrics.json format, pipeline, visualization descriptions
+
+## 2026-02-23 (Update 51): Fix force_mask_anomaly Non-Uniform Masking Bug (A-1)
+
+### Summary
+
+Fixed critical bug where `force_mask_anomaly` broke the uniform masking assumption required by `_encode_visible_only` (standard MAE encoder). The old implementation forced ALL anomaly patches to be masked regardless of masking budget, causing variable `num_keep` across the batch. This led to masked patches (including anomaly data) leaking into the encoder for some samples.
+
+### Problem
+
+When `force_mask_anomaly=True` and a sample had anomaly patches that didn't overlap with the random mask:
+1. All anomaly patches were force-masked, increasing total masked count beyond `target_num_masked`
+2. Different samples in a batch had different numbers of visible patches
+3. `_encode_visible_only` used `num_keep` from sample 0, causing:
+   - Samples with fewer visible patches: masked patches leaked into encoder (anomaly information leakage)
+   - Samples with more visible patches: visible patches incorrectly excluded from encoder
+
+### Fix
+
+Replaced the old force-then-patch approach with **fixed-budget priority-based masking**:
+- Masking budget is always exactly `round(num_patches * masking_ratio)` per sample
+- Anomaly patches are prioritized for masking within this budget
+- If anomaly patches exceed the budget, excess remain visible as encoder context
+- Fully vectorized implementation (no per-sample loop) using priority sorting + scatter
+
+### Changes
+
+**`mae_anomaly/model.py`:**
+- Rewrote `force_mask_anomaly` section in `forward()` with vectorized priority-based masking
+- Added assertion in `_encode_visible_only` to catch non-uniform masking (safety check)
+
+**`mae_anomaly/config.py`:**
+- Updated `force_mask_anomaly` description to reflect new priority-based behavior
+
+**`docs/ARCHITECTURE.md`:**
+- Updated Force Mask Anomaly section with detailed behavior description
+
+**`docs/TEP_EXPERIMENT_GUIDE.md`:**
+- Updated force_mask_anomaly description
+
+**`docs/ABLATION_STUDIES.md`:**
+- Updated Force Mask Anomaly experiment description
+
 ## 2026-02-17 (Update 50): TEP Experiment Guide + save_dataset_info Fix
 
 ### Summary

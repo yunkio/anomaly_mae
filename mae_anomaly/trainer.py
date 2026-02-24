@@ -2,6 +2,7 @@
 Trainer for Self-Distilled MAE Anomaly Detection
 """
 
+import time
 import torch
 from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
@@ -42,7 +43,7 @@ class Trainer:
         self.model = self.model.to(config.device)
 
         # Mixed Precision Training (AMP)
-        self.use_amp = getattr(config, 'use_amp', False) and torch.cuda.is_available()
+        self.use_amp = config.use_amp and torch.cuda.is_available()
         self.scaler = GradScaler('cuda') if self.use_amp else None
 
         self.history = {
@@ -87,7 +88,8 @@ class Trainer:
             return epoch / self.config.warmup_epochs
         return 1.0
 
-    def train_epoch(self, epoch: int, teacher_only: bool = False) -> Dict[str, float]:
+    def train_epoch(self, epoch: int, teacher_only: bool = False,
+                    profile_batches: int = 0) -> Dict[str, float]:
         self.model.train()
         epoch_losses = {
             'total_loss': 0.0,
@@ -105,10 +107,21 @@ class Trainer:
 
         warmup_factor = self._compute_warmup_factor(epoch)
 
+        # Batch-level profiling: first N batches with cuda.synchronize() per component
+        batch_profiles = [] if profile_batches > 0 else None
+
+        # Epoch-level timing (sync only at epoch boundaries → ~1% overhead)
+        torch.cuda.synchronize()
+        t_epoch_start = time.time()
+        t_forward_acc = 0.0
+        t_backward_acc = 0.0
+
         iterator = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{self.config.num_epochs}',
                         disable=not self.verbose, leave=False)
 
-        for batch in iterator:
+        for batch_idx, batch in enumerate(iterator):
+            do_profile = batch_profiles is not None and batch_idx < profile_batches
+
             # Support 3-tuple, 4-tuple, and 5-tuple returns from dataset
             if len(batch) == 5:
                 sequences, window_labels, point_labels, sample_types, anomaly_types = batch
@@ -117,35 +130,93 @@ class Trainer:
             else:
                 sequences, window_labels, point_labels = batch
 
+            # Data transfer to GPU
+            if do_profile:
+                torch.cuda.synchronize()
+                t_bp_start = time.time()
+
             sequences = sequences.to(self.config.device)
             point_labels = point_labels.to(self.config.device)
 
+            if do_profile:
+                torch.cuda.synchronize()
+                t_bp_data = time.time()
+
             # Forward pass with AMP
+            t_fwd = time.time()
             with autocast('cuda', enabled=self.use_amp):
                 teacher_output, student_output, mask = self.model(sequences, point_labels=point_labels)
+
+                if do_profile:
+                    torch.cuda.synchronize()
+                    t_bp_model = time.time()
+
                 loss, loss_dict = self.criterion(
                     teacher_output, student_output, sequences, mask, point_labels, warmup_factor,
                     teacher_only=teacher_only
                 )
 
+            if do_profile:
+                torch.cuda.synchronize()
+                t_bp_loss = time.time()
+
             # Backward pass with AMP
+            t_bwd = time.time()
+            t_forward_acc += t_bwd - t_fwd
+
             self.optimizer.zero_grad()
             if self.scaler is not None:
                 self.scaler.scale(loss).backward()
+                if do_profile:
+                    torch.cuda.synchronize()
+                    t_bp_backward = time.time()
                 self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
                 loss.backward()
+                if do_profile:
+                    torch.cuda.synchronize()
+                    t_bp_backward = time.time()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
+
+            if do_profile:
+                torch.cuda.synchronize()
+                t_bp_optim = time.time()
+                batch_profiles.append({
+                    'batch': batch_idx,
+                    'data_to_gpu_ms': (t_bp_data - t_bp_start) * 1000,
+                    'model_forward_ms': (t_bp_model - t_bp_data) * 1000,
+                    'loss_compute_ms': (t_bp_loss - t_bp_model) * 1000,
+                    'backward_ms': (t_bp_backward - t_bp_loss) * 1000,
+                    'optimizer_step_ms': (t_bp_optim - t_bp_backward) * 1000,
+                    'total_ms': (t_bp_optim - t_bp_start) * 1000,
+                })
+
+            t_backward_acc += time.time() - t_bwd
 
             for key in epoch_losses.keys():
                 epoch_losses[key] += loss_dict[key]
 
+        torch.cuda.synchronize()
+        t_epoch_total = time.time() - t_epoch_start
+
         for key in epoch_losses.keys():
             epoch_losses[key] /= len(self.train_loader)
+
+        # Attach timing (CPU wall clock; forward/backward are approximate due to CUDA async)
+        epoch_losses['_timing'] = {
+            'epoch_total': t_epoch_total,
+            'forward_approx': t_forward_acc,
+            'backward_approx': t_backward_acc,
+            'n_batches': len(self.train_loader),
+        }
+
+        # Attach batch profiling if measured
+        if batch_profiles:
+            epoch_losses['_batch_profiling'] = batch_profiles
 
         return epoch_losses
 
@@ -174,55 +245,23 @@ class Trainer:
         if self.test_loader is None:
             return empty_results
 
+        from mae_anomaly.evaluator import Evaluator
+
+        # All-patches inference via Evaluator (correct inference mechanism)
         self.model.eval()
-        all_recon = []
-        all_disc = []
-        all_sample_types = []
-        all_anomaly_types = []
+        evaluator = Evaluator(self.model, self.config, self.test_loader,
+                              test_dataset=self.test_dataset if hasattr(self, 'test_dataset') else None)
+        recon_patches, disc_patches, student_recon_patches, labels, sample_types_all, anomaly_types_all = \
+            evaluator._compute_patch_scores_all_patches()
+        del evaluator
 
-        with torch.no_grad(), autocast('cuda', enabled=self.use_amp):
-            for batch in self.test_loader:
-                if len(batch) == 5:
-                    sequences, window_labels, point_labels, sample_types, anomaly_types = batch
-                elif len(batch) == 4:
-                    sequences, window_labels, point_labels, sample_types = batch
-                    anomaly_types = torch.zeros_like(window_labels)
-                else:
-                    sequences, window_labels, point_labels = batch
-                    sample_types = torch.zeros_like(window_labels)
-                    anomaly_types = torch.zeros_like(window_labels)
-
-                sequences = sequences.to(self.config.device)
-                batch_size, seq_length, num_features = sequences.shape
-
-                # Create mask for last patch (quick evaluation during training)
-                mask = torch.ones(batch_size, seq_length, device=self.config.device)
-                mask[:, -self.config.patch_size:] = 0
-
-                teacher_output, student_output, _ = self.model(sequences, masking_ratio=0.0, mask=mask)
-
-                # Compute raw reconstruction error and discrepancy
-                recon_error = ((teacher_output - sequences) ** 2).mean(dim=2)
-                discrepancy = ((teacher_output - student_output) ** 2).mean(dim=2)
-
-                # Per-sample scores on masked positions
-                masked_positions = (mask == 0)
-                recon_scores = (recon_error * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-4)
-                disc_scores = (discrepancy * masked_positions).sum(dim=1) / (masked_positions.sum(dim=1) + 1e-4)
-
-                all_recon.append(recon_scores.cpu().numpy())
-                all_disc.append(disc_scores.cpu().numpy())
-                all_sample_types.append(sample_types.numpy())
-                all_anomaly_types.append(anomaly_types.numpy())
-
-        recon_all = np.concatenate(all_recon)
-        disc_all = np.concatenate(all_disc)
-        sample_types_all = np.concatenate(all_sample_types)
-        anomaly_types_all = np.concatenate(all_anomaly_types)
+        # Window-level scores (mean over patches)
+        recon_all = recon_patches.mean(axis=1)
+        disc_all = disc_patches.mean(axis=1)
 
         # Compute contributions based on scoring mode
-        score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
-        lambda_disc = getattr(self.config, 'lambda_disc', 0.5)
+        score_mode = self.config.anomaly_score_mode
+        lambda_disc = self.config.lambda_disc
 
         if score_mode == 'adaptive':
             adaptive_lambda = recon_all.mean() / (disc_all.mean() + 1e-4)
@@ -263,7 +302,7 @@ class Trainer:
         anomaly_type_scores = {}
         anomaly_mask = (sample_types_all == 2)
         # Discover all anomaly types from actual data (supports >9 types, e.g. TEP)
-        unique_atypes = sorted(set(int(x) for x in anomaly_types_all[anomaly_mask].unique().cpu().numpy())) if anomaly_mask.any() else []
+        unique_atypes = sorted(set(int(x) for x in np.unique(anomaly_types_all[anomaly_mask]))) if anomaly_mask.any() else []
         for atype_idx in unique_atypes:
             if atype_idx < len(SLIDING_ANOMALY_TYPE_NAMES):
                 atype_name = SLIDING_ANOMALY_TYPE_NAMES[atype_idx]
@@ -294,19 +333,29 @@ class Trainer:
         self.model.train()  # Restore training mode
         return results
 
-    def train(self, epoch_callback=None) -> Dict:
+    def train(self, epoch_callback=None, profile_n_batches: int = 0) -> Dict:
         """Train the model for num_epochs.
 
         Args:
             epoch_callback: Optional callable(epoch, model, history) invoked at end of each epoch.
                            Use for lightweight epoch-wise test evaluation.
+            profile_n_batches: If > 0, profile first N batches of epoch 0 with per-component
+                              cuda.synchronize() timing. Results stored in history['batch_profiling'].
         """
-        teacher_warmup = getattr(self.config, 'teacher_only_warmup_epochs', 1)
+        teacher_warmup = self.config.teacher_only_warmup_epochs
         for epoch in range(self.config.num_epochs):
             # First N epochs are warm-up: train teacher only (no discrepancy/student loss)
             teacher_only = (epoch < teacher_warmup)
-            epoch_losses = self.train_epoch(epoch, teacher_only=teacher_only)
+            # Profile only on epoch 0
+            pb = profile_n_batches if epoch == 0 else 0
+            epoch_losses = self.train_epoch(epoch, teacher_only=teacher_only, profile_batches=pb)
             self.scheduler.step()
+
+            # Extract and record per-epoch timing from train_epoch
+            epoch_timing = epoch_losses.pop('_timing', {})
+            batch_profiling = epoch_losses.pop('_batch_profiling', None)
+            if batch_profiling:
+                self.history['batch_profiling'] = batch_profiling
 
             self.history['epoch'].append(epoch + 1)
             self.history['train_loss'].append(epoch_losses['total_loss'])
@@ -321,13 +370,15 @@ class Trainer:
             self.history['train_student_recon_anomaly'].append(epoch_losses['student_recon_anomaly'])
 
             # Compute and record contribution ratios by sample type (on test set)
-            eval_interval = getattr(self.config, 'eval_interval', 1)
+            eval_interval = self.config.eval_interval
             is_eval_epoch = ((epoch + 1) % eval_interval == 0) or (epoch == self.config.num_epochs - 1)
+            t_contrib_start = time.time()
             if is_eval_epoch:
                 contrib_ratios = self._compute_test_contrib_ratios()
                 self._last_contrib_ratios = contrib_ratios
             else:
                 contrib_ratios = getattr(self, '_last_contrib_ratios', self._compute_test_contrib_ratios())
+            t_contrib = time.time() - t_contrib_start
             self.history['epoch_recon_ratio_normal'].append(contrib_ratios['recon_ratio_normal'])
             self.history['epoch_recon_ratio_disturbing'].append(contrib_ratios['recon_ratio_disturbing'])
             self.history['epoch_recon_ratio_anomaly'].append(contrib_ratios['recon_ratio_anomaly'])
@@ -352,7 +403,14 @@ class Trainer:
             self.history['epoch_anomaly_type_scores'].append(contrib_ratios['anomaly_type_scores'])
 
             # Epoch callback (for epoch-wise test evaluation)
+            t_callback_start = time.time()
             if epoch_callback is not None:
                 epoch_callback(epoch, self.model, self.history)
+            t_callback = time.time() - t_callback_start
+
+            # Record per-epoch timing
+            epoch_timing['contrib_ratios'] = t_contrib
+            epoch_timing['callback'] = t_callback
+            self.history.setdefault('epoch_timings', []).append(epoch_timing)
 
         return self.history
