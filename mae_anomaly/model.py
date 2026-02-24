@@ -6,6 +6,7 @@ Supports two patchify modes:
 - 'linear': Patchify then linear embedding (MAE original style, no CNN)
 """
 
+import time
 import numpy as np
 import torch
 import torch.nn as nn
@@ -44,7 +45,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
         self.config = config
-        self.patchify_mode = getattr(config, 'patchify_mode', 'linear')
+        self.patchify_mode = config.patchify_mode
 
         # Patch configuration (always defined for both strategies)
         self.num_patches = config.seq_length // config.patch_size
@@ -78,7 +79,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
 
         # Shared decoder (optional, trained with teacher)
         # Option 2: Use TransformerEncoder (self-attention only, MAE-style)
-        self.num_shared_decoder_layers = getattr(config, 'num_shared_decoder_layers', 0)
+        self.num_shared_decoder_layers = config.num_shared_decoder_layers
         self.shared_decoder = None
         if self.num_shared_decoder_layers > 0:
             if config.use_transformer_encoder_decoder:
@@ -180,8 +181,8 @@ class SelfDistilledMAEMultivariate(nn.Module):
             self.student_output_projection = nn.Linear(config.d_model, output_dim)
 
         # Mask token(s) - shared or separate for teacher/student
-        self.shared_mask_token = getattr(config, 'shared_mask_token', True)
-        self.mask_after_encoder = getattr(config, 'mask_after_encoder', False)
+        self.shared_mask_token = config.shared_mask_token
+        self.mask_after_encoder = config.mask_after_encoder
 
         if self.shared_mask_token:
             self.mask_token = nn.Parameter(torch.randn(1, 1, config.d_model))
@@ -201,14 +202,14 @@ class SelfDistilledMAEMultivariate(nn.Module):
             # CNN processes each patch independently
 
             # Get CNN channels from config (default: d_model//2, d_model)
-            cnn_channels = getattr(config, 'cnn_channels', None)
+            cnn_channels = config.cnn_channels
             if cnn_channels is None:
                 mid_channels = config.d_model // 2
                 out_channels = config.d_model
             else:
                 mid_channels, out_channels = cnn_channels
 
-            k = getattr(config, 'cnn_kernel_size', 3)
+            k = config.cnn_kernel_size
             pad = k // 2  # same-padding
             self.patch_cnn = nn.Sequential(
                 nn.Conv1d(config.num_features, mid_channels, kernel_size=k, padding=pad),
@@ -224,8 +225,14 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 # Flatten + Linear projection (preserves patch structure)
                 # CNN output: (batch * num_patches, out_channels, patch_size)
                 # After flatten: (batch * num_patches, out_channels * patch_size)
-                # Linear: (out_channels * patch_size) -> d_model
-                self.cnn_flatten_proj = nn.Linear(out_channels * config.patch_size, config.d_model)
+                # Linear: (out_channels * patch_size) -> d_model + LayerNorm for stability
+                _proj_linear = nn.Linear(out_channels * config.patch_size, config.d_model)
+                nn.init.xavier_uniform_(_proj_linear.weight, gain=0.5)
+                nn.init.zeros_(_proj_linear.bias)
+                self.cnn_flatten_proj = nn.Sequential(
+                    _proj_linear,
+                    nn.LayerNorm(config.d_model)
+                )
                 self.cnn_projection = None
             else:
                 # Mean pooling (simple averaging over patch dimension)
@@ -245,6 +252,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self.input_projection = nn.Linear(config.num_features, config.d_model)
         else:
             raise ValueError(f"Unknown patchify_mode: {self.patchify_mode}")
+
 
     def _embed_input(self, x: torch.Tensor) -> torch.Tensor:
         """Embed input based on patchify_mode
@@ -326,14 +334,18 @@ class SelfDistilledMAEMultivariate(nn.Module):
         x = x.reshape(batch_size, self.num_patches * self.patch_size, self.config.num_features)
         return x
 
-    def random_masking(self, x: torch.Tensor, masking_ratio: float) -> Tuple[torch.Tensor, torch.Tensor]:
+    def random_masking(
+        self, x: torch.Tensor, masking_ratio: float, mask_only: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Random masking for patches/tokens (patch strategy)
 
         Args:
             x: (seq_len, batch_size, d_model)
             masking_ratio: ratio of patches to mask
+            mask_only: if True, skip x_masked computation and return x unchanged
+                       (used when mask_after_encoder=True, where x_masked is not needed)
         Returns:
-            x_masked: masked input
+            x_masked: masked input (or original x if mask_only=True)
             mask: binary mask (1=keep, 0=masked) - (seq_len, batch_size)
         """
         # Handle masking_ratio as either scalar or tensor
@@ -353,6 +365,9 @@ class SelfDistilledMAEMultivariate(nn.Module):
         mask = torch.zeros(seq_len, batch_size, device=x.device)
         mask[:num_keep, :] = 1
         mask = torch.gather(mask, dim=0, index=ids_restore)
+
+        if mask_only:
+            return x, mask
 
         # Apply mask (use default mask token - teacher for consistency)
         mask_token = self._get_mask_token('teacher')
@@ -395,7 +410,13 @@ class SelfDistilledMAEMultivariate(nn.Module):
             ids_restore: (seq_len, batch) - indices to restore original order
         """
         seq_len, batch_size, d_model = x_embed.shape
-        num_keep = int(mask.sum(dim=0)[0].item())  # Assumes uniform masking across batch
+        visible_counts = mask.sum(dim=0)  # (batch,)
+        num_keep = int(visible_counts[0].item())
+        assert (visible_counts == num_keep).all(), (
+            f"Non-uniform masking in batch: visible counts range "
+            f"[{int(visible_counts.min())}, {int(visible_counts.max())}]. "
+            f"force_mask_anomaly should maintain fixed masking budget."
+        )
 
         # Sort patches: visible first, then masked
         # noise gives same order for patches with same mask value, preserving relative order
@@ -477,20 +498,29 @@ class SelfDistilledMAEMultivariate(nn.Module):
         if masking_ratio is None:
             masking_ratio = self.config.masking_ratio
 
+        _profiling = getattr(self, '_profiling', False)
+        if _profiling:
+            torch.cuda.synchronize()
+            _t0 = time.time()
+
         batch_size, seq_length, num_features = x.shape
 
         # Embed input based on patchify_mode
         x_embed = self._embed_input(x)  # (seq_len, batch, d_model)
         seq_len = x_embed.size(0)
 
+        if _profiling:
+            torch.cuda.synchronize()
+            _t_embed = time.time()
+
         # Masking (patch strategy)
         mask_provided_externally = mask is not None
-
-        # Get default mask token for pre-masking (used when mask_after_encoder=False)
-        default_mask_token = self._get_mask_token('teacher')
+        x_masked = None  # Only computed when mask_after_encoder=False
 
         if mask is None:
-            x_masked, mask = self.random_masking(x_embed, masking_ratio)
+            x_masked, mask = self.random_masking(
+                x_embed, masking_ratio, mask_only=self.mask_after_encoder
+            )
             # mask is (seq_len, batch) for patch strategy
             patch_mask = mask
         else:
@@ -502,10 +532,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
 
             mask = mask.transpose(0, 1)  # (seq_len, batch)
             patch_mask = mask
-            mask_tokens = default_mask_token.repeat(x_embed.size(0), x_embed.size(1), 1)
-            x_masked = x_embed * mask.unsqueeze(-1) + mask_tokens * (1 - mask.unsqueeze(-1))
+            if not self.mask_after_encoder:
+                default_mask_token = self._get_mask_token('teacher')
+                mask_tokens = default_mask_token.repeat(x_embed.size(0), x_embed.size(1), 1)
+                x_masked = x_embed * mask.unsqueeze(-1) + mask_tokens * (1 - mask.unsqueeze(-1))
 
-        # Force mask patches containing anomalies during training
+        # Force mask patches containing anomalies during training (fixed budget)
+        # Masking budget is always exactly target_num_masked, with anomaly patches
+        # prioritized. If anomaly patches exceed the budget, excess remain visible
+        # as encoder context (acceptable trade-off to maintain uniform batch masking).
         if (self.training and self.config.force_mask_anomaly and
             point_labels is not None):
             current_seq_len = patch_mask.shape[0]
@@ -513,35 +548,31 @@ class SelfDistilledMAEMultivariate(nn.Module):
             if self.use_patch:
                 patch_labels = point_labels.reshape(batch_size, self.num_patches, self.patch_size)
                 anomaly_patches = (patch_labels.sum(dim=2) > 0).float()
-                anomaly_patches = anomaly_patches.transpose(0, 1)
+                anomaly_patches = anomaly_patches.transpose(0, 1)  # (seq_len, batch)
             else:
                 anomaly_patches = point_labels.transpose(0, 1).float()
 
-            # Force anomaly patches to be masked
-            patch_mask = patch_mask * (1 - anomaly_patches)
-            mask = patch_mask  # Update mask for patch strategy
-
-            # Add random masking if needed to maintain masking ratio
             target_num_masked = round(current_seq_len * masking_ratio)
-            current_num_masked = (1 - patch_mask).sum(dim=0)
 
-            for b in range(batch_size):
-                additional_needed = int(target_num_masked - current_num_masked[b].item())
-                if additional_needed > 0:
-                    available_mask = (patch_mask[:, b] == 1) & (anomaly_patches[:, b] == 0)
-                    available_indices = torch.where(available_mask)[0]
+            # Priority-based masking: anomaly patches get high priority (1000+noise),
+            # normal patches get low priority (0+noise). Top target_num_masked are masked.
+            noise = torch.rand(current_seq_len, batch_size, device=patch_mask.device)
+            masking_priority = anomaly_patches * 1000 + noise
+            ids_sorted = torch.argsort(masking_priority, dim=0, descending=True)
 
-                    if len(available_indices) > 0:
-                        num_to_mask = min(additional_needed, len(available_indices))
-                        perm = torch.randperm(len(available_indices), device=patch_mask.device)[:num_to_mask]
-                        indices_to_mask = available_indices[perm]
-                        patch_mask[indices_to_mask, b] = 0
-                        mask = patch_mask
+            patch_mask = torch.ones(current_seq_len, batch_size, device=patch_mask.device)
+            patch_mask.scatter_(0, ids_sorted[:target_num_masked, :], 0.0)
+            mask = patch_mask
 
             # Re-apply masking for non-mask_after_encoder mode
             if not self.mask_after_encoder:
-                mask_tokens = default_mask_token.repeat(x_embed.size(0), x_embed.size(1), 1)
+                reapply_mask_token = self._get_mask_token('teacher')
+                mask_tokens = reapply_mask_token.repeat(x_embed.size(0), x_embed.size(1), 1)
                 x_masked = x_embed * patch_mask.unsqueeze(-1) + mask_tokens * (1 - patch_mask.unsqueeze(-1))
+
+        if _profiling:
+            torch.cuda.synchronize()
+            _t_mask = time.time()
 
         # === Encoding ===
         if self.mask_after_encoder:
@@ -551,6 +582,10 @@ class SelfDistilledMAEMultivariate(nn.Module):
             # Current behavior: mask tokens go through encoder
             x_masked = self.pos_encoder(x_masked)
             latent = self.encoder(x_masked)
+
+        if _profiling:
+            torch.cuda.synchronize()
+            _t_encode = time.time()
 
         # === Decoding ===
         # Option 2: No separate tgt - decoder uses self-attention on full sequence with PE
@@ -596,6 +631,10 @@ class SelfDistilledMAEMultivariate(nn.Module):
             if self.use_patch:
                 teacher_output = self.unpatchify(teacher_output)
 
+        if _profiling:
+            torch.cuda.synchronize()
+            _t_teacher = time.time()
+
         if self.config.use_student and self.student_decoder is not None:
             if self.mask_after_encoder:
                 # Insert mask tokens before student decoder
@@ -627,6 +666,18 @@ class SelfDistilledMAEMultivariate(nn.Module):
 
             if self.use_patch:
                 student_output = self.unpatchify(student_output)
+
+        if _profiling:
+            torch.cuda.synchronize()
+            _t_student = time.time()
+            self._forward_timing = {
+                'embed_input_ms': (_t_embed - _t0) * 1000,
+                'masking_ms': (_t_mask - _t_embed) * 1000,
+                'encoder_ms': (_t_encode - _t_mask) * 1000,
+                'teacher_decoder_ms': (_t_teacher - _t_encode) * 1000,
+                'student_decoder_ms': (_t_student - _t_teacher) * 1000,
+                'forward_total_ms': (_t_student - _t0) * 1000,
+            }
 
         # Handle single decoder case
         if not self.config.use_teacher and self.config.use_student:

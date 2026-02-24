@@ -120,7 +120,7 @@ class Trainer:
                         disable=not self.verbose, leave=False)
 
         for batch_idx, batch in enumerate(iterator):
-            do_profile = batch_profiles is not None and batch_idx < profile_batches
+            do_profile = batch_profiles is not None and 0 < batch_idx <= profile_batches
 
             # Support 3-tuple, 4-tuple, and 5-tuple returns from dataset
             if len(batch) == 5:
@@ -144,12 +144,16 @@ class Trainer:
 
             # Forward pass with AMP
             t_fwd = time.time()
+            if do_profile:
+                self.model._profiling = True
             with autocast('cuda', enabled=self.use_amp):
                 teacher_output, student_output, mask = self.model(sequences, point_labels=point_labels)
 
                 if do_profile:
+                    self.model._profiling = False
                     torch.cuda.synchronize()
                     t_bp_model = time.time()
+                    layer_timing = getattr(self.model, '_forward_timing', {})
 
                 loss, loss_dict = self.criterion(
                     teacher_output, student_output, sequences, mask, point_labels, warmup_factor,
@@ -185,7 +189,7 @@ class Trainer:
             if do_profile:
                 torch.cuda.synchronize()
                 t_bp_optim = time.time()
-                batch_profiles.append({
+                bp_entry = {
                     'batch': batch_idx,
                     'data_to_gpu_ms': (t_bp_data - t_bp_start) * 1000,
                     'model_forward_ms': (t_bp_model - t_bp_data) * 1000,
@@ -193,7 +197,10 @@ class Trainer:
                     'backward_ms': (t_bp_backward - t_bp_loss) * 1000,
                     'optimizer_step_ms': (t_bp_optim - t_bp_backward) * 1000,
                     'total_ms': (t_bp_optim - t_bp_start) * 1000,
-                })
+                }
+                if layer_timing:
+                    bp_entry['layer_timing'] = layer_timing
+                batch_profiles.append(bp_entry)
 
             t_backward_acc += time.time() - t_bwd
 
@@ -344,29 +351,49 @@ class Trainer:
         labels = ['Data -> GPU', 'Model Forward', 'Loss Compute',
                   'Backward', 'Optimizer Step']
 
+        # Layer-level components (nested inside model_forward)
+        layer_components = ['embed_input_ms', 'masking_ms', 'encoder_ms',
+                            'teacher_decoder_ms', 'student_decoder_ms']
+        layer_labels = ['Embed (Patchify+CNN)', 'Masking', 'Encoder',
+                        'Teacher Decoder', 'Student Decoder']
+        has_layers = batch_profiles[0].get('layer_timing') is not None
+
         total_sum = 0.0
         rows = []
+        layer_rows = []
         for comp, label in zip(components, labels):
             vals = [bp[comp] for bp in batch_profiles]
             total = sum(vals)
             total_sum += total
             rows.append((label, total, total / n, min(vals), max(vals)))
 
+            # Collect layer breakdown for model_forward
+            if comp == 'model_forward_ms' and has_layers:
+                for lcomp, llabel in zip(layer_components, layer_labels):
+                    lvals = [bp['layer_timing'][lcomp] for bp in batch_profiles]
+                    ltotal = sum(lvals)
+                    layer_rows.append((llabel, ltotal, ltotal / n, min(lvals), max(lvals)))
+
         avg_batch_ms = total_sum / n
         est_epoch_s = avg_batch_ms * n_batches / 1000
         remaining = self.config.num_epochs - 1
         est_remaining_s = est_epoch_s * remaining
 
-        hdr = f"{'Component':<20} {'Total(ms)':>10} {'Avg(ms)':>10} {'Min':>10} {'Max':>10}"
+        hdr = f"{'Component':<24} {'Total(ms)':>10} {'Avg(ms)':>10} {'Min':>10} {'Max':>10}"
         sep = '-' * len(hdr)
-        print(f"\n  Batch Profiling ({n} batches, batch_size={self.config.batch_size})")
+        print(f"\n  Batch Profiling ({n} batches, batch_size={self.config.batch_size}, batch 0 skipped)")
         print(f"  {sep}")
         print(f"  {hdr}")
         print(f"  {sep}")
-        for label, total, avg, mn, mx in rows:
-            print(f"  {label:<20} {total:>10.1f} {avg:>10.1f} {mn:>10.1f} {mx:>10.1f}")
+        for i, (label, total, avg, mn, mx) in enumerate(rows):
+            print(f"  {label:<24} {total:>10.1f} {avg:>10.1f} {mn:>10.1f} {mx:>10.1f}")
+            # Print layer breakdown after Model Forward
+            if i == 1 and layer_rows:
+                for j, (llabel, ltotal, lavg, lmn, lmx) in enumerate(layer_rows):
+                    prefix = '  \u2514\u2500 ' if j == len(layer_rows) - 1 else '  \u251c\u2500 '
+                    print(f"  {prefix}{llabel:<20} {ltotal:>10.1f} {lavg:>10.1f} {lmn:>10.1f} {lmx:>10.1f}")
         print(f"  {sep}")
-        print(f"  {'TOTAL':<20} {total_sum:>10.1f} {avg_batch_ms:>10.1f}")
+        print(f"  {'TOTAL':<24} {total_sum:>10.1f} {avg_batch_ms:>10.1f}")
         print(f"  {sep}")
         print(f"  Epoch 1 actual: {epoch_total:.1f}s | "
               f"Est. per epoch (train only): {est_epoch_s:.1f}s | "

@@ -1,18 +1,23 @@
 # Changelog
 
-## 2026-02-24 (Update 52): Point-Level Epoch Eval + Detailed Timing + Batch Profiling
+## 2026-02-24 (Update 52): Point-Level Epoch Eval + Detailed Timing + Layer-Level Batch Profiling
 
 ### Summary
 
-Replaced window-level epoch monitoring with point-level metrics. Added comprehensive timing measurement across all pipeline stages. Added first-N-batch per-component profiling (replaces PyTorch Profiler).
+Replaced window-level epoch monitoring with point-level metrics. Added comprehensive timing measurement across all pipeline stages. Added first-N-batch per-component + per-layer profiling (replaces PyTorch Profiler) with batch 0 skipped (CUDA warmup distortion).
 
 ### Changes
 
+**`mae_anomaly/model.py`:**
+- `forward`: Added layer-level profiling support via `_profiling` attribute. When `_profiling=True`, inserts `cuda.synchronize()` between 5 architectural sections (embed_input, masking, encoder, teacher_decoder, student_decoder). Results stored in `_forward_timing` dict.
+
 **`mae_anomaly/trainer.py`:**
 - `train_epoch`: Added per-epoch timing (forward_approx, backward_approx, epoch_total) with CUDA sync at epoch boundaries only (~1% overhead)
-- `train_epoch`: Added `profile_batches` param — first N batches of epoch 1 get per-component `cuda.synchronize()` timing (data→GPU, model_forward, loss_compute, backward, optimizer_step)
+- `train_epoch`: Added `profile_batches` param — batches 1..N of epoch 1 get per-component `cuda.synchronize()` timing (batch 0 skipped to avoid CUDA warmup distortion)
+  - Batch level: data→GPU, model_forward, loss_compute, backward, optimizer_step
+  - Layer level (inside model_forward): embed_input, masking, encoder, teacher_decoder, student_decoder
 - `train`: Accepts `profile_n_batches`, passes to epoch 0 only. Stores results in `history['batch_profiling']`
-- `_print_batch_profiling`: Prints profiler-like summary table immediately after epoch 1, with estimated remaining training time
+- `_print_batch_profiling`: Prints hierarchical profiler-like table (with layer breakdown under Model Forward) immediately after epoch 1, with estimated remaining training time
 - `train`: Records per-epoch timing for train_epoch, contrib_ratios, callback → `history['epoch_timings']`
 
 **`scripts/run_base_experiments.py`:**
