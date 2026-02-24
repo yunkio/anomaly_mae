@@ -333,6 +333,45 @@ class Trainer:
         self.model.train()  # Restore training mode
         return results
 
+    def _print_batch_profiling(self, batch_profiles, epoch_timing):
+        """Print batch profiling summary table immediately after epoch 0."""
+        n = len(batch_profiles)
+        n_batches = epoch_timing.get('n_batches', len(self.train_loader))
+        epoch_total = epoch_timing.get('epoch_total', 0)
+
+        components = ['data_to_gpu_ms', 'model_forward_ms', 'loss_compute_ms',
+                      'backward_ms', 'optimizer_step_ms']
+        labels = ['Data -> GPU', 'Model Forward', 'Loss Compute',
+                  'Backward', 'Optimizer Step']
+
+        total_sum = 0.0
+        rows = []
+        for comp, label in zip(components, labels):
+            vals = [bp[comp] for bp in batch_profiles]
+            total = sum(vals)
+            total_sum += total
+            rows.append((label, total, total / n, min(vals), max(vals)))
+
+        avg_batch_ms = total_sum / n
+        est_epoch_s = avg_batch_ms * n_batches / 1000
+        remaining = self.config.num_epochs - 1
+        est_remaining_s = est_epoch_s * remaining
+
+        hdr = f"{'Component':<20} {'Total(ms)':>10} {'Avg(ms)':>10} {'Min':>10} {'Max':>10}"
+        sep = '-' * len(hdr)
+        print(f"\n  Batch Profiling ({n} batches, batch_size={self.config.batch_size})")
+        print(f"  {sep}")
+        print(f"  {hdr}")
+        print(f"  {sep}")
+        for label, total, avg, mn, mx in rows:
+            print(f"  {label:<20} {total:>10.1f} {avg:>10.1f} {mn:>10.1f} {mx:>10.1f}")
+        print(f"  {sep}")
+        print(f"  {'TOTAL':<20} {total_sum:>10.1f} {avg_batch_ms:>10.1f}")
+        print(f"  {sep}")
+        print(f"  Epoch 1 actual: {epoch_total:.1f}s | "
+              f"Est. per epoch (train only): {est_epoch_s:.1f}s | "
+              f"Est. remaining ({remaining} epochs): {est_remaining_s:.0f}s ({est_remaining_s/60:.1f}min)\n")
+
     def train(self, epoch_callback=None, profile_n_batches: int = 0) -> Dict:
         """Train the model for num_epochs.
 
@@ -356,6 +395,7 @@ class Trainer:
             batch_profiling = epoch_losses.pop('_batch_profiling', None)
             if batch_profiling:
                 self.history['batch_profiling'] = batch_profiling
+                self._print_batch_profiling(batch_profiling, epoch_timing)
 
             self.history['epoch'].append(epoch + 1)
             self.history['train_loss'].append(epoch_losses['total_loss'])

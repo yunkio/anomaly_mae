@@ -12,6 +12,7 @@ Replaced window-level epoch monitoring with point-level metrics. Added comprehen
 - `train_epoch`: Added per-epoch timing (forward_approx, backward_approx, epoch_total) with CUDA sync at epoch boundaries only (~1% overhead)
 - `train_epoch`: Added `profile_batches` param — first N batches of epoch 1 get per-component `cuda.synchronize()` timing (data→GPU, model_forward, loss_compute, backward, optimizer_step)
 - `train`: Accepts `profile_n_batches`, passes to epoch 0 only. Stores results in `history['batch_profiling']`
+- `_print_batch_profiling`: Prints profiler-like summary table immediately after epoch 1, with estimated remaining training time
 - `train`: Records per-epoch timing for train_epoch, contrib_ratios, callback → `history['epoch_timings']`
 
 **`scripts/run_base_experiments.py`:**
