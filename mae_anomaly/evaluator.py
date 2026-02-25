@@ -859,7 +859,7 @@ class Evaluator:
             self.model.eval()
 
         # Mixed Precision Training (AMP) for inference
-        self.use_amp = getattr(config, 'use_amp', False) and torch.cuda.is_available()
+        self.use_amp = config.use_amp and torch.cuda.is_available()
 
         # Point-level PA%K requires test_dataset with specific attributes
         self.can_compute_point_level_pa_k = (
@@ -1190,7 +1190,7 @@ class Evaluator:
             sample_types: (n_samples,) sample type indicators
             anomaly_types: (n_samples,) anomaly type indicators
         """
-        score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        score_mode = self.config.anomaly_score_mode
 
         # Get cached raw scores
         cached = self._get_cached_scores()
@@ -1254,7 +1254,7 @@ class Evaluator:
         Returns:
             Dictionary with anomaly type names as keys, containing metrics for each type
         """
-        score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        score_mode = self.config.anomaly_score_mode
         cache_key = f'anomaly_type_metrics_{score_mode}'
 
         if cache_key in self._cache:
@@ -1434,7 +1434,7 @@ class Evaluator:
         Uses caching to avoid redundant forward passes when called multiple times
         with different scoring modes.
         """
-        score_mode = getattr(self.config, 'anomaly_score_mode', 'default')
+        score_mode = self.config.anomaly_score_mode
 
         # Get cached raw scores
         cached = self._get_cached_scores()

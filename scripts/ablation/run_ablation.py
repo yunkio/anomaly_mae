@@ -63,6 +63,7 @@ from mae_anomaly import (
     Trainer, Evaluator, SLIDING_ANOMALY_TYPE_NAMES
 )
 from mae_anomaly.datasets import get_dataset_loader
+from mae_anomaly.utils.experiment import make_numbered_experiment_dir
 
 
 # =============================================================================
@@ -1423,10 +1424,9 @@ def run_ablation_study(
     # Setup output directory
     if output_dir is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_dir = os.path.join(
-            PROJECT_ROOT, 'results', 'experiments',
-            f'{timestamp}_{phase_name}'
-        )
+        experiments_dir = os.path.join(PROJECT_ROOT, 'results', 'experiments')
+        suffix = f'{timestamp}_{phase_name}'
+        output_dir = make_numbered_experiment_dir(experiments_dir, suffix)
     os.makedirs(output_dir, exist_ok=True)
     info_dir = os.path.join(output_dir, '000_ablation_info')
     os.makedirs(info_dir, exist_ok=True)

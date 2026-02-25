@@ -212,16 +212,24 @@ def example_4_single_sample_inference():
         sample_sequence, sample_label, _, _, _ = train_dataset[0]
         sample_sequence = sample_sequence.unsqueeze(0).to(config.device)
 
-        # Create mask for last patch
-        mask = torch.ones(1, config.num_patches, device=config.device)
-        mask[:, -1] = 0  # Mask last patch
-
-        # Forward pass
-        teacher_out, student_out, _, _ = model(sample_sequence, mask=mask)
-
-        # Compute anomaly score (discrepancy in masked region)
-        discrepancy = (teacher_out - student_out) ** 2
-        anomaly_score = discrepancy.mean().item()
+        # All-patches inference: mask each patch one at a time, average scores
+        num_patches = config.num_patches
+        patch_size = config.patch_size
+        seq_len = sample_sequence.shape[1]
+        total_recon = 0.0
+        total_disc = 0.0
+        for pi in range(num_patches):
+            mask = torch.ones(1, seq_len, device=config.device)
+            start = pi * patch_size
+            end = min(start + patch_size, seq_len)
+            mask[:, start:end] = 0
+            teacher_out, student_out, _ = model(sample_sequence, masking_ratio=0.0, mask=mask)
+            masked = (mask == 0)
+            recon_err = ((teacher_out - sample_sequence) ** 2).mean(dim=2)
+            disc_err = ((teacher_out - student_out) ** 2).mean(dim=2)
+            total_recon += (recon_err * masked).sum().item() / (masked.sum().item() + 1e-4)
+            total_disc += (disc_err * masked).sum().item() / (masked.sum().item() + 1e-4)
+        anomaly_score = (total_recon + total_disc) / num_patches
 
         print(f"Sample Label: {'Anomaly' if sample_label == 1 else 'Normal'}")
         print(f"Anomaly Score: {anomaly_score:.6f}")
@@ -317,14 +325,24 @@ def example_6_visualize_detection():
         sample, label, _, _, _ = test_dataset[sample_idx]
         sample = sample.unsqueeze(0).to(config.device)
 
-        # Create mask for last patch
-        mask = torch.ones(1, config.num_patches, device=config.device)
-        mask[:, -1] = 0
-
-        # Forward
+        # All-patches inference: mask each patch one at a time
         model.eval()
+        seq_len = sample.shape[1]
+        patch_size = config.patch_size
+        num_patches = config.num_patches
+        teacher_outs = []
+        student_outs = []
         with torch.no_grad():
-            teacher_out, student_out, _, _ = model(sample, mask=mask)
+            for pi in range(num_patches):
+                mask = torch.ones(1, seq_len, device=config.device)
+                start = pi * patch_size
+                end = min(start + patch_size, seq_len)
+                mask[:, start:end] = 0
+                t_out, s_out, _ = model(sample, masking_ratio=0.0, mask=mask)
+                teacher_outs.append(t_out)
+                student_outs.append(s_out)
+            teacher_out = torch.stack(teacher_outs).mean(dim=0)
+            student_out = torch.stack(student_outs).mean(dim=0)
 
         # Plot first feature
         sample_np = sample.cpu().numpy()[0, :, 0]

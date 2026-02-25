@@ -28,15 +28,15 @@ class SelfDistillationLoss(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.margin = config.margin
-        self.margin_type = getattr(config, 'margin_type', 'hinge')
-        self.dynamic_margin_k = getattr(config, 'dynamic_margin_k', 3.0)
-        self.use_discrepancy = getattr(config, 'use_discrepancy_loss', True)
+        self.margin_type = config.margin_type
+        self.dynamic_margin_k = config.dynamic_margin_k
+        self.use_discrepancy = config.use_discrepancy_loss
         self.patch_size = config.patch_size
         self.num_patches = config.num_patches
-        self.patch_level_loss = getattr(config, 'patch_level_loss', True)
+        self.patch_level_loss = config.patch_level_loss
 
         # Anomaly loss weight
-        self.anomaly_loss_weight = getattr(config, 'anomaly_loss_weight', 1.0)
+        self.anomaly_loss_weight = config.anomaly_loss_weight
 
     def _compute_anomaly_loss(
         self,

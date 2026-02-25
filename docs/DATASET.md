@@ -23,13 +23,13 @@ This project uses a **Sliding Window Time Series Dataset** that simulates server
 
 2. Sliding Window Extraction
    ├── Window size: 500 timesteps (configurable)
-   ├── Train stride: Configurable (default 11)
-   ├── Test stride: Always 1 (for point-level PA%K)
+   ├── Train stride: Configurable (default 21)
+   ├── Test stride: Configurable (default 21)
    └── Total windows: varies based on window size and stride
 
 3. Train/Test Split
    ├── Train: First 80% (220K timesteps, ~5% anomaly)
-   └── Test: Last 20% (55K timesteps, stride=1, no downsampling)
+   └── Test: Last 20% (55K timesteps, stride=21, no downsampling)
 
 4. Labeling
    ├── Check last patch_size timesteps
@@ -65,14 +65,14 @@ This represents a challenging case where:
 | Disturbing Normal | ~7% |
 | Anomaly | ~5% |
 
-### Test Set (Full, Stride=1)
+### Test Set (Full, Stride=21)
 
-> **Note**: As of the latest update, test set uses stride=1 and no downsampling by default.
-> This ensures proper point-level PA%K evaluation with overlapping windows.
+> **Note**: As of the latest update, test set uses stride=21 and no downsampling by default.
+> This ensures proper point-level PA%K evaluation with overlapping windows while reducing compute.
 
 | Aspect | Value |
 |--------|-------|
-| Stride | 1 (forced) |
+| Stride | 21 (default) |
 | Downsampling | Disabled by default |
 | Total windows | ~55,000 (20% of time series) |
 
@@ -89,7 +89,7 @@ This represents a challenging case where:
 
 ## Point-Level PA%K Evaluation
 
-With stride=1 sliding windows, each timestep is covered by multiple windows' last patches.
+With stride=21 sliding windows, each timestep is covered by multiple windows' last patches.
 The evaluation aggregates window-level scores to point-level using one of four methods:
 
 ### Aggregation Methods
@@ -715,7 +715,7 @@ config = Config()
 config.seq_length = 500                    # Window size
 config.num_features = 8                    # Number of features
 config.sliding_window_total_length = 275000   # Total time series length (220K train + 55K test)
-config.sliding_window_stride = 11             # Train stride (89% overlap)
+config.sliding_window_stride = 21             # Train stride
 config.anomaly_interval_scale = 0.75       # Controls anomaly density (2x frequency, ~13% anomaly)
 config.patch_size = 5                      # Patch size (also used for window labeling)
 

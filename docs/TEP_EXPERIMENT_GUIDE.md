@@ -11,7 +11,7 @@
 Self-Distilled MAE는 이상 탐지 모델로, 데이터셋에 따라 학습 방식이 다르다.
 
 **학습 방식**:
-- `force_mask_anomaly=True`: 이상 패치는 항상 마스킹 → 이상값을 재구성 대상에서 제외
+- `force_mask_anomaly=True`: 이상 패치를 마스킹 예산 내에서 우선 마스킹 → 이상값을 재구성 대상에서 제외
 - `anomaly_loss_weight=2.0`: 이상 윈도우의 discrepancy loss 가중치 증폭
 - Reconstruction loss: 마스킹된 패치의 재구성 품질 학습 (teacher 기준)
 
@@ -41,14 +41,14 @@ DATASET_TYPE → get_dataset_loader()
     ├── run_boundaries = data_info.get('run_boundaries')  # 런 경계 보호
     │
     ↓ SlidingWindowDataset
-Train windows (stride=N) / Test windows (stride=1)
+Train windows (stride=N) / Test windows (stride=3)
     │
     ↓ Trainer → Evaluator
 PA%K, F1_T, AUC-ROC 지표
 ```
 
 **평가**:
-- Test stride=1로 생성된 모든 윈도우에 이상 점수 계산
+- Test stride=3으로 생성된 모든 윈도우에 이상 점수 계산
 - 각 timestep 점수 = 해당 timestep을 포함하는 모든 윈도우 점수의 집계 (voting/mean/max)
 - 지표: PA%K, F1_T (Time-series F1), AUC-ROC
 
@@ -128,7 +128,7 @@ dataset/TEP/
 
 ```
 sliding_window_stride=5      (train: 런당 ~161 windows)
-sliding_window_test_stride=1 (test: PA%K 정확 계산 필수)
+sliding_window_test_stride=3 (test: PA%K 계산)
 num_features                 → 자동 설정 (로더에서 상수 열 제거 후 결정)
 train_ratio                  → 자동 설정 (data_info에서)
 ```
@@ -155,7 +155,7 @@ train_ratio                  → 자동 설정 (data_info에서)
 
 - `run_boundaries`: 로더가 자동 포함, run_ablation.py가 자동 처리 — 별도 설정 불필요
 - `num_features`, `train_ratio`: BASE_CONFIG에 설정 불필요 — 로더가 자동 결정
-- All faults (20×50 runs): ~210 MB RAM, test stride=1 시 GPU 4-8 GB 필요
+- All faults (20×50 runs): ~210 MB RAM, test stride=3 시 GPU 4-8 GB 필요
 - **fault20**: 탐지 불가 수준의 unknown fault — 결과 해석 시 주의
 
 ---

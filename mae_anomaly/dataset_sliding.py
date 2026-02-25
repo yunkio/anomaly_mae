@@ -926,7 +926,6 @@ class SlidingWindowDataset(Dataset):
         2: anomaly - anomaly exists in last mask_last_n (label=1)
 
     Note:
-        For test split, stride is always forced to 1 for proper point-level PA%K evaluation.
         Downsampling is disabled by default for test set to preserve full sliding window coverage.
     """
 
@@ -943,19 +942,13 @@ class SlidingWindowDataset(Dataset):
         target_anomaly_ratio: Optional[float] = None,  # For test set downsampling (legacy, disabled by default)
         target_counts: Optional[Dict[str, int]] = None,  # Explicit counts per sample type (disabled by default)
         seed: Optional[int] = None,
-        force_stride_1_for_test: bool = True,  # Force stride=1 for test split (for point-level PA%K)
         run_boundaries: Optional[List[int]] = None,  # Positions where independent runs end (windows must not cross)
     ):
         self.window_size = window_size
         self.mask_last_n = mask_last_n
         self.split = split
         self.target_counts = target_counts
-
-        # For test split, force stride=1 for proper point-level PA%K evaluation
-        if split == 'test' and force_stride_1_for_test:
-            self.stride = 1
-        else:
-            self.stride = stride
+        self.stride = stride
 
         if seed is not None:
             np.random.seed(seed)
@@ -963,9 +956,6 @@ class SlidingWindowDataset(Dataset):
         # Split the time series
         total_length = len(signals)
         train_end = int(total_length * train_ratio)
-
-        # Ensure clean split (no window crosses boundary)
-        train_end = (train_end // stride) * stride
 
         if split == 'train':
             self.signals = signals[:train_end]

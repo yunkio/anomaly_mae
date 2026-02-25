@@ -23,8 +23,8 @@ class Config:
     # Sliding window dataset parameters
     use_sliding_window_dataset: bool = True  # Use new sliding window dataset
     sliding_window_total_length: int = 275000  # Total length (220K train + 55K test)
-    sliding_window_stride: int = 3  # Stride for train window extraction (overlapping windows)
-    sliding_window_test_stride: int = 1  # Stride for test window extraction (stride=1 for PA%K)
+    sliding_window_stride: int = 21  # Stride for train window extraction (overlapping windows)
+    sliding_window_test_stride: int = 21  # Stride for test window extraction
     sliding_window_train_ratio: float = 0.8  # Train ratio (220K/275K = 0.8, test = 55K)
     anomaly_interval_scale: float = 0.75  # Scale factor for anomaly intervals (2x frequency, ~13% anomaly)
 
@@ -67,10 +67,9 @@ class Config:
     # - False: Mean pooling over patch dimension (simple averaging)
 
     # CNN architecture for patch_cnn mode
-    cnn_channels: tuple = (64, 128)  # (mid_channels, out_channels) for patch_cnn
-    # - None: Use default (d_model//2, d_model)
-    # - (16, 32): Smaller CNN
-    # - (64, 128): Larger CNN
+    cnn_channels: tuple = None  # (mid_channels, out_channels) for patch_cnn
+    # - None: Auto-scale with d_model (d_model//2, d_model) — recommended
+    # - (64, 128): Fixed CNN channels (only correct when d_model=128)
     cnn_kernel_size: int = 3  # Kernel size for patch_cnn Conv1d layers
     # - 3: Default (receptive field = 3 per layer)
     # - 5: Wider receptive field (better for larger patch_size)
@@ -95,7 +94,7 @@ class Config:
     # Training parameters
     batch_size: int = 256  # Batch size for training
     num_epochs: int = 50
-    learning_rate: float = 2e-3  # Default learning rate
+    learning_rate: float = 1e-3  # Default learning rate (halved from 2e-3 for training stability)
     weight_decay: float = 1e-5
     warmup_epochs: int = 10
     teacher_only_warmup_epochs: int = 3  # First N epochs train teacher only (no discrepancy/student loss)
@@ -118,7 +117,11 @@ class Config:
     use_teacher: bool = True
     use_student: bool = True
     use_masking: bool = True
-    force_mask_anomaly: bool = True  # Force mask patches containing anomalies during training
+    force_mask_anomaly: bool = True  # Prioritize masking anomaly patches during training
+    # - True: Anomaly patches are masked first within fixed masking budget (masking_ratio).
+    #   If anomaly patches exceed the budget, excess remain visible as encoder context.
+    #   Masking count is always exactly round(num_patches * masking_ratio) per sample.
+    # - False: Random masking only (no anomaly-aware prioritization)
 
     # Reproducibility
     random_seed: int = 42
