@@ -25,6 +25,7 @@ This project uses a **Sliding Window Time Series Dataset** that simulates server
    ├── Window size: 500 timesteps (configurable)
    ├── Train stride: Configurable (default 21)
    ├── Test stride: Configurable (default 21)
+   ├── Epoch offset: Random train window offset per epoch (default off)
    └── Total windows: varies based on window size and stride
 
 3. Train/Test Split
@@ -716,6 +717,7 @@ config.seq_length = 500                    # Window size
 config.num_features = 8                    # Number of features
 config.sliding_window_total_length = 275000   # Total time series length (220K train + 55K test)
 config.sliding_window_stride = 21             # Train stride
+config.epoch_offset = False                    # Non-replacement random train window offset (True=enabled)
 config.anomaly_interval_scale = 0.75       # Controls anomaly density (2x frequency, ~13% anomaly)
 config.patch_size = 5                      # Patch size (also used for window labeling)
 

@@ -25,6 +25,7 @@ class Config:
     sliding_window_total_length: int = 275000  # Total length (220K train + 55K test)
     sliding_window_stride: int = 21  # Stride for train window extraction (overlapping windows)
     sliding_window_test_stride: int = 21  # Stride for test window extraction
+    epoch_offset: bool = False  # Non-replacement random train window offset each epoch (cycles through [0, stride))
     sliding_window_train_ratio: float = 0.8  # Train ratio (220K/275K = 0.8, test = 55K)
     anomaly_interval_scale: float = 0.75  # Scale factor for anomaly intervals (2x frequency, ~13% anomaly)
 

@@ -993,6 +993,9 @@ class SlidingWindowDataset(Dataset):
                         anomaly_type=region.anomaly_type
                     ))
 
+        # Epoch offset for train augmentation
+        self._epoch_offset = 0
+
         # Extract windows
         self._extract_windows()
 
@@ -1019,7 +1022,7 @@ class SlidingWindowDataset(Dataset):
         # Precompute boundary set for O(1) lookup
         boundary_set = set(self.run_boundaries) if self.run_boundaries else None
 
-        for start in range(0, series_length - self.window_size + 1, self.stride):
+        for start in range(self._epoch_offset, series_length - self.window_size + 1, self.stride):
             end = start + self.window_size
 
             # Skip windows that cross run boundaries
@@ -1070,6 +1073,24 @@ class SlidingWindowDataset(Dataset):
         self.sample_types = np.array(sample_types, dtype=np.int64)
         self.anomaly_type_labels = np.array(anomaly_type_labels, dtype=np.int64)
         self.window_start_indices = np.array(window_start_indices, dtype=np.int64)
+
+    def set_epoch_offset(self, offset: int):
+        """Shift window start positions by `offset` and re-extract windows.
+
+        When epoch_offset=True, the Trainer draws offsets from [0, stride)
+        without replacement each cycle. Over `stride` epochs every position is
+        covered exactly once, then a new permutation starts.
+
+        Only intended for train split. Test split should remain at offset=0.
+
+        Args:
+            offset: Number of timestamps to shift window starts (0 to stride-1).
+        """
+        offset = offset % self.stride if self.stride > 0 else 0
+        if offset == self._epoch_offset:
+            return  # No change needed
+        self._epoch_offset = offset
+        self._extract_windows()
 
     def _downsample_for_ratio(
         self,

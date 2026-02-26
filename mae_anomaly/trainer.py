@@ -409,7 +409,22 @@ class Trainer:
                               cuda.synchronize() timing. Results stored in history['batch_profiling'].
         """
         teacher_warmup = self.config.teacher_only_warmup_epochs
+        # Epoch offset: non-replacement random offsets within [0, stride)
+        epoch_offset = getattr(self.config, 'epoch_offset', False)
+        if epoch_offset:
+            train_dataset = self.train_loader.dataset
+            if hasattr(train_dataset, 'stride'):
+                stride = train_dataset.stride
+                import numpy as np
+                offset_rng = np.random.RandomState(42)
+                offset_pool = []  # Refilled each cycle
         for epoch in range(self.config.num_epochs):
+            # Shift train window start positions each epoch (data augmentation)
+            if epoch_offset and hasattr(train_dataset, 'set_epoch_offset'):
+                if not offset_pool:
+                    offset_pool = list(offset_rng.permutation(stride))
+                train_dataset.set_epoch_offset(offset_pool.pop())
+
             # First N epochs are warm-up: train teacher only (no discrepancy/student loss)
             teacher_only = (epoch < teacher_warmup)
             # Profile only on epoch 0
