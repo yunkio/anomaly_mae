@@ -1044,6 +1044,266 @@ def load_smd(
     return all_signals, all_labels, anomaly_regions, feature_names, train_ratio, data_info
 
 
+def _find_safe_cut_point(target: int, labels: np.ndarray, anomaly_regions_local: list, margin: int = 500) -> int:
+    """Find the nearest safe cut point away from anomaly regions.
+
+    A "safe" position is at least `margin` timestamps away from any anomaly region.
+    If no such position exists, returns the position with maximum distance from
+    the nearest anomaly.
+
+    Args:
+        target: Ideal cut position.
+        labels: Binary label array for this machine's test data.
+        anomaly_regions_local: List of (start, end) tuples in local coordinates.
+        margin: Minimum distance from any anomaly region (default: window_size=500).
+
+    Returns:
+        Safe cut position index.
+    """
+    L = len(labels)
+
+    def is_safe(pos):
+        if pos <= 0 or pos >= L:
+            return False
+        for s, e in anomaly_regions_local:
+            if s - margin <= pos <= e + margin:
+                return False
+        return True
+
+    if is_safe(target):
+        return target
+
+    # Search outward from target
+    for offset in range(1, L):
+        for candidate in [target - offset, target + offset]:
+            if 0 < candidate < L and is_safe(candidate):
+                return candidate
+
+    # Fallback: find position with maximum distance from any anomaly
+    best_pos = target
+    best_dist = 0
+    search_start = max(1, target - L // 4)
+    search_end = min(L - 1, target + L // 4)
+    for pos in range(search_start, search_end):
+        min_dist = L
+        for s, e in anomaly_regions_local:
+            if s <= pos <= e:
+                min_dist = 0
+                break
+            dist = min(abs(pos - s), abs(pos - e))
+            min_dist = min(min_dist, dist)
+        if min_dist > best_dist:
+            best_dist = min_dist
+            best_pos = pos
+    return best_pos
+
+
+def _get_anomaly_regions_local(labels: np.ndarray) -> list:
+    """Extract anomaly regions as (start, end) tuples from binary labels."""
+    regions = []
+    in_region = False
+    start = 0
+    for i, v in enumerate(labels):
+        if v == 1 and not in_region:
+            in_region = True
+            start = i
+        elif v == 0 and in_region:
+            in_region = False
+            regions.append((start, i - 1))
+    if in_region:
+        regions.append((start, len(labels) - 1))
+    return regions
+
+
+def load_smd_block_split(
+    machine: str,
+    k_blocks: int = 6,
+    parity: int = 0,
+    margin: int = 500,
+):
+    """Load a single SMD machine with K-block interleaved train/test split.
+
+    Instead of using the original train/test files (train=all normal, test=with anomalies),
+    this loader splits only the TEST file into K blocks and alternates them between
+    train and test partitions. This ensures anomaly regions are distributed evenly
+    across both partitions (~50/50).
+
+    Block boundaries are snapped away from anomaly regions (by at least `margin`
+    timestamps) so that sliding windows at block edges always see normal data.
+
+    The original TRAIN file (all normal) is NOT used — only the test file is split.
+
+    Args:
+        machine: Machine ID (e.g. 'machine-1-1').
+        k_blocks: Number of blocks to split into (default: 6).
+        parity: Which blocks go to train.
+            0 = even-indexed blocks → train, odd → test (default).
+            1 = odd-indexed blocks → train, even → test.
+        margin: Minimum distance from anomaly regions for cut points (default: 500).
+
+    Returns:
+        signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+    """
+    data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'SMD')
+
+    print(f"\n{'='*60}")
+    print(f"Loading SMD block split: {machine}")
+    print(f"  K={k_blocks}, parity={parity} ({'even' if parity == 0 else 'odd'}→train)")
+    print(f"  margin={margin}")
+    print(f"{'='*60}")
+
+    # ---- Load test data only (contains both normal and anomaly) ----
+    test_path = os.path.join(data_dir, 'test', f'{machine}.txt')
+    label_path = os.path.join(data_dir, 'test_label', f'{machine}.txt')
+
+    test_data = np.loadtxt(test_path, delimiter=',', dtype=np.float32)
+    test_labels = np.loadtxt(label_path, dtype=np.int64)
+
+    L = len(test_data)
+    num_features = test_data.shape[1]
+
+    print(f"  Test file: {L:,} samples, {num_features} features")
+
+    # ---- Compute safe cut points ----
+    anomaly_regions_local = _get_anomaly_regions_local(test_labels)
+
+    cut_points = []
+    for i in range(1, k_blocks):
+        target = int(L * i / k_blocks)
+        safe = _find_safe_cut_point(target, test_labels, anomaly_regions_local, margin)
+        cut_points.append(safe)
+    cut_points = sorted(set(cut_points))
+
+    # Build block boundaries
+    boundaries = [0] + cut_points + [L]
+    blocks = []
+    for i in range(len(boundaries) - 1):
+        blocks.append((boundaries[i], boundaries[i + 1]))
+
+    # ---- Assign blocks to train/test by parity ----
+    train_blocks = [blocks[i] for i in range(len(blocks)) if i % 2 == parity]
+    test_blocks = [blocks[i] for i in range(len(blocks)) if i % 2 != parity]
+
+    print(f"  Blocks: {len(blocks)} (boundaries: {boundaries})")
+    print(f"  Train blocks: {len(train_blocks)}, Test blocks: {len(test_blocks)}")
+
+    # ---- Concatenate: [train_block_0 | train_block_1 | ...] [test_block_0 | test_block_1 | ...]
+    train_signals_list = [test_data[s:e] for s, e in train_blocks]
+    train_labels_list = [test_labels[s:e] for s, e in train_blocks]
+    test_signals_list = [test_data[s:e] for s, e in test_blocks]
+    test_labels_list = [test_labels[s:e] for s, e in test_blocks]
+
+    train_signals = np.concatenate(train_signals_list, axis=0)
+    train_labels_concat = np.concatenate(train_labels_list, axis=0)
+    test_signals = np.concatenate(test_signals_list, axis=0)
+    test_labels_concat = np.concatenate(test_labels_list, axis=0)
+
+    total_train = len(train_signals)
+    total_test = len(test_signals)
+    n_total = total_train + total_test
+
+    all_signals_raw = np.concatenate([train_signals, test_signals], axis=0)
+    all_labels = np.concatenate([train_labels_concat, test_labels_concat], axis=0)
+
+    train_ratio = total_train / n_total
+
+    # ---- Compute run boundaries (between blocks within each partition) ----
+    run_boundaries = []
+    # Train internal boundaries
+    cumulative = 0
+    for i, (s, e) in enumerate(train_blocks):
+        cumulative += (e - s)
+        if i < len(train_blocks) - 1:
+            run_boundaries.append(cumulative)
+
+    # Test internal boundaries
+    cumulative = total_train
+    for i, (s, e) in enumerate(test_blocks):
+        cumulative += (e - s)
+        if i < len(test_blocks) - 1:
+            run_boundaries.append(cumulative)
+
+    # ---- Compute anomaly regions on concatenated data ----
+    anomaly_regions = []
+    is_atk = (all_labels == 1).astype(int)
+    diff = np.diff(is_atk, prepend=0, append=0)
+    starts = np.where(diff == 1)[0]
+    ends = np.where(diff == -1)[0]
+    for s, e in zip(starts, ends):
+        anomaly_regions.append(AnomalyRegion(
+            start=int(s),
+            end=int(e),
+            anomaly_type=1,
+        ))
+
+    # ---- Feature names ----
+    feature_names = [f'feature_{i}' for i in range(num_features)]
+
+    # ---- Remove constant columns ----
+    stds = np.std(all_signals_raw, axis=0)
+    constant_mask = stds == 0
+    n_constant = int(np.sum(constant_mask))
+    if n_constant > 0:
+        print(f"  Removing {n_constant} constant columns")
+        all_signals_raw = all_signals_raw[:, ~constant_mask]
+        feature_names = [f for f, m in zip(feature_names, constant_mask) if not m]
+        num_features = len(feature_names)
+
+    # ---- Handle NaN ----
+    nan_count = int(np.sum(np.isnan(all_signals_raw)))
+    if nan_count > 0:
+        print(f"  Handling {nan_count:,} NaN values (forward-fill + backward-fill)")
+        df_temp = pd.DataFrame(all_signals_raw)
+        df_temp = df_temp.ffill().bfill()
+        all_signals_raw = df_temp.values.astype(np.float32)
+
+    # ---- Min-max normalization ----
+    print("  Applying min-max normalization...")
+    mins = np.min(all_signals_raw, axis=0, keepdims=True)
+    maxs = np.max(all_signals_raw, axis=0, keepdims=True)
+    ranges = maxs - mins
+    ranges[ranges == 0] = 1
+    all_signals = ((all_signals_raw - mins) / ranges).astype(np.float32)
+
+    # ---- Compute statistics ----
+    train_anom_pts = int(np.sum(train_labels_concat))
+    test_anom_pts = int(np.sum(test_labels_concat))
+
+    data_info = {
+        'dataset_type': 'smd_block_split',
+        'machine': machine,
+        'n_total': n_total,
+        'n_features': num_features,
+        'train_len': total_train,
+        'test_len': total_test,
+        'train_ratio': train_ratio,
+        'train_attack_ratio': float(np.mean(train_labels_concat)) if total_train > 0 else 0.0,
+        'test_attack_ratio': float(np.mean(test_labels_concat)) if total_test > 0 else 0.0,
+        'test_normal': int(np.sum(test_labels_concat == 0)),
+        'test_attack': test_anom_pts,
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'run_boundaries': run_boundaries if run_boundaries else None,
+        'k_blocks': k_blocks,
+        'parity': parity,
+        'margin': margin,
+        'block_boundaries': boundaries,
+        'train_blocks': train_blocks,
+        'test_blocks': test_blocks,
+    }
+
+    print(f"\n  Train/Test split:")
+    print(f"    Train: {total_train:,} samples (anomaly: {train_anom_pts:,}, {data_info['train_attack_ratio']:.2%})")
+    print(f"    Test:  {total_test:,} samples (anomaly: {test_anom_pts:,}, {data_info['test_attack_ratio']:.2%})")
+    print(f"    train_ratio: {train_ratio:.4f}")
+    print(f"  Anomaly regions: {len(anomaly_regions)} (train partition)")
+    test_anom_regions = [r for r in anomaly_regions if r.start >= total_train]
+    print(f"  Anomaly regions: {len(test_anom_regions)} (test partition)")
+    print(f"  Run boundaries: {len(run_boundaries)}")
+    print(f"  Features: {num_features}")
+
+    return all_signals, all_labels, anomaly_regions, feature_names, train_ratio, data_info
+
+
 # Dataset Loader Registry
 _WADI_A1_PATH = str(PROJECT_ROOT / 'dataset' / 'WaDi' / 'WADI.A1_9 Oct 2017' / 'WADI_attackdata_preprocessed.csv')
 _WADI_A2_PATH = str(PROJECT_ROOT / 'dataset' / 'WaDi' / 'WADI.A2_19 Nov 2019' / 'WADI_attackdataLABLE_preprocessed.csv')
@@ -1071,6 +1331,11 @@ del _fn  # Clean up loop variable
 # Add per-machine SMD loaders dynamically (smd_machine-1-1 through smd_machine-3-11)
 for _mn in SMD_MACHINE_NAMES:
     DATASET_LOADERS[f'smd_{_mn}'] = (lambda mn=_mn: load_smd(machines=[mn]))
+del _mn  # Clean up loop variable
+# Add per-machine SMD K=6 block split loaders (parity 0 and 1)
+for _mn in SMD_MACHINE_NAMES:
+    DATASET_LOADERS[f'smd_k6_{_mn}'] = (lambda mn=_mn: load_smd_block_split(machine=mn, k_blocks=6, parity=0))
+    DATASET_LOADERS[f'smd_k6_{_mn}_swap'] = (lambda mn=_mn: load_smd_block_split(machine=mn, k_blocks=6, parity=1))
 del _mn  # Clean up loop variable
 
 

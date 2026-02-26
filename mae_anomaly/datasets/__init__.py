@@ -11,6 +11,7 @@ from .loaders import (
     load_tep,
     TEP_FAULT_NAMES,
     load_smd,
+    load_smd_block_split,
     SMD_MACHINE_NAMES,
 )
 from .noisy import NoisyLabelSlidingWindowDataset
@@ -26,6 +27,7 @@ __all__ = [
     'load_tep',
     'TEP_FAULT_NAMES',
     'load_smd',
+    'load_smd_block_split',
     'SMD_MACHINE_NAMES',
     'NoisyLabelSlidingWindowDataset',
 ]
