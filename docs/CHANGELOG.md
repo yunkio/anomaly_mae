@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-02-26 (Update 55): patch_batch_size OOM Fix for Large d_model
+
+### Summary
+
+Reduced `patch_batch_size` from 4 to 2 when `d_model >= 512` to prevent GPU OOM during contribution ratio computation on large test sets (SWaT/WaDi with Set C).
+
+### Changes
+
+**`mae_anomaly/evaluator.py`:**
+- `patch_batch_size`: Changed from unconditional `min(num_patches, 4)` to `min(num_patches, 2 if d_model >= 512 else 4)`. Prevents GPU OOM on SWaT (10,689 test windows) and WaDi (4,091 test windows) when d_model=512.
+
 ## 2026-02-25 (Update 54): Set C — Dynamic d_model + Linear Embedding + Auto dim_feedforward
 
 ### Summary
