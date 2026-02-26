@@ -1110,10 +1110,9 @@ class Evaluator:
                 batch_size, seq_length, num_features = sequences.shape
 
                 # Process patches in batches for memory efficiency
-                # Adaptive batch size: larger batches = fewer forward passes = faster
-                # Memory: batch_size * patch_batch_size * seq_len * features * 4 bytes
-                # With 12GB GPU, we can handle much larger batches
-                patch_batch_size = min(num_patches, 4)  # Conservative batch size to prevent GPU OOM
+                # Memory per forward: batch_size * patch_batch_size * seq_len * features * 4 bytes
+                # Reduce patch_batch_size for d_model>=512 to prevent GPU OOM on large test sets (SWaT/WaDi)
+                patch_batch_size = min(num_patches, 2 if self.config.d_model >= 512 else 4)
                 batch_recon_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
                 batch_disc_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
                 batch_student_recon_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
