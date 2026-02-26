@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-02-25 (Update 54): Set C — Dynamic d_model + Linear Embedding + Auto dim_feedforward
+
+### Summary
+
+Added Set C experiment preset with per-dataset dynamic d_model selection and linear patch embedding. `dim_feedforward` is now auto-computed as `4 × d_model` when not explicitly overridden in `make_config()`.
+
+### Changes
+
+**`mae_anomaly/utils/experiment.py`:**
+- `resolve_dynamic_d_model(num_features, patch_size)` (NEW): Selects smallest d_model from `[128, 192, 256, 384, 512]` that is ≥ `patch_size × num_features`. Caps at 512.
+- `D_MODEL_CANDIDATES` (NEW): Candidate list `[128, 192, 256, 384, 512]`.
+- `make_config()`: Auto-computes `dim_feedforward = 4 × d_model` when `'dim_feedforward'` is not in overrides dict. Existing presets (Set A/B) that explicitly pass `dim_feedforward` are unaffected.
+
+**`scripts/run_base_experiments.py`:**
+- Set C preset: `patch_size=10, num_patches=50, d_model='dynamic', patchify_mode='linear'`. Other params same as Set B.
+- Dynamic resolution: After data loading, if `d_model='dynamic'`, calls `resolve_dynamic_d_model()` with the dataset's actual `num_features` to determine d_model before `make_config()`.
+- `--set` argparse: Added `'C'` to choices.
+
+**`set_guideline.md`:**
+- Config Presets table: Added Set C column.
+- Added "Set C: Dynamic d_model 규칙" subsection.
+
+**`docs/ARCHITECTURE.md`:**
+- Default Configuration table: Updated d_model and dim_feedforward descriptions.
+- Added "Dynamic d_model (Set C)" subsection.
+
+## 2026-02-25 (Update 53): SMD K=6 Block Split Loader + Epoch Offset Train Augmentation
+
+### Summary
+
+Added SMD per-machine K=6 block split loader for balanced anomaly distribution (~50/50 train/test). Added epoch offset feature that shifts train sliding window start positions each epoch for better generalization with large strides.
+
+### Changes
+
+**`mae_anomaly/datasets/loaders.py`:**
+- `load_smd_block_split(machine, k_blocks, parity, margin)` (NEW): Splits a single SMD machine's test file into K blocks with safe boundary snapping (±margin from anomaly regions). Alternates blocks between train/test by parity.
+- `_find_safe_cut_point`, `_get_anomaly_regions_local` (NEW): Helpers for boundary placement.
+- Registry: `smd_k6_{machine_id}` (parity=0) and `smd_k6_{machine_id}_swap` (parity=1) for all 28 machines.
+
+**`mae_anomaly/dataset_sliding.py`:**
+- `SlidingWindowDataset.set_epoch_offset(offset)` (NEW): Shifts window start positions by `offset % stride`, re-extracts window metadata. Train-only; test stays at offset=0.
+
+**`mae_anomaly/config.py`:**
+- `epoch_offset: bool = False` (NEW): When True, Trainer applies non-replacement random offsets from `[0, stride)` each epoch. Over `stride` epochs, all positions are covered exactly once.
+
+**`mae_anomaly/trainer.py`:**
+- `train()`: When `epoch_offset=True`, pops a random offset from a permutation pool of `[0, stride)` each epoch and calls `train_dataset.set_epoch_offset()`.
+
+**`docs/SMD_BLOCK_SPLIT.md`** (NEW): Experiment guide for K=6 block split methodology.
+
 ## 2026-02-24 (Update 52): Point-Level Epoch Eval + Detailed Timing + Layer-Level Batch Profiling
 
 ### Summary

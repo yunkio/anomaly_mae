@@ -19,15 +19,26 @@ Claude용 참조 문서. 실험 재현/새 실험 지시 시 사용.
 
 ## Config Presets
 
-| Param | Set A | Set B |
-|-------|-------|-------|
-| `patch_size` | 5 | 20 |
-| `num_patches` | 100 | 25 |
-| `d_model` | 128 | 256 |
-| `dim_feedforward` | 512 | 1024 |
-| `cnn_kernel_size` | 3 | 5 |
+| Param | Set A | Set B | Set C |
+|-------|-------|-------|-------|
+| `patch_size` | 5 | 20 | 10 |
+| `num_patches` | 100 | 25 | 50 |
+| `d_model` | 128 | 256 | **dynamic** |
+| `dim_feedforward` | 512 | 1024 | **4 × d_model** (auto) |
+| `cnn_kernel_size` | 3 | 5 | - (linear) |
+| `patchify_mode` | patch_cnn | patch_cnn | **linear** |
 
-공통: `seq_length=500, enc2, td4, sd1, epochs=50, lr=1e-3, batch_size=512, sliding_window_stride=21, sliding_window_test_stride=21, cnn_channels=None(auto-scale), mask_after_encoder=True, anomaly_score_mode=adaptive, use_amp=True`
+공통: `seq_length=500, enc2, td4, sd1, epochs=50, lr=1e-3, batch_size=512, sliding_window_stride=21, sliding_window_test_stride=21, mask_after_encoder=True, anomaly_score_mode=adaptive, use_amp=True`
+
+### Set C: Dynamic d_model 규칙
+
+`d_model = 'dynamic'`이면 데이터 로딩 후 `num_features`를 확인하여 자동 결정:
+- `raw = patch_size × num_features = 10 × f`
+- `d_model` = `[128, 192, 256, 384, 512]` 중 `raw` 이상인 최소값 (최대 512)
+- `dim_feedforward` = `4 × d_model` (overrides에 없으면 자동 계산)
+- `patchify_mode = 'linear'` (CNN 없이 Linear embedding)
+
+함수: `mae_anomaly.utils.experiment.resolve_dynamic_d_model(num_features, patch_size)`
 
 정확한 값: `scripts/run_base_experiments.py` 내 `CONFIG_PRESETS` dict 참조.
 
@@ -57,6 +68,20 @@ Claude용 참조 문서. 실험 재현/새 실험 지시 시 사용.
 Normal50 = 학습 데이터의 anomaly region 중 50%를 normal로 재라벨링 (seed=123).
 Loader 레지스트리: `mae_anomaly/datasets/loaders.py` → `DATASET_LOADERS`
 
+### SMD K=6 Block Split 데이터셋 (28머신 × 2 parity = 56개)
+
+상세: `docs/SMD_BLOCK_SPLIT.md`
+
+| Key 패턴 | Loader | Parity | 설명 |
+|-----------|--------|--------|------|
+| `smd_k6_{machine_id}` | `load_smd_block_split(machine, parity=0)` | 0 (even→train) | 짝수블록 학습 |
+| `smd_k6_{machine_id}_swap` | `load_smd_block_split(machine, parity=1)` | 1 (odd→train) | 홀수블록 학습 |
+
+- test 파일만 6블록으로 나누어 교차 배정 (이상 분배 ~50/50)
+- 경계는 이상 영역에서 ±500 이상 떨어진 정상 구간에 배치
+- 2회 실험(parity 0, 1) 후 메트릭 평균 = 최종 결과
+- Test 이상=0 케이스: machine-1-1(parity=0만), machine-2-8(parity=1만)
+
 ## 실행
 
 ```bash
@@ -65,6 +90,7 @@ conda activate dc_vis
 # 전체 실행
 python scripts/run_base_experiments.py --set A
 python scripts/run_base_experiments.py --set B
+python scripts/run_base_experiments.py --set C
 
 # 개별/재개
 python scripts/run_base_experiments.py --set A --dataset SWaT_A1A2
@@ -264,7 +290,7 @@ results/experiments/{N}_{YYYYMMDD_HHMMSS}_{suffix}/
 │       └── epoch_metrics/                 # 6 PNGs (학습 동태)
 ```
 
-suffix: Set A = `w500p5e2t4d1`, Set B = `w500p20e2t4d1_d256k5` (번호는 자동 부여, 예: `7_20260221_202606_w500p5e2t4d1`)
+suffix: Set A = `w500p5e2t4d1`, Set B = `w500p20e2t4d1_d256k5`, Set C = `w500p10e2t4d1_dynamic_linear` (번호는 자동 부여, 예: `7_20260221_202606_w500p5e2t4d1`)
 DatasetGroup/Scenario 매핑: `scripts/run_base_experiments.py` → `DATASETS` 리스트의 `results_subdir` 필드.
 
 ### experiment_metadata.json (핵심 결과 파일)

@@ -6,6 +6,30 @@ import re
 from mae_anomaly import Config
 
 
+# Dynamic d_model candidates (must be divisible by nhead=8)
+D_MODEL_CANDIDATES = [128, 192, 256, 384, 512]
+
+
+def resolve_dynamic_d_model(num_features: int, patch_size: int) -> int:
+    """Select d_model >= raw patch info from candidate list.
+
+    Chooses the smallest candidate >= patch_size * num_features.
+    Caps at 512 (max candidate).
+
+    Args:
+        num_features: Number of input features.
+        patch_size: Patch size (timesteps per patch).
+
+    Returns:
+        Selected d_model value.
+    """
+    raw = patch_size * num_features
+    for d in D_MODEL_CANDIDATES:
+        if d >= raw:
+            return d
+    return D_MODEL_CANDIDATES[-1]  # cap at 512
+
+
 def get_next_experiment_number(experiments_dir: str) -> int:
     """Get the next experiment number by scanning existing directories.
 
@@ -53,6 +77,9 @@ def make_config(overrides: dict) -> Config:
     All defaults come from the Config dataclass (config.py).
     Only pass overrides for values that differ from Config defaults.
 
+    If 'dim_feedforward' is not in overrides, it is auto-computed as 4 * d_model
+    after all overrides are applied.
+
     Args:
         overrides: Dictionary of config parameters to override
 
@@ -67,5 +94,9 @@ def make_config(overrides: dict) -> Config:
             continue
         if hasattr(config, k):
             setattr(config, k, v)
+
+    # Auto-compute dim_feedforward = 4 * d_model if not explicitly overridden
+    if 'dim_feedforward' not in overrides:
+        config.dim_feedforward = config.d_model * 4
 
     return config
