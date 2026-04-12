@@ -172,29 +172,33 @@ QueueLength = base + 0.2 * CPU + 0.15 * ThreadCount + noise
 
 ### Data Normalization
 
-After signal generation (including anomaly injection), each feature is **independently normalized** to the [0, 1] range using **per-feature min-max normalization**:
+Normalization is performed by `SlidingWindowDataset` using **per-feature z-score standardization fitted on the train portion only**. This follows the standard practice in time series anomaly detection (Anomaly Transformer, TimesNet, etc.) and prevents data leakage from test into normalization statistics.
 
 ```python
-def _normalize_per_feature(signals: np.ndarray) -> np.ndarray:
-    """Per-feature min-max normalization to [0, 1] range."""
-    for f in range(signals.shape[1]):
-        min_val = signals[:, f].min()
-        max_val = signals[:, f].max()
-        if max_val - min_val > 1e-8:
-            signals[:, f] = (signals[:, f] - min_val) / (max_val - min_val)
-        else:
-            signals[:, f] = 0.5  # Constant signal -> set to middle
-    return signals
+def _standardize_per_feature(signals, train_end):
+    """Per-feature z-score standardization fitted on train portion only."""
+    train_signals = signals[:train_end]
+    scaler_mean = train_signals.mean(axis=0)   # (num_features,)
+    scaler_std = train_signals.std(axis=0)     # (num_features,)
+    scaler_std[scaler_std < 1e-8] = 1.0        # Protect constant features
+    return (signals - scaler_mean) / scaler_std
 ```
 
-**Why normalization instead of clipping?**
+**Key design decisions:**
 
-| Aspect | Clipping (`np.clip(signals, 0, 1)`) | Min-Max Normalization |
-|--------|-------------------------------------|----------------------|
-| Anomaly spikes | Capped at 1.0 (info loss) | Preserved proportionally |
-| Boundary artifacts | Flat regions at 0 or 1 | No artificial saturation |
-| Relative magnitudes | Distorted near boundaries | Preserved exactly |
-| Real-world similarity | Less realistic | Matches standard preprocessing |
+| Aspect | Previous (min-max [0,1]) | Current (z-score, train-only fit) |
+|--------|--------------------------|----------------------------------|
+| Fit data | Entire series (train+test) | Train portion only |
+| Data leakage | Yes (test stats leak) | No |
+| Output range | Bounded [0, 1] | Unbounded (mean=0, std=1) |
+| Anomaly sensitivity | Compressed by outlier min/max | Naturally amplified (deviations in σ) |
+| Swap experiment support | Re-normalize needed | Automatic (SlidingWindowDataset handles) |
+
+**Why z-score over min-max?**
+1. **No data leakage**: Scaler statistics are computed from train data only
+2. **Anomaly amplification**: Anomalous values naturally produce large z-scores (many σ from mean)
+3. **Model compatibility**: Linear output projection (unbounded) matches z-score's unbounded range
+4. **Community standard**: Used by Anomaly Transformer (ICLR'22), TimesNet (ICLR'23)
 
 ---
 
@@ -413,7 +417,7 @@ x = clip(x + dx, -drift_max, drift_max)
 | Constraint | Value | Reason |
 |------------|-------|--------|
 | Transition time | >= 1000 ts | Anomalies are much shorter |
-| Value range | Per-feature [0,1] normalized | Relative magnitudes preserved |
+| Value range | Per-feature z-score (train-only fit) | Relative magnitudes preserved |
 | Drift magnitude | max ±0.08 | Memory leak grows 0.3-0.5 |
 | Bump magnitude | max 0.10 | Spike adds 0.3-0.6 |
 | Bump duration | 100-300 ts | Spike is 10-25 ts |
@@ -943,7 +947,7 @@ dataset = SlidingWindowDataset(
 - Data concatenated as `[all_train | all_test]` to match pipeline's train_ratio-based split
 - `run_boundaries` track machine boundaries to prevent cross-machine windows
 - Individual machine loading via `machines` parameter
-- Min-max normalization, constant column removal
+- Constant column removal (z-score normalization handled by SlidingWindowDataset)
 
 **Registry**:
 - `smd`: All 28 machines combined (with run_boundaries)

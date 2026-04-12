@@ -91,7 +91,7 @@ dataset/TEP/
 1. Fault-free runs → n_train_runs개 선택 → 연결 (훈련용)
 2. Faulty runs → 각 fault_type별 n_test_runs개 연결 (테스트용)
 3. `run_boundaries` 자동 생성 (슬라이딩 윈도우 경계 보호)
-4. 상수 열 제거, NaN 처리, min-max 정규화
+4. 상수 열 제거, NaN 처리 (z-score 정규화는 SlidingWindowDataset에서 train-only fit으로 수행)
 5. `train_ratio = train_len / total_len` 자동 계산
 
 ### 2.4 데이터 규모

@@ -25,6 +25,7 @@ class NoisyLabelSlidingWindowDataset(SlidingWindowDataset):
         train_ratio: float = 0.8,
         seed: int = 42,
         run_boundaries: list = None,
+        normalize_mode: str = 'zscore',
     ):
         """Initialize noisy label dataset.
 
@@ -40,6 +41,7 @@ class NoisyLabelSlidingWindowDataset(SlidingWindowDataset):
             train_ratio: Proportion of data for training
             seed: Random seed
             run_boundaries: Positions where independent runs end
+            normalize_mode: 'zscore' or 'minmax'
         """
         # Store noisy labels for training
         self.noisy_point_labels = noisy_point_labels
@@ -56,6 +58,7 @@ class NoisyLabelSlidingWindowDataset(SlidingWindowDataset):
             train_ratio=train_ratio,
             seed=seed,
             run_boundaries=run_boundaries,
+            normalize_mode=normalize_mode,
         )
 
     def __getitem__(self, idx):

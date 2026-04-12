@@ -1,5 +1,485 @@
 # Changelog
 
+## 2026-03-05 (Update 69): Unified Post-Training Inference — 3-pass → 1-pass
+
+### Summary
+
+학습 후 GPU inference를 단일 evaluator pass로 통합. 기존 3개 독립 inference (evaluator patch_scores 37s + collect_predictions 84s + collect_detailed_data 84s ≈ 205s) → 1개 pass (~40s). AMP + 최적 batch_size 자동 적용.
+
+### 주요 변경
+
+**`mae_anomaly/evaluator.py`**:
+- `_compute_patch_scores_all_patches(collect_detail=False)` — `collect_detail=True` 시 reconstruction 텐서 (feature 0) 및 timestep-level discrepancy를 기존 forward pass 중 수집하여 `self.detail_results`에 저장
+
+**`mae_anomaly/visualization/base.py`**:
+- `derive_pred_data()` 추가 — evaluator의 (N, num_patches) 출력을 BestModelVisualizer가 기대하는 pred_data dict로 변환 (pure numpy, GPU 불필요)
+- `collect_predictions()`, `collect_detailed_data()`, `collect_all_visualization_data()` 삭제
+
+**`scripts/run_base_experiments.py`**:
+- 3-pass inference → 단일 `evaluator._compute_patch_scores_all_patches(collect_detail=True)` + `derive_pred_data()` 호출로 교체
+- timing 키 단순화: `patch_scores_time`/`viz_collect_time` → `inference_time`
+
+**삭제:**
+- `scripts/run_reinference.py` (독립 재추론 스크립트, 통합으로 불필요)
+
+## 2026-03-05 (Update 68): Pipeline Unification — Baseline ↔ MAE 완전 통합
+
+### Summary
+
+Baseline comparison 파이프라인을 MAE와 완전히 통합. 데이터 로딩, 전처리, 지표 계산 모두 MAE 코드를 직접 import하여 사용. 결과 형식도 MAE와 동일 (`epoch_metrics.json`, `scores.npz`).
+
+### 주요 변경
+
+**새로 작성:**
+- `comparison/data/unified_loader.py`: MAE raw loaders + z-score를 직접 호출하는 단일 `UnifiedLoader` 클래스
+- `comparison/experiment_configs.py`: 22개 → 11개 실험으로 정리 (swap/normal50 제거)
+- `comparison/baseline_common.py`: MAE evaluator 함수 직접 사용, `epoch_metrics.json`/`scores.npz` MAE 형식 저장
+- `comparison/run_baseline.py`: DL baseline epoch-level scoring + async CPU eval (ThreadPoolExecutor)
+
+**삭제:**
+- `comparison/data/` 14개 개별 로더 파일 (wadi_loader, swat_loader, simulation_loader 등)
+- `comparison/baselines/evaluator.py` (mae_anomaly/evaluator로 대체)
+- `comparison/results/` 전체 (정규화 방식 변경으로 무효화)
+- swap/normal50 실험 11개
+
+**기타:**
+- Preprocessed CSV 파일 6개에 `(deprecated)_` 접두사 추가
+- `comparison/baselines/__init__.py`에서 evaluator import 제거
+- `comparison/GUIDE.md` 재작성
+
+### 결과 형식 (MAE 동일)
+
+```
+comparison/results/{experiment_name}/{model_name}/
+├── metadata.json
+├── scores.npz              # key: anomaly_score (float32)
+├── epoch_metrics.json      # MAE 동일 키 (teacher_* = null)
+├── epoch_scores/           # [DL only] epoch별 scores
+└── model/                  # [DL only] 학습된 가중치
+```
+
+## 2026-03-05 (Update 67): SWaT Dual-Eval + Directory Refactoring
+
+### Summary
+
+Major refactoring of experiment output structure:
+1. **Removed redundant timestamp subdirectory**: `{YYYYMMDD_HHMMSS}_default/` intermediate dir removed. Results now stored directly under `results_subdir/`.
+2. **SWaT dual-eval**: For SWaT datasets (non-swap), results split into `_full/` and `_excl22/` directories with independent best-epoch selection and evaluation.
+3. **Comparison baselines**: Same SWaT dual directory structure applied to `comparison/` baselines.
+
+### Changes
+
+**`scripts/run_base_experiments.py`:**
+- Removed `{timestamp}_default` subdirectory creation — `exp_dir = results_dir` directly
+- Added `is_swat_dual` detection: SWaT non-swap datasets → `_full` + `_excl22` dirs
+- Dual best-epoch tracking: `_best_ckpt_score_excl22` + `best_checkpoint_excl22.pt`
+- Epoch callback: computes `excl22_pak_auc_f1` via `compute_metrics_with_exclusion()`
+- After training: saves `best_model.pt` to both `_full/` and `_excl22/` dirs
+- Spawns 2 background CPU eval+viz workers for SWaT (full + excl22)
+- `_cpu_eval_viz_worker()`: new `swat_eval_mode` parameter; excl22 uses excl22 metrics as primary
+- Shared files (checkpoints, epoch_scores) symlinked from `_full` to `_excl22`
+
+**`scripts/run_reinference.py`:**
+- `find_dataset_dirs()`: supports both old (`_default` subdir) and new (flat) structures
+- `DATASET_SUBDIR_TO_LOADER`: added `SWaT/A1A2_full` and `SWaT/A1A2_excl22` entries
+
+**`scripts/run_all_base.py`:**
+- Updated docstring directory path (removed `_default`)
+
+**`comparison/baseline_common.py`:**
+- `run_single_baseline()`: new `results_dir_excl22` parameter for dual directory output
+
+**`comparison/run_baseline.py`:**
+- SWaT experiments: `results_dir` → `{name}_full`, `results_dir_excl22` → `{name}_excl22`
+
+**`set_guideline.md`:**
+- Updated dataset table (SWaT Subdir column shows `_full + _excl22`)
+- Updated directory structure section (removed `_default`, added SWaT dual structure)
+
+## 2026-03-04 (Update 66): Visualization y-axis unification
+
+### Summary
+
+Unified y-axis scales across subplots that display the same type of values, enabling fair visual comparison. Also removed hardcoded `ylim(0, 1)` in data_visualizer that became incorrect after z-score migration.
+
+### Changes
+
+**`mae_anomaly/visualization/best_model_visualizer.py`:**
+- `learning_curve.png`: Unified y-axis for Row 0 cols 0-1 (Teacher/Student Recon) and Row 1 cols 0-1 (Normal/Anomaly T-vs-S)
+- `best_model_reconstruction.png`: Unified y-axis within each row (cols 0-1 signal), col 2 (discrepancy) across rows
+- `best_model_detection_examples.png`: Unified y-axis across all 4 subplots (TP/TN/FP/FN)
+- `case_study_gallery.png`: Unified y-axis for col 0 (time series) and col 1 (discrepancy) across rows
+- `hardest_samples.png`: Unified y-axis for col 0 (time series) and col 1 (discrepancy) across rows
+
+**`mae_anomaly/visualization/training_visualizer.py`:**
+- `score_evolution.png`: Unified x and y axes across all epoch subplots
+- `sample_trajectories.png`: Unified y-axis across both trajectory plots
+- `metrics_evolution.png`: Unified y-axis across all 4 metric subplots
+- `late_bloomer_analysis.png`: Unified y-axis for Row 0 cols 0-2 (Anomaly Score trajectories)
+- `reconstruction_evolution.png`: Unified y-axis across epoch columns per sample row
+- `late_bloomer_case_studies.png`: Unified y-axis across epoch columns per sample row
+
+**`mae_anomaly/visualization/data_visualizer.py`:**
+- `complexity_comparison.png`: Removed hardcoded `ylim(0, 1)` (incorrect after z-score), auto-unified across 4 subplots
+- `complexity_vs_anomaly.png`: Removed hardcoded `ylim(0, 1)`, auto-unified per row
+
+### Already correctly handled (no changes needed)
+- `performance_by_anomaly_type.png`: All Detection Rate (%) subplots already share ylim(0, 110)
+- `score_distribution_by_type.png`: Already uses `sharey=True`
+- `best_model_score_contribution.png`: Row 3-4 already share computed y_max
+- `best_model_score_contribution_trends.png`: Already shares y-axis via manual computation
+
+---
+
+## 2026-03-04 (Update 65): Z-score standardization & data leakage fix
+
+### Summary
+
+Replaced min-max [0,1] normalization with per-feature z-score standardization (train-only fit). This follows the standard practice in time series anomaly detection literature (Anomaly Transformer, TimesNet) and fixes data leakage where test data statistics were leaking into normalization.
+
+### Changes
+
+**`mae_anomaly/dataset_sliding.py`:**
+- Removed `_normalize_per_feature()` function (min-max [0,1])
+- Added `_standardize_per_feature(signals, train_end)`: z-score fitted on train portion only
+- `SlidingWindowDataset.__init__()`: now applies z-score normalization before train/test split
+- Scaler statistics stored as `self.scaler_mean`, `self.scaler_std` for reproducibility
+- `SlidingWindowTimeSeriesGenerator.generate()`: removed normalization call (returns raw signals)
+- `_generate_simple_normal_series()`: removed normalization call (returns raw signals)
+
+**`mae_anomaly/datasets/loaders.py`:**
+- Removed min-max normalization from 6 loader functions:
+  - `load_swat_combined()`, `load_swat_combined_swap()`
+  - `load_wadi_14days_combined()`
+  - `load_tep()`, `load_smd()`, `load_smd_block_split()`
+- All loaders now return raw (unnormalized) signals
+- Normalization is handled uniformly by `SlidingWindowDataset`
+
+**`mae_anomaly/model.py`:**
+- Removed `torch.clamp(student_output, 0.0, 1.0)` from student decoder
+- Student output is now unbounded, matching z-score normalized input range
+
+**Documentation:**
+- `docs/DATASET.md`: Updated "Data Normalization" section
+- `docs/SMD_BLOCK_SPLIT.md`: Updated return value description
+- `docs/TEP_EXPERIMENT_GUIDE.md`: Updated preprocessing pipeline description
+
+### Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Z-score over min-max | Unbounded range matches linear output projection; anomalies naturally amplified |
+| Train-only fit | Prevents data leakage; follows community standard |
+| Normalization in SlidingWindowDataset | Single point of truth; automatic adaptation to swap experiments |
+| Remove student clamp | [0,1] clamp incompatible with z-score's unbounded range |
+
+### Impact
+
+- **All existing experiment results are invalidated** — re-training required with new normalization
+- Dynamic margin (`margin_type='dynamic'`) auto-adjusts to z-score scale — no config change needed
+- Fixed margin values (hinge/softplus) may need re-tuning for z-score scale
+
+## 2026-03-04 (Update 64): PA%K AUC F1 per-K threshold re-optimization (tadpak best_f1_w_pa)
+
+### Summary
+
+Implemented per-K threshold re-optimization for PA%K AUC F1 metric, following the original tadpak method (Kim et al., AAAI 2022). Previously, `pak_auc_f1` used a fixed pre-PA threshold across all K values. Now it sweeps thresholds per-K after PA%K segment adjustment to find the true optimal F1 at each K.
+
+### Changes
+
+**`mae_anomaly/evaluator.py`:**
+- `compute_pa_k_auc()`: Complete rewrite — computes both best (per-K optimized) and raw (fixed threshold) variants
+- Added `precision_recall_curve` to sklearn imports for PRC-based threshold candidates
+- New return keys: `pak_auc_f1_raw`, `pak_auc_f1_t_raw`, `pak_auc_precision_raw`, `pak_auc_recall_raw`
+- `pak_auc_f1` now represents best_f1_w_pa (per-K re-optimized, primary metric)
+- Updated `pak_auc_keys` in `evaluate()` and `evaluate_by_score_type()` zero_results
+
+**`mae_anomaly/config.py`:**
+- Updated `best_epoch_metric` comments to document best vs raw semantics
+
+**`scripts/run_base_experiments.py`:**
+- Teacher metric propagation now includes raw variant keys
+- `plot_epoch_metrics()` chart #3: Added PAK AUC F1 best vs raw comparison lines
+
+**`mae_anomaly/visualization/best_model_visualizer.py`:**
+- `plot_pa_k_auc_summary()` bar chart: Shows both best and raw F1/Precision/Recall
+- K-sweep curve legends: F1/Precision/Recall show both best and raw AUC values
+
+### Metric Naming Convention
+
+| Key | Meaning | Threshold |
+|-----|---------|-----------|
+| `pak_auc_f1` | best_f1_w_pa (primary) | Per-K re-optimized after PA%K adjustment |
+| `pak_auc_f1_raw` | raw_f1_w_pa (legacy) | Fixed pre-PA F1-optimal threshold |
+
+### Baseline comparison (comparison/)
+- `comparison/baselines/evaluator.py`: `compute_pak_auc()` rewritten with same best/raw logic
+- `comparison/baseline_common.py`: `_empty_excl_metrics()` zero dict updated with raw keys
+- `comparison/GUIDE.md`: results.json schema updated with raw keys
+- **All 320 baseline models across 22 experiments recomputed** with `--force`
+- `comparison/compute_pak_auc.py`, `compute_pak_auc_parallel.py`: 일회성 사후 재계산 스크립트 → `trash/0304/`로 이동 (baseline 실행 시 `baseline_common.py`가 자동으로 pak_auc 포함)
+
+### Non-PA%K metrics unchanged
+Point-level F1, precision, recall, ROC-AUC, PRC-AUC keep existing roc_curve-based threshold determination.
+
+---
+
+## 2026-03-04 (Update 63): Comprehensive documentation sync (Notion + project docs)
+
+### Summary
+
+Full documentation audit: compared every parameter in Notion page and local docs against `config.py` source of truth. Fixed all discrepancies and added discriminator content throughout.
+
+### Changes
+
+**Notion page (0 MAE 프로젝트 개요):**
+- Section 1.3: Added Adversarial Discriminator to innovations list
+- Section 3.1: Fixed `weight_decay` (1e-5→1e-3), added `margin_type='none'`, added discriminator params
+- Section 3.5: Added `margin_type='none'` to loss types, added Adversarial Discriminator Loss subsection
+- Section 3.6: Added D optimizer (TTUR) and discriminator training flow
+- Section 4.1: Complete hyperparameter table rewrite — added 15+ missing params, fixed `weight_decay`, `shared_mask_token` default, removed invalid `point_aggregation_method`
+- Section 4.2: Fixed Set B (`p10/d128` → `p20/d256/k5`), Set C suffix (`w500p10_linear_dynamic` → `w500p10e2t4d1_dynamic_linear`), added CNN Kernel column
+- Section 5: Added adversarial learning paragraph to conclusion
+
+**`docs/ARCHITECTURE.md`:**
+- Fixed `dropout` (0.1→0.15) in encoder, teacher decoder, and student decoder sections
+- Fixed `learning_rate` (2e-3→1e-3), `weight_decay` (1e-5→1e-3) in config table
+- Fixed `shared_mask_token` default label (True→False)
+- Added `margin_type='none'` to margin type options
+- Added `adv_loss_weight` to discriminator params in config table
+
+**`docs/ABLATION_STUDIES.md`:**
+- Fixed encoder layers (1→2), teacher decoder layers (2→4), student decoder layers (2→1)
+- Fixed `margin_type` default (hinge→dynamic), added 'none' option
+- Fixed `force_mask_anomaly` default (False→True)
+- Fixed `shared_mask_token` default (True→False)
+- Fixed `learning_rate` (2e-3→1e-3) in example config
+
+---
+
+## 2026-03-04 (Update 62): Add margin_type='none' (no margin, unbounded discrepancy)
+
+### Summary
+
+Adds `margin_type='none'` option that removes the margin entirely from anomaly loss. Anomaly loss becomes `-discrepancy`, pushing discrepancy higher without any cap. No unnecessary computation (no normal stats, no margin comparison).
+
+### Changes
+
+**`mae_anomaly/loss.py`:**
+- `_compute_anomaly_loss`: Added `'none'` branch returning `-discrepancy` (checked first to skip all margin logic)
+- `_compute_patch_anomaly_loss`: Same `'none'` branch for patch-level mode
+
+**`mae_anomaly/config.py`:**
+- `margin_type` comment updated to include `'none'` option
+
+---
+
+## 2026-03-04 (Update 61): Adaptive λ Formula Fix & adv_loss_weight Parameter
+
+### Summary
+
+Fixes `compute_adaptive_lambda` to match Notion-recommended formula: uses sum of individual gradient norms (`||∇normal|| + ||∇anomaly||`) instead of norm of sum (`||∇(normal + anomaly)||`), preventing partial gradient cancellation. Adds `adv_loss_weight` config parameter to control discrepancy:adversarial ratio (e.g., 0.5, 0.2, 0.1).
+
+### Changes
+
+**`mae_anomaly/loss.py`:**
+- `compute_adaptive_lambda`: Changed from 2 `autograd.grad` calls (norm of sum) to 3 separate calls (sum of individual norms)
+- Formula: `λ = (||∇_w normal_loss|| + ||∇_w anomaly_loss||) / (||∇_w adv_loss|| + δ)`
+
+**`mae_anomaly/config.py`:**
+- Added `adv_loss_weight: float = 1.0` — multiplier for adversarial loss after adaptive λ
+
+**`mae_anomaly/trainer.py`:**
+- Adversarial loss application: `loss + adv_loss_weight * λ_adv * adv_loss` (was `loss + λ_adv * adv_loss`)
+
+---
+
+## 2026-03-04 (Update 60): Discriminator LR Schedule & Metrics Tracking
+
+### Summary
+
+Adds CosineAnnealingLR scheduler for discriminator optimizer (matching main model pattern), D metrics propagation to `epoch_metrics.json`, and D metrics visualization in epoch-wise plots.
+
+### Changes
+
+**`mae_anomaly/trainer.py`:**
+- Added `CosineAnnealingLR` scheduler for D optimizer (`d_scheduler`), active from `disc_warmup_epochs` to end
+- D scheduler stepped in `train()` loop after `disc_warmup_epochs`
+
+**`scripts/run_base_experiments.py`:**
+- `_run_cpu_eval()`: Attaches D metrics (`d_loss`, `d_real_acc`, `d_fake_acc`, `adv_loss`, `adaptive_lambda`) from trainer.history to epoch_metrics entries
+- `plot_epoch_metrics()`: New 5th PNG `epoch_discriminator.png` with 3 subplots (D Loss & Accuracy, Adv Loss, Adaptive λ) when D metrics present
+
+---
+
+## 2026-03-04 (Update 59): Adversarial Discriminator for Student Decoder
+
+### Summary
+
+Optional adversarial discriminator to prevent student decoder's "noise strategy". When enabled (`use_discriminator=True`), a 1D CNN PatchDiscriminator with Spectral Normalization trains alongside the model using TTUR (Two Time-scale Update Rule). The discriminator learns to distinguish real (original) patches from fake (student-generated) patches, and the adversarial loss forces the student to produce structurally different (not just noisy) reconstructions. Adaptive λ (VQGAN-style gradient magnitude balancing) automatically scales the adversarial loss contribution. Default is disabled — existing behavior is 100% preserved.
+
+### Changes
+
+**`mae_anomaly/config.py`:**
+- Added 6 discriminator parameters: `use_discriminator`, `d_grad_student_layers`, `disc_lr_ratio`, `adaptive_lambda`, `disc_warmup_epochs`, `disc_channels`
+
+**`mae_anomaly/model.py`:**
+- Added `PatchDiscriminator` class (1D CNN + Spectral Normalization, independent from `SelfDistilledMAEMultivariate`)
+
+**`mae_anomaly/loss.py`:**
+- Extended `SelfDistillationLoss.forward()` return to 3-tuple: `(total_loss, loss_dict, loss_tensors)`
+- `loss_tensors` includes `anomaly_disc_forward` (forward-direction discrepancy, no margin reversal — for adaptive λ)
+- Added 3 module-level functions: `compute_discriminator_loss`, `compute_student_adversarial_loss`, `compute_adaptive_lambda`
+
+**`mae_anomaly/trainer.py`:**
+- Added D creation, D optimizer (TTUR: 4× LR, β1=0), `_extract_patches` helper
+- `train_epoch()` integrates D step: D trains on all masked patches → student adversarial loss on anomaly patches → adaptive λ → combined backward
+- 5 new history keys: `train_d_loss`, `train_d_real_acc`, `train_d_fake_acc`, `train_adv_loss`, `train_adaptive_lambda`
+
+**`scripts/run_base_experiments.py`:**
+- Checkpoint saves `discriminator_state_dict` when discriminator is active
+
+**`mae_anomaly/visualization/best_model_visualizer.py`:**
+- `plot_learning_curve()` expands from 2×3 to 3×3 when D metrics exist (D Loss/Accuracy, Adv Loss, Adaptive λ)
+
+---
+
+## 2026-03-03 (Update 58): Baseline PAK_AUC + Merlin Removal
+
+### Summary
+
+1. **Baseline PAK_AUC**: Computed PA%K AUC (K=0..100, trapezoidal integration) for all 15 baseline models across 22 experiments (320 models total). Results saved to each experiment's `results.json` under `pak_auc` key. Key names match MAE evaluator output for cross-system consistency.
+2. **SWaT excl_r21 PAK_AUC**: For SWaT experiments with `has_excl_r21=True`, computed PAK_AUC excluding Region #21 (the disproportionately large anomaly segment). Saved under `excl_r21.pak_auc`.
+3. **Auto-compute in future runs**: Updated `baseline_common.py` so `compute_metrics_for_results_json()` automatically computes and includes PAK_AUC for all new baseline experiments.
+4. **Merlin removal**: Deleted merlin baseline model entirely — code (`baselines/merlin/`), results (`results/WaDi_A1/merlin/`), and all references in docs/scripts.
+
+### Changes
+
+**`comparison/baselines/evaluator.py`:**
+- Added `compute_pak_auc()` — sweeps K=0..100, computes PRC-AUC/ROC-AUC/F1/F1_T/Precision/Recall per K, integrates via trapezoidal rule. Returns 6 scalars with same key names as MAE evaluator.
+
+**`comparison/baseline_common.py`:**
+- Added `compute_pak_auc` import from evaluator
+- Updated `compute_metrics_for_results_json()` to automatically compute and include `pak_auc`
+- Updated `_empty_excl_metrics()` to include empty `pak_auc` dict
+- Updated `print_status()` table: replaced PA20_PRC/PA80_PRC columns with PAK_PRC/PAK_F1
+
+**`comparison/baselines/__init__.py`:**
+- Added `compute_pak_auc` to imports and `__all__`
+- Removed merlin baseline (import, docstring, `__all__` entry)
+
+**`comparison/compute_pak_auc.py`** (NEW):
+- One-shot script to compute PAK_AUC for all existing baseline results
+- Iterates 22 experiment configs, loads scores.npy + labels, updates results.json
+- Handles SWaT excl_r21 via existing loader infrastructure
+- CLI: `--experiment`, `--dry-run`, `--force`
+
+**`comparison/GUIDE.md`:**
+- Added `pak_auc` section to results.json structure documentation
+- Updated `baseline_common.py` description to mention PAK_AUC computation
+
+**Merlin deletion:**
+- Deleted `comparison/baselines/merlin/` directory
+- Deleted `comparison/results/WaDi_A1/merlin/` directory
+- Updated `comparison/MODELS.md` (removed Section 16 + reference #9)
+- Updated `comparison/_deprecated/run_new_models.py`, `run_missing_models.py`
+
+## 2026-03-03 (Update 57): PA%K Mean-Based Refactor + PA%K AUC + Checkpoint Strategy
+
+### Summary
+
+Major pipeline refactoring with 6 changes:
+1. **PA%K voting → mean**: Removed all voting-based PA%K code. All metrics (including PA%K) now use mean-aggregated point-level scores, eliminating unnecessary computation and unifying the aggregation method.
+2. **PA%K AUC metric**: Added PA%K AUC — sweep K=0,1,...,100 for 6 metrics (PRC-AUC, ROC-AUC, F1, F1_T, Precision, Recall), integrate via trapezoidal rule. 12 new scalars per experiment (6 adaptive + 6 teacher).
+3. **Checkpoint strategy**: Changed from saving all epoch checkpoints to saving only `best_checkpoint.pt` (best PRC-AUC) + `latest_checkpoint.pt`. Added `epoch_scores/` with point-level score snapshots (npz) per eval interval.
+4. **Experiment directory suffix**: Experiment directories 20+ now use dynamic suffix from actual config overrides (`w{seq}p{patch}e{enc}t{td}d{sd}[_dynamic][_linear][_k{val}]`). Renamed 18 existing directories (Exp 22-39).
+5. **PA%K AUC visualization**: New `pa_k_auc_summary.png` showing K-sweep curves and Adaptive vs Teacher comparison. Updated PA%K visualizations to use mean-based scoring.
+6. **Config cleanup**: Removed `point_aggregation_method` field from Config dataclass.
+
+### Changes
+
+**`mae_anomaly/evaluator.py`:**
+- Deleted voting functions: `precompute_point_score_indices()`, `vectorized_voting_for_all_thresholds()`, `_compute_single_pa_k_roc()`, `_compute_voted_point_predictions()`, `_compute_pa_k_f1_at_threshold()`
+- Deleted method: `Evaluator._get_point_score_indices()`
+- Removed voting branches from `_aggregate_with_map()` and `aggregate_patch_scores_to_point_level()`
+- Added: `compute_pa_k_metrics_from_mean_scores()` — F1/Precision/Recall/F1_T at single threshold with PA%K adjustment
+- Added: `compute_pa_k_roc_prc_from_mean_scores()` — ROC-AUC/PRC-AUC via threshold sweep with PA%K adjustment
+- Added: `compute_pa_k_auc()` — sweep K=0..100, integrate 6 metrics → 6 AUC scalars
+- Updated: `evaluate()`, `evaluate_by_score_type()`, `get_performance_by_anomaly_type()` to use mean-based PA%K
+
+**`mae_anomaly/config.py`:**
+- Removed `point_aggregation_method: str = 'voting'` field
+
+**`scripts/run_base_experiments.py`:**
+- Added `make_dynamic_suffix()` for config-aware experiment directory naming
+- Checkpoint strategy: `best_checkpoint.pt` + `latest_checkpoint.pt` (no more per-epoch checkpoints)
+- Added epoch point-level score saving: `epoch_scores/epoch_{NNN}_scores.npz`
+- Added PA%K AUC extraction for teacher metrics in epoch callbacks and full evaluation
+
+**`mae_anomaly/visualization/best_model_visualizer.py`:**
+- Replaced all voting-based imports with mean-based equivalents
+- Rewrote `plot_performance_by_pa_k()` using mean aggregation
+- Rewrote `plot_roc_curve_pa80_comparison()` using mean aggregation
+- Updated `plot_performance_by_anomaly_type()` to use mean-based PA%K
+- Added `plot_pa_k_auc_summary()` visualization
+
+### New Output Keys
+
+| Key | Description |
+|-----|-------------|
+| `pak_auc_prc_auc` | PA%K AUC of PRC-AUC (adaptive) |
+| `pak_auc_roc_auc` | PA%K AUC of ROC-AUC (adaptive) |
+| `pak_auc_f1` | PA%K AUC of F1 (adaptive) |
+| `pak_auc_f1_t` | PA%K AUC of F1_T (adaptive) |
+| `pak_auc_precision` | PA%K AUC of Precision (adaptive) |
+| `pak_auc_recall` | PA%K AUC of Recall (adaptive) |
+| `teacher_pak_auc_{metric}` | Same 6 metrics for teacher-only scoring |
+
+### Directory Structure Change
+
+```
+checkpoints/
+├── best_checkpoint.pt   (best PRC-AUC epoch)
+└── latest_checkpoint.pt (last evaluated epoch)
+epoch_scores/
+└── epoch_{NNN}_scores.npz  (adaptive_score, teacher_recon_error, discrepancy_error)
+```
+
+---
+
+## 2026-02-27 (Update 56): Best Epoch Model Selection + MAE-Aligned Training
+
+### Summary
+
+Two major changes:
+1. **Best epoch model selection**: `best_model.pt`, `best_model_detailed.csv`, and all `visualization/best_model/` outputs now use the **best epoch by PRC-AUC** instead of the last training epoch. After training completes, the best epoch is identified from `epoch_metrics`, its checkpoint is loaded, and all subsequent evaluation/visualization uses that model.
+2. **MAE-aligned training** (from Update 55b, applied to Exp 18-20): 8 modifications to match original MAE paper settings — Pre-Norm, GELU, eps=1e-6, mask token init, xavier init, Adam beta2=0.95, bias/norm WD separation, LR warmup+cosine annealing.
+
+### Changes
+
+**`scripts/run_base_experiments.py`:**
+- After training, finds best epoch from `epoch_metrics_list` by max PRC-AUC
+- Loads best epoch checkpoint from `checkpoints/epoch_{N:03d}.pt` and replaces model state
+- `best_model.pt` now includes `best_epoch` and `best_prc_auc` fields
+- All GPU inference (patch scores, viz data collection) uses best epoch model
+- Summary output shows `best_epoch` alongside final PRC and F1
+- `experiment_metadata.json` timing dict includes `best_epoch` and `best_prc_auc`
+
+**`mae_anomaly/model.py`** (MAE-aligned):
+- All TransformerEncoderLayer/DecoderLayer: `norm_first=True`, `activation='gelu'`, `layer_norm_eps=1e-6`
+- All TransformerEncoder/Decoder: Final `LayerNorm(eps=1e-6)` added
+- Mask token init: `torch.zeros` + `nn.init.normal_(std=0.02)` (was `torch.randn`, std=1.0)
+- Weight init: `xavier_uniform_` for Linear, `constant_` for LayerNorm (via `self.apply(_init_weights)`)
+
+**`mae_anomaly/trainer.py`** (MAE-aligned):
+- AdamW `betas=(0.9, 0.95)` (was PyTorch default 0.999)
+- Bias/Norm weight decay separation: `param.ndim <= 1` → `weight_decay=0.0`
+- LR warmup: `LinearLR(start_factor=1e-4)` → `CosineAnnealingLR` via `SequentialLR`
+
+**Documentation:**
+- `set_guideline.md`: Updated `best_model.pt` and `best_model_detailed.csv` descriptions
+- `docs/VISUALIZATIONS.md`: Updated best_model section description
+
 ## 2026-02-26 (Update 55): patch_batch_size OOM Fix for Large d_model
 
 ### Summary

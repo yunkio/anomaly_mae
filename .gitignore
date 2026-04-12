@@ -44,21 +44,46 @@ scripts/visualize_all.py
 # Ablation experiments (exclude from git)
 scripts/ablation/
 scripts/run_*.py
+scripts/run_*.sh
 scripts/eval_*.py
 scripts/preprocess_*.py
+scripts/prepare_*.py
 scripts/profile_*.py
 scripts/rerun_*.py
+scripts/rerun_*.sh
+scripts/resume_*.sh
+scripts/retrain_*.sh
+scripts/aggregate_*.py
+scripts/patch_*.py
+scripts/validate_*.py
 
 # Comparison framework (exclude from git)
 comparison/
 
-# Documentation (exclude most - keep only README.md)
-docs/
+# Documentation (exclude generated artifacts, keep markdown docs)
+docs/ablation/
+docs/report_images/
 ablation_guideline.md
 
 # Temporary files
 temp/
 .trash/
+trash/
+
+# Research proposal (separate from codebase)
+ResearchProposal/
+
+# Reference papers
+references/
+
+# Poe config
+.poe/
+
+# Experiment queue configs (generated per-run)
+configs/
+
+# Backup files
+*.bak
 
 # Dataset files (large binary files)
 dataset/

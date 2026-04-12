@@ -30,8 +30,8 @@ def load_swat_combined():
         signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
     """
     data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'SWaT', 'SWaT.A1 & A2_Dec 2015')
-    a1_path = os.path.join(data_dir, 'SWaT_A1_normal_preprocessed.csv')
-    a2_path = os.path.join(data_dir, 'SWaT_A2_attack_preprocessed.csv')
+    a1_path = os.path.join(data_dir, 'SWaT_A1_normal_raw.csv')
+    a2_path = os.path.join(data_dir, 'SWaT_A2_attack_raw.csv')
 
     print(f"\n{'='*60}")
     print(f"Loading SWaT A1 (normal) + A2 (attack) data")
@@ -45,6 +45,7 @@ def load_swat_combined():
     # Load A2 (attack)
     print(f"  Loading A2 attack: {a2_path}")
     df_a2 = pd.read_csv(a2_path)
+    df_a2.columns = df_a2.columns.str.strip()  # Raw CSV has leading spaces in some columns
     print(f"    Shape: {df_a2.shape}")
 
     # Feature columns (all except 'label')
@@ -78,13 +79,9 @@ def load_swat_combined():
         all_features_raw = all_features_raw[:, ~constant_mask]
         feature_cols = [f for f, m in zip(feature_cols, constant_mask) if not m]
 
-    # Re-normalize combined data (min-max)
-    print("  Re-normalizing combined data (min-max)...")
-    mins = np.min(all_features_raw, axis=0, keepdims=True)
-    maxs = np.max(all_features_raw, axis=0, keepdims=True)
-    ranges = maxs - mins
-    ranges[ranges == 0] = 1
-    all_features = ((all_features_raw - mins) / ranges).astype(np.float32)
+    # Return raw (unnormalized) features.
+    # Normalization is handled by SlidingWindowDataset (train-only fit z-score).
+    all_features = all_features_raw.astype(np.float32)
 
     # Train/Test split: Train = A1 + front 50% A2, Test = back 50% A2
     train_len = n_a1 + n_a2 // 2
@@ -110,6 +107,9 @@ def load_swat_combined():
     train_labels = all_labels[:split_idx]
     test_labels = all_labels[split_idx:]
 
+    # run_boundaries: A1 and A2 are from different recording periods
+    run_boundaries = [n_a1]
+
     data_info = {
         'n_a1': n_a1,
         'n_a2': n_a2,
@@ -125,12 +125,14 @@ def load_swat_combined():
         'train_attack_ratio': float(np.mean(train_labels)),
         'test_attack_ratio': float(np.mean(test_labels)),
         'n_anomaly_regions_total': len(anomaly_regions),
+        'run_boundaries': run_boundaries,
     }
 
     print(f"  Train anomaly ratio: {data_info['train_attack_ratio']:.2%}")
     print(f"  Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
     print(f"  Features: {data_info['n_features']}")
     print(f"  Anomaly regions: {len(anomaly_regions)}")
+    print(f"  Run boundaries: {run_boundaries} (A1/A2 boundary)")
 
     return all_features, all_labels, anomaly_regions, feature_cols, train_ratio, data_info
 
@@ -149,8 +151,8 @@ def load_swat_combined_swap():
         signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
     """
     data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'SWaT', 'SWaT.A1 & A2_Dec 2015')
-    a1_path = os.path.join(data_dir, 'SWaT_A1_normal_preprocessed.csv')
-    a2_path = os.path.join(data_dir, 'SWaT_A2_attack_preprocessed.csv')
+    a1_path = os.path.join(data_dir, 'SWaT_A1_normal_raw.csv')
+    a2_path = os.path.join(data_dir, 'SWaT_A2_attack_raw.csv')
 
     print(f"\n{'='*60}")
     print(f"Loading SWaT A1 (normal) + A2 (attack) data [SWAP]")
@@ -164,6 +166,7 @@ def load_swat_combined_swap():
     # Load A2 (attack)
     print(f"  Loading A2 attack: {a2_path}")
     df_a2 = pd.read_csv(a2_path)
+    df_a2.columns = df_a2.columns.str.strip()  # Raw CSV has leading spaces in some columns
     print(f"    Shape: {df_a2.shape}")
 
     # Feature columns (all except 'label')
@@ -209,13 +212,9 @@ def load_swat_combined_swap():
         all_features_raw = all_features_raw[:, ~constant_mask]
         feature_cols = [f for f, m in zip(feature_cols, constant_mask) if not m]
 
-    # Re-normalize combined data (min-max)
-    print("  Re-normalizing combined data (min-max)...")
-    mins = np.min(all_features_raw, axis=0, keepdims=True)
-    maxs = np.max(all_features_raw, axis=0, keepdims=True)
-    ranges = maxs - mins
-    ranges[ranges == 0] = 1
-    all_features = ((all_features_raw - mins) / ranges).astype(np.float32)
+    # Return raw (unnormalized) features.
+    # Normalization is handled by SlidingWindowDataset (train-only fit z-score).
+    all_features = all_features_raw.astype(np.float32)
 
     # Train/Test split: same index as original (n_a1 + n_a2 // 2)
     # But now train has A1 + A2_back, test has A2_front
@@ -242,6 +241,10 @@ def load_swat_combined_swap():
     train_labels = all_labels[:split_idx]
     test_labels = all_labels[split_idx:]
 
+    # run_boundaries: A1 and A2_swapped are from different recording periods.
+    # Also A2_back and A2_front are non-contiguous within A2_swapped.
+    run_boundaries = [n_a1, n_a1 + (n_a2 - mid_a2)]
+
     data_info = {
         'n_a1': n_a1,
         'n_a2': n_a2,
@@ -259,12 +262,14 @@ def load_swat_combined_swap():
         'n_anomaly_regions_total': len(anomaly_regions),
         'swap': True,
         'r21_in_test': False,  # R#21 in back 50% of A2 → training
+        'run_boundaries': run_boundaries,
     }
 
     print(f"  Train anomaly ratio: {data_info['train_attack_ratio']:.2%}")
     print(f"  Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
     print(f"  Features: {data_info['n_features']}")
     print(f"  Anomaly regions: {len(anomaly_regions)}")
+    print(f"  Run boundaries: {run_boundaries} (A1/A2_back, A2_back/A2_front)")
     print(f"  R#21 in test: {data_info['r21_in_test']}")
 
     return all_features, all_labels, anomaly_regions, feature_cols, train_ratio, data_info
@@ -309,7 +314,8 @@ def load_wadi_14days_combined(scenario: str):
     attack_feature_cols = [c for c in df_attack.columns if c != 'label']
     attack_labels = df_attack['label'].values.astype(np.int64)
 
-    # Note: preprocessed attack data is already normalized to [0, 1]
+    # Note: preprocessed attack data may have its own scaling.
+    # Final z-score normalization is applied by SlidingWindowDataset (train-only fit).
     # We need to load 14days raw and match these columns
 
     # Load 14days raw data
@@ -363,13 +369,9 @@ def load_wadi_14days_combined(scenario: str):
         df_temp = df_temp.ffill().bfill()
         all_features_raw = df_temp.values.astype(np.float32)
 
-    # Min-max normalization on combined data
-    print("  Applying min-max normalization on combined data...")
-    mins = np.min(all_features_raw, axis=0, keepdims=True)
-    maxs = np.max(all_features_raw, axis=0, keepdims=True)
-    ranges = maxs - mins
-    ranges[ranges == 0] = 1  # Avoid division by zero
-    all_features = (all_features_raw - mins) / ranges
+    # Return raw (unnormalized) features.
+    # Normalization is handled by SlidingWindowDataset (train-only fit z-score).
+    all_features = all_features_raw.astype(np.float32)
 
     # Compute train_ratio: train = 14days + front 50% attack, test = back 50% attack
     n_14days = len(features_14days_raw)
@@ -402,6 +404,9 @@ def load_wadi_14days_combined(scenario: str):
     train_labels = all_labels[:split_idx]
     test_labels = all_labels[split_idx:]
 
+    # run_boundaries: 14days and attack are from different recording periods
+    run_boundaries = [n_14days]
+
     data_info = {
         'n_14days': n_14days,
         'n_attack': n_attack,
@@ -417,11 +422,13 @@ def load_wadi_14days_combined(scenario: str):
         'train_attack_ratio': float(np.mean(train_labels)),
         'test_attack_ratio': float(np.mean(test_labels)),
         'n_anomaly_regions_total': len(anomaly_regions),
+        'run_boundaries': run_boundaries,
     }
 
     print(f"\n  Train anomaly ratio: {data_info['train_attack_ratio']:.2%}")
     print(f"  Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
     print(f"  Features: {data_info['n_features']}")
+    print(f"  Run boundaries: {run_boundaries} (14days/attack boundary)")
 
     return all_features, all_labels, anomaly_regions, matching_features, train_ratio, data_info
 
@@ -435,7 +442,7 @@ def load_wadi_a2(preprocessed_path: str):
     """Load preprocessed WaDi A2 dataset.
 
     Returns:
-        signals: (N, num_features) float32 array, normalized to [0,1]
+        signals: (N, num_features) float32 array (preprocessed CSV values)
         point_labels: (N,) int64 array (0=normal, 1=attack)
         anomaly_regions: List[AnomalyRegion]
         feature_names: List[str]
@@ -811,13 +818,9 @@ def load_tep(
         df_temp = df_temp.ffill().bfill()
         all_signals_raw = df_temp.values.astype(np.float32)
 
-    # ---- Min-max normalization ----
-    print("  Applying min-max normalization...")
-    mins = np.min(all_signals_raw, axis=0, keepdims=True)
-    maxs = np.max(all_signals_raw, axis=0, keepdims=True)
-    ranges = maxs - mins
-    ranges[ranges == 0] = 1
-    all_signals = ((all_signals_raw - mins) / ranges).astype(np.float32)
+    # Return raw (unnormalized) signals.
+    # Normalization is handled by SlidingWindowDataset (train-only fit z-score).
+    all_signals = all_signals_raw.astype(np.float32)
 
     # ---- Compute statistics ----
     split_idx = int(n_total * train_ratio)
@@ -1006,13 +1009,9 @@ def load_smd(
         df_temp = df_temp.ffill().bfill()
         all_signals_raw = df_temp.values.astype(np.float32)
 
-    # ---- Min-max normalization ----
-    print("  Applying min-max normalization...")
-    mins = np.min(all_signals_raw, axis=0, keepdims=True)
-    maxs = np.max(all_signals_raw, axis=0, keepdims=True)
-    ranges = maxs - mins
-    ranges[ranges == 0] = 1
-    all_signals = ((all_signals_raw - mins) / ranges).astype(np.float32)
+    # Return raw (unnormalized) signals.
+    # Normalization is handled by SlidingWindowDataset (train-only fit z-score).
+    all_signals = all_signals_raw.astype(np.float32)
 
     # ---- Compute statistics ----
     test_labels_split = all_labels[total_train:]
@@ -1113,6 +1112,123 @@ def _get_anomaly_regions_local(labels: np.ndarray) -> list:
     if in_region:
         regions.append((start, len(labels) - 1))
     return regions
+
+
+def load_smd_simple(machine: str):
+    """Load a single SMD machine with simple train/test split.
+
+    Same pattern as SWaT: Train = original train file (all normal) + front 50%
+    of test file. Test = back 50% of test file.
+
+    Args:
+        machine: Machine ID (e.g. 'machine-1-1').
+
+    Returns:
+        signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+    """
+    data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'SMD')
+
+    print(f"\n{'='*60}")
+    print(f"Loading SMD simple split: {machine}")
+    print(f"{'='*60}")
+
+    # Load train file (all normal)
+    train_path = os.path.join(data_dir, 'train', f'{machine}.txt')
+    train_data = np.loadtxt(train_path, delimiter=',', dtype=np.float32)
+    train_labels = np.zeros(len(train_data), dtype=np.int64)
+    print(f"  Train file: {len(train_data):,} samples, {train_data.shape[1]} features (all normal)")
+
+    # Load test file (contains normal + anomaly)
+    test_path = os.path.join(data_dir, 'test', f'{machine}.txt')
+    label_path = os.path.join(data_dir, 'test_label', f'{machine}.txt')
+    test_data = np.loadtxt(test_path, delimiter=',', dtype=np.float32)
+    test_labels = np.loadtxt(label_path, dtype=np.int64)
+    print(f"  Test file:  {len(test_data):,} samples, {test_data.shape[1]} features")
+
+    # Split test file 50/50
+    test_split = len(test_data) // 2
+    test_front = test_data[:test_split]
+    test_front_labels = test_labels[:test_split]
+    test_back = test_data[test_split:]
+    test_back_labels = test_labels[test_split:]
+
+    # Concatenate: [train_file | test_front_50%] + [test_back_50%]
+    all_signals = np.concatenate([train_data, test_front, test_back], axis=0)
+    all_labels = np.concatenate([train_labels, test_front_labels, test_back_labels], axis=0)
+    num_features = all_signals.shape[1]
+
+    total_train = len(train_data) + len(test_front)
+    total_test = len(test_back)
+    n_total = total_train + total_test
+    train_ratio = total_train / n_total
+
+    # Feature names
+    feature_names = [f'feature_{i}' for i in range(num_features)]
+
+    # Remove constant columns
+    stds = np.std(all_signals, axis=0)
+    constant_mask = stds == 0
+    n_constant = int(np.sum(constant_mask))
+    if n_constant > 0:
+        print(f"  Removing {n_constant} constant columns")
+        all_signals = all_signals[:, ~constant_mask]
+        feature_names = [f for f, m in zip(feature_names, constant_mask) if not m]
+        num_features = len(feature_names)
+
+    # Handle NaN
+    nan_count = int(np.sum(np.isnan(all_signals)))
+    if nan_count > 0:
+        print(f"  Handling {nan_count:,} NaN values (forward-fill + backward-fill)")
+        df_temp = pd.DataFrame(all_signals)
+        df_temp = df_temp.ffill().bfill()
+        all_signals = df_temp.values.astype(np.float32)
+
+    all_signals = all_signals.astype(np.float32)
+
+    # Compute anomaly regions on concatenated data
+    anomaly_regions = []
+    is_atk = (all_labels == 1).astype(int)
+    diff = np.diff(is_atk, prepend=0, append=0)
+    starts = np.where(diff == 1)[0]
+    ends = np.where(diff == -1)[0]
+    for s, e in zip(starts, ends):
+        anomaly_regions.append(AnomalyRegion(start=int(s), end=int(e), anomaly_type=1))
+
+    # Statistics
+    train_anom = int(np.sum(all_labels[:total_train]))
+    test_anom = int(np.sum(all_labels[total_train:]))
+
+    # run_boundaries: orig_train and test_front are from different recording periods.
+    # Windows must not span this boundary.
+    run_boundaries = [len(train_data)]
+
+    data_info = {
+        'dataset_type': 'smd_simple',
+        'machine': machine,
+        'n_total': n_total,
+        'n_features': num_features,
+        'train_len': total_train,
+        'test_len': total_test,
+        'train_ratio': train_ratio,
+        'train_file_len': len(train_data),
+        'test_file_len': len(test_data),
+        'test_split_point': test_split,
+        'train_attack_ratio': float(np.mean(all_labels[:total_train])) if total_train > 0 else 0.0,
+        'test_attack_ratio': float(np.mean(all_labels[total_train:])) if total_test > 0 else 0.0,
+        'run_boundaries': run_boundaries,
+    }
+
+    print(f"\n  Train/Test split:")
+    print(f"    Train: {total_train:,} = {len(train_data):,}(orig train) + {len(test_front):,}(test front 50%)")
+    print(f"      anomaly: {train_anom:,} ({data_info['train_attack_ratio']:.2%})")
+    print(f"    Test:  {total_test:,} (test back 50%)")
+    print(f"      anomaly: {test_anom:,} ({data_info['test_attack_ratio']:.2%})")
+    print(f"    train_ratio: {train_ratio:.4f}")
+    print(f"  Anomaly regions: {len(anomaly_regions)}")
+    print(f"  Run boundaries: {run_boundaries} (orig_train / test_front boundary)")
+    print(f"  Features: {num_features}")
+
+    return all_signals, all_labels, anomaly_regions, feature_names, train_ratio, data_info
 
 
 def load_smd_block_split(
@@ -1257,13 +1373,9 @@ def load_smd_block_split(
         df_temp = df_temp.ffill().bfill()
         all_signals_raw = df_temp.values.astype(np.float32)
 
-    # ---- Min-max normalization ----
-    print("  Applying min-max normalization...")
-    mins = np.min(all_signals_raw, axis=0, keepdims=True)
-    maxs = np.max(all_signals_raw, axis=0, keepdims=True)
-    ranges = maxs - mins
-    ranges[ranges == 0] = 1
-    all_signals = ((all_signals_raw - mins) / ranges).astype(np.float32)
+    # Return raw (unnormalized) signals.
+    # Normalization is handled by SlidingWindowDataset (train-only fit z-score).
+    all_signals = all_signals_raw.astype(np.float32)
 
     # ---- Compute statistics ----
     train_anom_pts = int(np.sum(train_labels_concat))
@@ -1304,19 +1416,302 @@ def load_smd_block_split(
     return all_signals, all_labels, anomaly_regions, feature_names, train_ratio, data_info
 
 
-# Dataset Loader Registry
-_WADI_A1_PATH = str(PROJECT_ROOT / 'dataset' / 'WaDi' / 'WADI.A1_9 Oct 2017' / 'WADI_attackdata_preprocessed.csv')
-_WADI_A2_PATH = str(PROJECT_ROOT / 'dataset' / 'WaDi' / 'WADI.A2_19 Nov 2019' / 'WADI_attackdataLABLE_preprocessed.csv')
+# =============================================================================
+# Raw Dataset Loaders (no pre-normalization, all features preserved)
+# =============================================================================
 
+def _load_raw_csv(path: str):
+    """Load a raw CSV file (features + label column).
+
+    Returns:
+        features: (N, F) float32 array
+        labels: (N,) int64 array
+        feature_names: list of str
+    """
+    df = pd.read_csv(path)
+    feature_cols = [c for c in df.columns if c != 'label']
+    features = df[feature_cols].values.astype(np.float32)
+    labels = df['label'].values.astype(np.int64)
+    return features, labels, feature_cols
+
+
+def _compute_anomaly_regions(labels: np.ndarray):
+    """Extract contiguous anomaly regions from binary labels."""
+    is_atk = (labels == 1).astype(int)
+    diff = np.diff(is_atk, prepend=0, append=0)
+    starts = np.where(diff == 1)[0]
+    ends = np.where(diff == -1)[0]
+    return [AnomalyRegion(start=int(s), end=int(e), anomaly_type=1)
+            for s, e in zip(starts, ends)]
+
+
+def load_swat_a1a2_raw(swap: bool = False):
+    """Load SWaT A1+A2 from raw CSV (all features, no normalization).
+
+    Train = A1 entire + front/back 50% of A2
+    Test = back/front 50% of A2
+
+    Args:
+        swap: If True, back 50% A2 → train, front 50% → test.
+    """
+    data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'SWaT', 'SWaT.A1 & A2_Dec 2015')
+    swap_str = ' [SWAP]' if swap else ''
+    print(f"\n{'='*60}")
+    print(f"Loading SWaT A1+A2 raw{swap_str}")
+    print(f"{'='*60}")
+
+    features_a1, labels_a1, feat_cols = _load_raw_csv(
+        os.path.join(data_dir, 'SWaT_A1_normal_raw.csv'))
+    features_a2, labels_a2, _ = _load_raw_csv(
+        os.path.join(data_dir, 'SWaT_A2_attack_raw.csv'))
+
+    n_a1, n_a2 = len(features_a1), len(features_a2)
+    mid_a2 = n_a2 // 2
+
+    print(f"  A1: {n_a1:,} (all normal), A2: {n_a2:,} "
+          f"(attack={np.sum(labels_a2==1):,})")
+
+    if swap:
+        features_a2 = np.concatenate([features_a2[mid_a2:], features_a2[:mid_a2]])
+        labels_a2 = np.concatenate([labels_a2[mid_a2:], labels_a2[:mid_a2]])
+
+    all_features = np.concatenate([features_a1, features_a2], axis=0)
+    all_labels = np.concatenate([labels_a1, labels_a2], axis=0)
+    n_total = n_a1 + n_a2
+
+    train_len = n_a1 + mid_a2
+    train_ratio = train_len / n_total
+    anomaly_regions = _compute_anomaly_regions(all_labels)
+
+    split_idx = int(n_total * train_ratio)
+    train_labels = all_labels[:split_idx]
+    test_labels = all_labels[split_idx:]
+
+    # run_boundaries: A1 and A2 are from different recording periods
+    if swap:
+        # [A1 | A2_back | A2_front]: boundaries at A1/A2_back and A2_back/A2_front
+        run_boundaries = [n_a1, n_a1 + (n_a2 - mid_a2)]
+    else:
+        # [A1 | A2]: boundary at A1/A2
+        run_boundaries = [n_a1]
+
+    data_info = {
+        'n_a1': n_a1, 'n_a2': n_a2, 'n_total': n_total,
+        'n_features': all_features.shape[1],
+        'train_len': train_len, 'test_len': n_total - train_len,
+        'train_ratio': train_ratio,
+        'train_normal': int(np.sum(train_labels == 0)),
+        'train_attack': int(np.sum(train_labels == 1)),
+        'test_normal': int(np.sum(test_labels == 0)),
+        'test_attack': int(np.sum(test_labels == 1)),
+        'train_attack_ratio': float(np.mean(train_labels)),
+        'test_attack_ratio': float(np.mean(test_labels)),
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'swap': swap, 'raw': True,
+        'run_boundaries': run_boundaries,
+    }
+
+    print(f"  Combined: {n_total:,} x {all_features.shape[1]} features")
+    print(f"  Train: {train_len:,}, Test: {n_total - train_len:,}")
+    print(f"  Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
+    print(f"  Anomaly regions: {len(anomaly_regions)}")
+    print(f"  Run boundaries: {run_boundaries}")
+
+    return all_features, all_labels, anomaly_regions, feat_cols, train_ratio, data_info
+
+
+def load_swat_a4a5_raw():
+    """Load SWaT A4+A5 from raw CSV (77 features, no normalization).
+
+    50:50 train/test split.
+    """
+    data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'SWaT', 'SWaT.A4 & A5_Jul 2019')
+    print(f"\n{'='*60}")
+    print(f"Loading SWaT A4+A5 raw")
+    print(f"{'='*60}")
+
+    features, labels, feat_cols = _load_raw_csv(
+        os.path.join(data_dir, 'SWaT_A4A5_raw.csv'))
+    n_total = len(features)
+    train_ratio = 0.5
+    anomaly_regions = _compute_anomaly_regions(labels)
+
+    split_idx = int(n_total * train_ratio)
+    data_info = {
+        'n_total': n_total, 'n_features': features.shape[1],
+        'train_len': split_idx, 'test_len': n_total - split_idx,
+        'train_ratio': train_ratio,
+        'train_attack_ratio': float(np.mean(labels[:split_idx])),
+        'test_attack_ratio': float(np.mean(labels[split_idx:])),
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'raw': True,
+    }
+
+    print(f"  {n_total:,} x {features.shape[1]} features")
+    print(f"  Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
+
+    return features, labels, anomaly_regions, feat_cols, train_ratio, data_info
+
+
+def load_swat_a6_raw():
+    """Load SWaT A6 from raw CSV (81 features, no normalization).
+
+    50:50 train/test split.
+    """
+    data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'SWaT', 'SWaT.A6_Dec 2019')
+    print(f"\n{'='*60}")
+    print(f"Loading SWaT A6 raw")
+    print(f"{'='*60}")
+
+    features, labels, feat_cols = _load_raw_csv(
+        os.path.join(data_dir, 'SWaT_A6_raw.csv'))
+    n_total = len(features)
+    train_ratio = 0.5
+    anomaly_regions = _compute_anomaly_regions(labels)
+
+    split_idx = int(n_total * train_ratio)
+    data_info = {
+        'n_total': n_total, 'n_features': features.shape[1],
+        'train_len': split_idx, 'test_len': n_total - split_idx,
+        'train_ratio': train_ratio,
+        'train_attack_ratio': float(np.mean(labels[:split_idx])),
+        'test_attack_ratio': float(np.mean(labels[split_idx:])),
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'raw': True,
+    }
+
+    print(f"  {n_total:,} x {features.shape[1]} features")
+    print(f"  Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
+
+    return features, labels, anomaly_regions, feat_cols, train_ratio, data_info
+
+
+def load_wadi_attack_raw(scenario: str, swap: bool = False):
+    """Load WaDi attack data from raw CSV (123 features, 50:50 split).
+
+    Args:
+        scenario: 'A1' or 'A2'
+        swap: If True, back 50% → train, front 50% → test.
+    """
+    if scenario == 'A1':
+        path = os.path.join(PROJECT_ROOT, 'dataset', 'WaDi',
+                            'WADI.A1_9 Oct 2017', 'WADI_A1_attack_raw.csv')
+    else:
+        path = os.path.join(PROJECT_ROOT, 'dataset', 'WaDi',
+                            'WADI.A2_19 Nov 2019', 'WADI_A2_attack_raw.csv')
+
+    swap_str = ' [SWAP]' if swap else ''
+    print(f"\n{'='*60}")
+    print(f"Loading WaDi {scenario} attack raw (50:50){swap_str}")
+    print(f"{'='*60}")
+
+    features, labels, feat_cols = _load_raw_csv(path)
+    n_total = len(features)
+    mid = n_total // 2
+
+    if swap:
+        features = np.concatenate([features[mid:], features[:mid]], axis=0)
+        labels = np.concatenate([labels[mid:], labels[:mid]], axis=0)
+
+    train_ratio = 0.5
+    anomaly_regions = _compute_anomaly_regions(labels)
+
+    split_idx = int(n_total * train_ratio)
+    data_info = {
+        'n_total': n_total, 'n_features': features.shape[1],
+        'train_len': split_idx, 'test_len': n_total - split_idx,
+        'train_ratio': train_ratio,
+        'train_attack_ratio': float(np.mean(labels[:split_idx])),
+        'test_attack_ratio': float(np.mean(labels[split_idx:])),
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'swap': swap, 'raw': True,
+    }
+
+    print(f"  {n_total:,} x {features.shape[1]} features")
+    print(f"  Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
+
+    return features, labels, anomaly_regions, feat_cols, train_ratio, data_info
+
+
+def load_wadi_14days_raw(scenario: str):
+    """Load WaDi 14days + attack combined from raw CSV.
+
+    Train = 14days + front 50% attack, Test = back 50% attack.
+    All features preserved (123), no normalization.
+    """
+    if scenario == 'A1':
+        data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'WaDi', 'WADI.A1_9 Oct 2017')
+        days14_path = os.path.join(data_dir, 'WADI_A1_14days_raw.csv')
+        attack_path = os.path.join(data_dir, 'WADI_A1_attack_raw.csv')
+    else:
+        data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'WaDi', 'WADI.A2_19 Nov 2019')
+        days14_path = os.path.join(data_dir, 'WADI_A2_14days_raw.csv')
+        attack_path = os.path.join(data_dir, 'WADI_A2_attack_raw.csv')
+
+    print(f"\n{'='*60}")
+    print(f"Loading WaDi {scenario} 14days + attack raw")
+    print(f"{'='*60}")
+
+    features_14d, labels_14d, feat_cols = _load_raw_csv(days14_path)
+    features_atk, labels_atk, _ = _load_raw_csv(attack_path)
+
+    n_14d = len(features_14d)
+    n_atk = len(features_atk)
+
+    all_features = np.concatenate([features_14d, features_atk], axis=0)
+    all_labels = np.concatenate([labels_14d, labels_atk], axis=0)
+    n_total = n_14d + n_atk
+
+    train_len = n_14d + n_atk // 2
+    train_ratio = train_len / n_total
+    anomaly_regions = _compute_anomaly_regions(all_labels)
+
+    split_idx = int(n_total * train_ratio)
+    train_labels = all_labels[:split_idx]
+    test_labels = all_labels[split_idx:]
+
+    # run_boundaries: 14days and attack are from different recording periods
+    run_boundaries = [n_14d]
+
+    data_info = {
+        'n_14days': n_14d, 'n_attack': n_atk, 'n_total': n_total,
+        'n_features': all_features.shape[1],
+        'train_len': train_len, 'test_len': n_total - train_len,
+        'train_ratio': train_ratio,
+        'train_normal': int(np.sum(train_labels == 0)),
+        'train_attack': int(np.sum(train_labels == 1)),
+        'test_normal': int(np.sum(test_labels == 0)),
+        'test_attack': int(np.sum(test_labels == 1)),
+        'train_attack_ratio': float(np.mean(train_labels)),
+        'test_attack_ratio': float(np.mean(test_labels)),
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'run_boundaries': run_boundaries,
+        'raw': True,
+    }
+
+    print(f"  14days: {n_14d:,}, Attack: {n_atk:,}")
+    print(f"  Combined: {n_total:,} x {all_features.shape[1]} features")
+    print(f"  Train: {train_len:,}, Test: {n_total - train_len:,}")
+    print(f"  Test anomaly ratio: {data_info['test_attack_ratio']:.2%}")
+    print(f"  Run boundaries: {run_boundaries} (14days/attack boundary)")
+
+    return all_features, all_labels, anomaly_regions, feat_cols, train_ratio, data_info
+
+
+# Dataset Loader Registry
 DATASET_LOADERS = {
+    # SWaT (raw CSV, all features)
+    'SWaT_A1A2': lambda: load_swat_a1a2_raw(swap=False),
+    'SWaT_A1A2_swap': lambda: load_swat_a1a2_raw(swap=True),
+    'SWaT_A4A5': load_swat_a4a5_raw,
+    'SWaT_A6': load_swat_a6_raw,
+    # Legacy SWaT preprocessed
     'swat_A1A2': load_swat_combined,
     'swat_A1A2_swap': load_swat_combined_swap,
-    'wadi_A1': lambda: load_wadi_attack_5050(_WADI_A1_PATH, swap=False),
-    'wadi_A1_swap': lambda: load_wadi_attack_5050(_WADI_A1_PATH, swap=True),
-    'wadi_A2': lambda: load_wadi_attack_5050(_WADI_A2_PATH, swap=False),
-    'wadi_A2_swap': lambda: load_wadi_attack_5050(_WADI_A2_PATH, swap=True),
-    'wadi_14days_A1': lambda: load_wadi_14days_combined('A1'),
-    'wadi_14days_A2': lambda: load_wadi_14days_combined('A2'),
+    # WaDi (14days normal + attack raw)
+    'WaDi_14days_A1': lambda: load_wadi_14days_raw('A1'),
+    'WaDi_14days_A2': lambda: load_wadi_14days_raw('A2'),
+    # Simulation
     'simulation': load_simulation,
     'simulation_complex': load_simulation_complex,
     # TEP dataset loaders
@@ -1332,10 +1727,14 @@ del _fn  # Clean up loop variable
 for _mn in SMD_MACHINE_NAMES:
     DATASET_LOADERS[f'smd_{_mn}'] = (lambda mn=_mn: load_smd(machines=[mn]))
 del _mn  # Clean up loop variable
-# Add per-machine SMD K=6 block split loaders (parity 0 and 1)
+# Add per-machine SMD K=6 block split loaders (parity 0 and 1) — legacy
 for _mn in SMD_MACHINE_NAMES:
     DATASET_LOADERS[f'smd_k6_{_mn}'] = (lambda mn=_mn: load_smd_block_split(machine=mn, k_blocks=6, parity=0))
     DATASET_LOADERS[f'smd_k6_{_mn}_swap'] = (lambda mn=_mn: load_smd_block_split(machine=mn, k_blocks=6, parity=1))
+del _mn  # Clean up loop variable
+# Add per-machine SMD simple split loaders (train + front 50% test / back 50% test)
+for _mn in SMD_MACHINE_NAMES:
+    DATASET_LOADERS[f'smd_simple_{_mn}'] = (lambda mn=_mn: load_smd_simple(machine=mn))
 del _mn  # Clean up loop variable
 
 

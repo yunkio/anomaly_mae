@@ -9,7 +9,14 @@ from torch.amp import autocast, GradScaler
 from typing import Dict
 from tqdm import tqdm
 
-from .loss import SelfDistillationLoss
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+
+from .loss import (
+    SelfDistillationLoss,
+    compute_discriminator_loss,
+    compute_student_adversarial_loss,
+    compute_adaptive_lambda,
+)
 
 
 class Trainer:
@@ -29,22 +36,153 @@ class Trainer:
         self.test_loader = test_loader
         self.verbose = verbose
 
+        # --- Config validation ---
+        # 1. teacher_only_warmup_epochs auto
+        if config.teacher_only_warmup_epochs < 0:
+            config.teacher_only_warmup_epochs = config.num_epochs // 2
+            if verbose:
+                print(f"  [Config] teacher_only_warmup_epochs = "
+                      f"{config.teacher_only_warmup_epochs} (auto: num_epochs // 2)")
+
+        # 2. freeze → warmup 강제 override
+        if getattr(config, 'freeze_teacher_after_warmup', False):
+            forced = config.num_epochs // 2
+            if config.teacher_only_warmup_epochs != forced:
+                print(f"  [Config] freeze_teacher_after_warmup=True: "
+                      f"teacher_only_warmup_epochs {config.teacher_only_warmup_epochs} → {forced}")
+                config.teacher_only_warmup_epochs = forced
+
+        # 3. use_grl + use_discriminator 동시 금지
+        if getattr(config, 'use_grl', False) and getattr(config, 'use_discriminator', False):
+            raise ValueError(
+                "use_grl과 use_discriminator는 동시에 True일 수 없습니다. "
+                "둘 중 하나만 활성화하세요.")
+
+        # 4. use_grl → patch_level_loss 필수
+        if getattr(config, 'use_grl', False) and not config.patch_level_loss:
+            raise ValueError(
+                "use_grl=True는 patch_level_loss=True를 필요로 합니다. "
+                "GRL classifier는 patch-level에서 동작합니다.")
+
+        # 5. shared_mask_token + freeze 금지
+        if getattr(config, 'shared_mask_token', False) and getattr(config, 'freeze_teacher_after_warmup', False):
+            raise ValueError(
+                "shared_mask_token=True와 freeze_teacher_after_warmup=True는 "
+                "동시 사용 불가합니다.")
+
         self.criterion = SelfDistillationLoss(config)
-        self.optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay
+
+        # Bias/Norm weight decay separation (matching original MAE)
+        decay_params = []
+        no_decay_params = []
+        # Exclude WDGRL critic from main optimizer (it has its own optimizer)
+        _exclude_prefix = 'wasserstein_critic.' if (
+            getattr(config, 'use_grl', False) and getattr(config, 'grl_mode', 'classifier') == 'wdgrl'
+        ) else None
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if _exclude_prefix and name.startswith(_exclude_prefix):
+                continue  # WDGRL critic managed by separate optimizer
+            if param.ndim <= 1:  # bias, LayerNorm weight/bias, mask tokens
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+
+        # Separate GRL classifier params if grl_cls_lr_ratio != 1.0
+        _grl_cls_lr_ratio = getattr(config, 'grl_cls_lr_ratio', 1.0)
+        _use_grl_cls_sep = (
+            getattr(config, 'use_grl', False)
+            and getattr(config, 'grl_mode', 'classifier') == 'classifier'
+            and _grl_cls_lr_ratio != 1.0
+            and hasattr(model, 'anomaly_classifier')
         )
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        param_groups = [
+            {'params': decay_params, 'weight_decay': config.weight_decay},
+            {'params': no_decay_params, 'weight_decay': 0.0},
+        ]
+        if _use_grl_cls_sep:
+            _cls_ids = set(id(p) for p in model.anomaly_classifier.parameters())
+            _cls_decay = [p for p in decay_params if id(p) in _cls_ids]
+            _cls_no_decay = [p for p in no_decay_params if id(p) in _cls_ids]
+            param_groups[0] = {'params': [p for p in decay_params if id(p) not in _cls_ids],
+                               'weight_decay': config.weight_decay}
+            param_groups[1] = {'params': [p for p in no_decay_params if id(p) not in _cls_ids],
+                               'weight_decay': 0.0}
+            _cls_lr = config.learning_rate * _grl_cls_lr_ratio
+            if _cls_decay:
+                param_groups.append({'params': _cls_decay, 'weight_decay': config.weight_decay, 'lr': _cls_lr})
+            if _cls_no_decay:
+                param_groups.append({'params': _cls_no_decay, 'weight_decay': 0.0, 'lr': _cls_lr})
+
+        self.optimizer = torch.optim.AdamW(
+            param_groups,
+            lr=config.learning_rate,
+            betas=(0.9, 0.99),  # Compromise: 0.95 (original MAE, 75% masking) ↔ 0.999 (PyTorch default)
+        )
+
+        # LR warmup + cosine annealing (matching original MAE)
+        lr_warmup_epochs = config.warmup_epochs  # Reuse anomaly loss warmup period for LR warmup
+        warmup_scheduler = LinearLR(
             self.optimizer,
-            T_max=config.num_epochs
+            start_factor=1e-4,  # Start from near-zero LR
+            end_factor=1.0,
+            total_iters=lr_warmup_epochs,
+        )
+        cosine_scheduler = CosineAnnealingLR(
+            self.optimizer,
+            T_max=max(config.num_epochs - lr_warmup_epochs, 1),
+        )
+        self.scheduler = SequentialLR(
+            self.optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[lr_warmup_epochs],
         )
 
         self.model = self.model.to(config.device)
 
+        # Epoch-level adaptive lambda (prev epoch average → current epoch fixed)
+        self._prev_epoch_adv_lambda = 1.0   # Discriminator
+        self._prev_epoch_fm_lambda = 1.0    # Feature Matching
+        self._prev_epoch_grl_lambda = 1.0   # GRL
+
+        # WDGRL critic (separate optimizer, alternating training)
+        self.wdgrl_critic = None
+        self.wdgrl_critic_optimizer = None
+        if getattr(config, 'use_grl', False) and getattr(config, 'grl_mode', 'classifier') == 'wdgrl':
+            self.wdgrl_critic = self.model.wasserstein_critic
+            self.wdgrl_critic_optimizer = torch.optim.Adam(
+                self.wdgrl_critic.parameters(),
+                lr=getattr(config, 'wdgrl_critic_lr', 1e-4),
+                betas=(0.5, 0.999),
+            )
+
         # Mixed Precision Training (AMP)
         self.use_amp = config.use_amp and torch.cuda.is_available()
         self.scaler = GradScaler('cuda') if self.use_amp else None
+
+        # Discriminator (Adversarial Realism)
+        self.use_discriminator = config.use_discriminator
+        self.discriminator = None
+        self.d_optimizer = None
+        if self.use_discriminator:
+            from .model import PatchDiscriminator
+            self.discriminator = PatchDiscriminator(
+                num_features=config.num_features,
+                patch_size=config.patch_size,
+                channels=config.disc_channels,
+            ).to(config.device)
+            self.d_optimizer = torch.optim.AdamW(
+                self.discriminator.parameters(),
+                lr=config.learning_rate * config.disc_lr_ratio,
+                betas=(0.0, 0.99),  # TTUR: β1=0 for discriminator
+                weight_decay=0.0,   # Spectral norm provides regularization
+            )
+            # D scheduler: CosineAnnealingLR from disc_warmup_epochs to end
+            d_active_epochs = max(config.num_epochs - config.disc_warmup_epochs, 1)
+            self.d_scheduler = CosineAnnealingLR(
+                self.d_optimizer, T_max=d_active_epochs,
+            )
 
         self.history = {
             'train_loss': [],
@@ -80,23 +218,110 @@ class Trainer:
             'epoch_raw_disc_anomaly': [],
             # Epoch-wise scores by anomaly type (test set)
             'epoch_anomaly_type_scores': [],  # List of dicts per epoch
-            'epoch': []
+            'epoch': [],
+            # Discriminator metrics (populated only when use_discriminator=True)
+            'train_d_loss': [],
+            'train_d_real_acc': [],
+            'train_d_fake_acc': [],
+            'train_adv_loss': [],
+            'train_adaptive_lambda': [],
+            # Feature-level per-epoch stats (training): List[List[float]] — (num_features,) per epoch
+            'train_feature_disc_mean': [],
+            'train_feature_disc_max': [],
+            'train_feature_recon_mean': [],
+            'train_feature_recon_max': [],
+            # Feature matching loss (populated always, 0.0 when disabled)
+            'train_fm_loss': [],
+            # FM adaptive lambda (populated only when fm_adaptive_lambda=True)
+            'train_fm_adaptive_lambda': [],
+            # GRL metrics (populated only when use_grl=True)
+            'train_grl_cls_loss': [],
+            'train_grl_balanced_acc': [],
+            'train_grl_anomaly_acc': [],
+            'train_grl_normal_acc': [],
+            'train_grl_lambda': [],
+            'train_grl_effective_weight': [],  # lambda * grl_loss_weight = actual multiplier
         }
 
     def _compute_warmup_factor(self, epoch: int) -> float:
-        if epoch < self.config.warmup_epochs:
-            return epoch / self.config.warmup_epochs
+        """Anomaly loss warmup: teacher_only 종료 후 자동 ramp.
+
+        warmup_length = max(teacher_only_warmup_epochs // 5, 2)
+        """
+        student_start = self.config.teacher_only_warmup_epochs
+        warmup_length = max(student_start // 5, 2)
+        student_epoch = epoch - student_start
+        if student_epoch < 0:
+            return 0.0  # teacher_only 기간
+        if student_epoch < warmup_length:
+            return (student_epoch + 1) / warmup_length
         return 1.0
+
+    def _extract_patches(self, original, student_output, mask, point_labels):
+        """Extract patch-level data for discriminator training.
+
+        D trains on ALL masked patches (normal + anomaly).
+        anomaly_patch_mask selects anomaly patches for student adversarial loss.
+
+        Args:
+            original: (B, seq_length, num_features)
+            student_output: (B, seq_length, num_features)
+            mask: (B, seq_length) 1=visible, 0=masked
+            point_labels: (B, seq_length) 1=anomaly, 0=normal
+
+        Returns:
+            real_patches: (N, num_features, patch_size) Conv1d format
+            fake_patches: (N, num_features, patch_size) with gradient through student
+            anomaly_patch_mask: (N,) bool — True if patch has anomaly in masked region
+        """
+        B = original.size(0)
+        ps = self.config.patch_size
+        np_ = self.config.num_patches
+        nf = original.size(-1)
+
+        # Reshape to (B, num_patches, patch_size, num_features)
+        orig_patches = original.reshape(B, np_, ps, nf)
+        stud_patches = student_output.reshape(B, np_, ps, nf)
+        mask_patches = mask.reshape(B, np_, ps)
+        label_patches = point_labels.reshape(B, np_, ps)
+
+        # Identify patches with any masked position
+        patch_has_masked = ((1 - mask_patches).sum(dim=2) > 0)  # (B, np_)
+
+        # Flatten and select masked patches
+        orig_flat = orig_patches.reshape(-1, ps, nf)
+        stud_flat = stud_patches.reshape(-1, ps, nf)
+        selector = patch_has_masked.reshape(-1)
+
+        # (N, num_features, patch_size) — Conv1d format
+        real_patches = orig_flat[selector].transpose(1, 2)
+        fake_patches = stud_flat[selector].transpose(1, 2)  # preserves grad
+
+        # Anomaly status: only count anomaly in masked positions
+        masked_labels = label_patches * (1 - mask_patches)
+        patch_anomaly = (masked_labels.sum(dim=2) > 0)
+        anomaly_patch_mask = patch_anomaly.reshape(-1)[selector]
+
+        return real_patches, fake_patches, anomaly_patch_mask
 
     def train_epoch(self, epoch: int, teacher_only: bool = False,
                     profile_batches: int = 0) -> Dict[str, float]:
         self.model.train()
+
+        # Frozen 모듈 eval 복원 (BN stats 오염 방지 + Dropout OFF 유지)
+        if hasattr(self, '_frozen_eval_modules'):
+            for name in self._frozen_eval_modules:
+                module = getattr(self.model, name, None)
+                if module is not None:
+                    module.eval()
+
         epoch_losses = {
             'total_loss': 0.0,
             'reconstruction_loss': 0.0,
             'discrepancy_loss': 0.0,
             'normal_loss': 0.0,
             'anomaly_loss': 0.0,
+            'fm_loss': 0.0,
             'mean_discrepancy': 0.0,
             # Detailed metrics by sample type
             'teacher_recon_normal': 0.0,
@@ -104,11 +329,30 @@ class Trainer:
             'student_recon_normal': 0.0,
             'student_recon_anomaly': 0.0,
         }
+        if self.use_discriminator:
+            epoch_losses.update({
+                'd_loss': 0.0, 'd_real_acc': 0.0, 'd_fake_acc': 0.0,
+                'adv_loss': 0.0, 'adaptive_lambda': 0.0,
+            })
+        if getattr(self.config, 'fm_adaptive_lambda', False):
+            epoch_losses['fm_adaptive_lambda'] = 0.0
+        if getattr(self.config, 'use_grl', False):
+            epoch_losses.update({
+                'grl_cls_loss': 0.0, 'grl_balanced_acc': 0.0, 'grl_lambda': 0.0,
+                'grl_anomaly_acc': 0.0, 'grl_normal_acc': 0.0, 'grl_effective_weight': 0.0,
+            })
 
         warmup_factor = self._compute_warmup_factor(epoch)
 
         # Batch-level profiling: first N batches with cuda.synchronize() per component
         batch_profiles = [] if profile_batches > 0 else None
+
+        # Feature-level stats accumulator (separate from scalar epoch_losses)
+        _feature_accum = {
+            'recon_mean': None, 'recon_max': None,
+            'disc_mean': None, 'disc_max': None,
+        }
+        _feature_batch_count = 0
 
         # Epoch-level timing (sync only at epoch boundaries → ~1% overhead)
         torch.cuda.synchronize()
@@ -155,16 +399,218 @@ class Trainer:
                     t_bp_model = time.time()
                     layer_timing = getattr(self.model, '_forward_timing', {})
 
-                loss, loss_dict = self.criterion(
+                # GRL cls_logits from model attribute (None if use_grl=False or teacher_only)
+                _grl_logits = getattr(self.model, '_grl_cls_logits', None)
+                # Hidden states for FM loss
+                _t_hidden = getattr(self.model, '_teacher_hidden', None)
+                _s_hidden = getattr(self.model, '_student_hidden', None)
+
+                loss, loss_dict, loss_tensors = self.criterion(
                     teacher_output, student_output, sequences, mask, point_labels, warmup_factor,
-                    teacher_only=teacher_only
+                    teacher_only=teacher_only, grl_cls_logits=_grl_logits,
+                    teacher_hidden=_t_hidden, student_hidden=_s_hidden
                 )
 
             if do_profile:
                 torch.cuda.synchronize()
                 t_bp_loss = time.time()
 
-            # Backward pass with AMP
+            # --- Discriminator step (D → Student, TTUR order) ---
+            if self.use_discriminator and epoch >= self.config.disc_warmup_epochs and not teacher_only:
+                real_patches, fake_patches, anomaly_patch_mask = self._extract_patches(
+                    sequences, student_output, mask, point_labels)
+
+                # D training: real vs fake on ALL masked patches
+                self.d_optimizer.zero_grad()
+                with autocast('cuda', enabled=self.use_amp):
+                    d_loss, d_real_acc, d_fake_acc = compute_discriminator_loss(
+                        self.discriminator, real_patches, fake_patches)
+                if self.scaler is not None:
+                    self.scaler.scale(d_loss).backward()
+                    self.scaler.unscale_(self.d_optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
+                    self.scaler.step(self.d_optimizer)
+                else:
+                    d_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
+                    self.d_optimizer.step()
+
+                # Student adversarial loss (anomaly patches only — fool D)
+                adv_loss_val = 0.0
+                lambda_adv_val = 0.0
+                if anomaly_patch_mask.any():
+                    anomaly_fake = fake_patches[anomaly_patch_mask]
+                    with autocast('cuda', enabled=self.use_amp):
+                        adv_loss = compute_student_adversarial_loss(
+                            self.discriminator, anomaly_fake)
+
+                        if self.config.adaptive_lambda:
+                            last_weight = self.model.student_output_projection.weight
+                            lambda_adv = compute_adaptive_lambda(
+                                last_weight,
+                                loss_tensors['normal_loss'],
+                                loss_tensors['anomaly_disc_forward'],
+                                adv_loss,
+                            )
+                        else:
+                            lambda_adv = torch.tensor(1.0, device=self.config.device)
+
+                        # Use prev-epoch lambda for stability (batch value logged for monitoring)
+                        loss = loss + self.config.adv_loss_weight * self._prev_epoch_adv_lambda * adv_loss
+
+                    adv_loss_val = adv_loss.item()
+                    lambda_adv_val = lambda_adv.item() if isinstance(lambda_adv, torch.Tensor) else lambda_adv
+
+                loss_dict['d_loss'] = d_loss.item()
+                loss_dict['d_real_acc'] = d_real_acc
+                loss_dict['d_fake_acc'] = d_fake_acc
+                loss_dict['adv_loss'] = adv_loss_val
+                loss_dict['adaptive_lambda'] = lambda_adv_val
+            elif self.use_discriminator:
+                # Before D warmup or during teacher_only: zero metrics
+                loss_dict['d_loss'] = 0.0
+                loss_dict['d_real_acc'] = 0.0
+                loss_dict['d_fake_acc'] = 0.0
+                loss_dict['adv_loss'] = 0.0
+                loss_dict['adaptive_lambda'] = 0.0
+
+            # --- FM adaptive lambda step ---
+            if getattr(self.config, 'fm_adaptive_lambda', False) and not teacher_only and 'fm_loss' in loss_tensors:
+                _fm_loss_tensor = loss_tensors['fm_loss']
+                if _fm_loss_tensor.item() > 1e-8:
+                    _last_w_fm = list(self.model.student_decoder.parameters())[-1]
+                    with autocast('cuda', enabled=False):
+                        _main_g_fm = torch.autograd.grad(loss.float(), _last_w_fm, retain_graph=True, allow_unused=True)[0]
+                        _fm_g = torch.autograd.grad(_fm_loss_tensor.float(), _last_w_fm, retain_graph=True, allow_unused=True)[0]
+                    if _main_g_fm is not None and _fm_g is not None:
+                        _fm_lambda = (_main_g_fm.norm() / (_fm_g.norm() + 1e-4)).clamp(0.0, 10.0).detach()
+                    else:
+                        _fm_lambda = torch.tensor(1.0, device=loss.device)
+                    _fm_w = getattr(self.config, 'fm_loss_weight', 1.0)
+                    # Use prev-epoch lambda for stability (batch value logged for monitoring)
+                    loss = loss + self._prev_epoch_fm_lambda * _fm_w * _fm_loss_tensor
+                    loss_dict['fm_adaptive_lambda'] = _fm_lambda.item()
+                else:
+                    loss_dict['fm_adaptive_lambda'] = 0.0
+            elif getattr(self.config, 'fm_adaptive_lambda', False):
+                # teacher_only or FM inactive: zero metric (consistent with D/GRL fallback)
+                loss_dict['fm_adaptive_lambda'] = 0.0
+
+            # --- GRL / WDGRL step ---
+            _grl_mode = getattr(self.config, 'grl_mode', 'classifier')
+            if getattr(self.config, 'use_grl', False) and not teacher_only and _grl_mode == 'wdgrl':
+                # === WDGRL: Wasserstein critic with gradient penalty ===
+                from .loss import compute_wdgrl_gradient_penalty
+                _student_hidden = getattr(self.model, '_student_hidden', None)
+                if _student_hidden is not None:
+                    # Reshape: (num_patches, batch, d_model) → (batch*num_patches, d_model)
+                    _sh = _student_hidden.detach().transpose(0, 1).reshape(-1, _student_hidden.size(-1))
+                    # Get patch labels for masked patches
+                    _patch_mask_flat = loss_tensors.get('patch_has_masked', None)
+                    _patch_anom_flat = loss_tensors.get('patch_has_anomaly', None)
+                    if _patch_mask_flat is not None and _patch_anom_flat is not None:
+                        _masked = _patch_mask_flat.bool().reshape(-1)
+                        _anom = _patch_anom_flat.reshape(-1)
+                        _sh_masked = _sh[_masked]
+                        _targets_masked = _anom[_masked]
+                        _pos_m = _targets_masked > 0.5
+                        _neg_m = ~_pos_m
+                        _f_anom = _sh_masked[_pos_m]
+                        _f_norm = _sh_masked[_neg_m]
+
+                        if _f_anom.size(0) > 0 and _f_norm.size(0) > 0:
+                            # Phase 1: Update critic k times (student frozen, features detached)
+                            _k = getattr(self.config, 'wdgrl_k_critic', 5)
+                            _gp_w = getattr(self.config, 'wdgrl_gp_weight', 10.0)
+                            for _ in range(_k):
+                                _c_norm = self.wdgrl_critic(_f_norm)
+                                _c_anom = self.wdgrl_critic(_f_anom)
+                                _wd = _c_norm.mean() - _c_anom.mean()
+                                _gp = compute_wdgrl_gradient_penalty(
+                                    self.wdgrl_critic, _f_norm, _f_anom)
+                                _critic_loss = -_wd + _gp_w * _gp  # Maximize WD
+                                self.wdgrl_critic_optimizer.zero_grad()
+                                _critic_loss.backward()
+                                self.wdgrl_critic_optimizer.step()
+
+                            # Phase 2: Compute WD for main loss (critic FROZEN, student has grad)
+                            for _p in self.wdgrl_critic.parameters():
+                                _p.requires_grad_(False)
+
+                            _sh_grad = _student_hidden.transpose(0, 1).reshape(-1, _student_hidden.size(-1))
+                            _sh_masked_grad = _sh_grad[_masked]
+                            _f_anom_grad = _sh_masked_grad[_pos_m]
+                            _f_norm_grad = _sh_masked_grad[_neg_m]
+                            with torch.no_grad():
+                                _c_norm_score = self.wdgrl_critic(_f_norm_grad).mean().item()
+                                _c_anom_score = self.wdgrl_critic(_f_anom_grad).mean().item()
+                            # Student minimizes WD (no GRL needed — direct minimization)
+                            _wd_for_student = self.wdgrl_critic(_f_norm_grad).mean() - self.wdgrl_critic(_f_anom_grad).mean()
+                            _grl_w = getattr(self.config, 'grl_loss_weight', 1.0)
+                            loss = loss + _grl_w * _wd_for_student
+
+                            # Unfreeze critic for next batch
+                            for _p in self.wdgrl_critic.parameters():
+                                _p.requires_grad_(True)
+
+                            loss_dict['grl_cls_loss'] = _wd.item()
+                            loss_dict['grl_lambda'] = _gp.item()
+                            loss_dict['grl_effective_weight'] = _grl_w
+                            # Use critic score difference as proxy for balanced_acc
+                            loss_dict['grl_balanced_acc'] = abs(_c_norm_score - _c_anom_score)
+                            loss_dict['grl_anomaly_acc'] = _c_anom_score
+                            loss_dict['grl_normal_acc'] = _c_norm_score
+                        else:
+                            loss_dict.setdefault('grl_cls_loss', 0.0)
+                            loss_dict.setdefault('grl_balanced_acc', 0.0)
+                            loss_dict.setdefault('grl_anomaly_acc', 0.0)
+                            loss_dict.setdefault('grl_normal_acc', 0.0)
+                            loss_dict.setdefault('grl_lambda', 0.0)
+                            loss_dict.setdefault('grl_effective_weight', 0.0)
+                    else:
+                        loss_dict.setdefault('grl_cls_loss', 0.0)
+                        loss_dict.setdefault('grl_balanced_acc', 0.0)
+                        loss_dict.setdefault('grl_anomaly_acc', 0.0)
+                        loss_dict.setdefault('grl_normal_acc', 0.0)
+                        loss_dict.setdefault('grl_lambda', 0.0)
+                        loss_dict.setdefault('grl_effective_weight', 0.0)
+                else:
+                    loss_dict.setdefault('grl_cls_loss', 0.0)
+                    loss_dict.setdefault('grl_balanced_acc', 0.0)
+                    loss_dict.setdefault('grl_anomaly_acc', 0.0)
+                    loss_dict.setdefault('grl_normal_acc', 0.0)
+                    loss_dict.setdefault('grl_lambda', 0.0)
+                    loss_dict.setdefault('grl_effective_weight', 0.0)
+
+            elif getattr(self.config, 'use_grl', False) and not teacher_only and 'grl_cls_loss' in loss_tensors:
+                # === Classifier mode (DANN-style GRL, default) ===
+                _grl_cls_loss = loss_tensors['grl_cls_loss']
+
+                # Adaptive scaling: GRL gradient ≈ main gradient (auto 1:1 balancing)
+                _last_w = list(self.model.student_decoder.parameters())[-1]
+                with autocast('cuda', enabled=False):
+                    _main_g = torch.autograd.grad(loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
+                    _grl_g = torch.autograd.grad(_grl_cls_loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
+                if _main_g is None or _grl_g is None:
+                    _grl_lambda_adp = torch.tensor(1.0, device=loss.device)
+                else:
+                    _grl_lambda_adp = (_main_g.norm() / (_grl_g.norm() + 1e-4)).clamp(0.0, 10.0).detach()
+
+                _grl_w = getattr(self.config, 'grl_loss_weight', 1.0)
+                _grl_effective = self._prev_epoch_grl_lambda * _grl_w
+                loss = loss + _grl_effective * _grl_cls_loss
+                loss_dict['grl_lambda'] = _grl_lambda_adp.item()
+                loss_dict['grl_effective_weight'] = _grl_effective
+            elif getattr(self.config, 'use_grl', False):
+                # teacher_only or GRL inactive: zero metrics
+                loss_dict.setdefault('grl_cls_loss', 0.0)
+                loss_dict.setdefault('grl_balanced_acc', 0.0)
+                loss_dict.setdefault('grl_anomaly_acc', 0.0)
+                loss_dict.setdefault('grl_normal_acc', 0.0)
+                loss_dict.setdefault('grl_lambda', 0.0)
+                loss_dict.setdefault('grl_effective_weight', 0.0)
+
+            # Backward pass with AMP (loss now includes λ*adv_loss or λ*grl_cls_loss if applicable)
             t_bwd = time.time()
             t_forward_acc += t_bwd - t_fwd
 
@@ -204,14 +650,41 @@ class Trainer:
 
             t_backward_acc += time.time() - t_bwd
 
-            for key in epoch_losses.keys():
-                epoch_losses[key] += loss_dict[key]
+            for key in epoch_losses:
+                epoch_losses[key] += loss_dict.get(key, 0.0)
+
+            # Accumulate feature-level stats (ndarray, separate from scalar loop)
+            fr = loss_dict.get('feature_recon_mean')
+            if fr is not None:
+                if _feature_accum['recon_mean'] is None:
+                    import numpy as np
+                    _feature_accum['recon_mean'] = fr.copy()
+                    _feature_accum['recon_max'] = loss_dict['feature_recon_max'].copy()
+                    fd = loss_dict.get('feature_disc_mean')
+                    _feature_accum['disc_mean'] = fd.copy() if fd is not None else None
+                    _feature_accum['disc_max'] = loss_dict['feature_disc_max'].copy() if fd is not None else None
+                else:
+                    _feature_accum['recon_mean'] += fr
+                    np.maximum(_feature_accum['recon_max'], loss_dict['feature_recon_max'], out=_feature_accum['recon_max'])
+                    fd = loss_dict.get('feature_disc_mean')
+                    if fd is not None and _feature_accum['disc_mean'] is not None:
+                        _feature_accum['disc_mean'] += fd
+                        np.maximum(_feature_accum['disc_max'], loss_dict['feature_disc_max'], out=_feature_accum['disc_max'])
+                _feature_batch_count += 1
 
         torch.cuda.synchronize()
         t_epoch_total = time.time() - t_epoch_start
 
         for key in epoch_losses.keys():
             epoch_losses[key] /= len(self.train_loader)
+
+        # Feature-level epoch averages → epoch_losses (for history recording in train())
+        if _feature_batch_count > 0 and _feature_accum['recon_mean'] is not None:
+            epoch_losses['_feature_recon_mean'] = (_feature_accum['recon_mean'] / _feature_batch_count).tolist()
+            epoch_losses['_feature_recon_max'] = _feature_accum['recon_max'].tolist()
+            if _feature_accum['disc_mean'] is not None:
+                epoch_losses['_feature_disc_mean'] = (_feature_accum['disc_mean'] / _feature_batch_count).tolist()
+                epoch_losses['_feature_disc_max'] = _feature_accum['disc_max'].tolist()
 
         # Attach timing (CPU wall clock; forward/backward are approximate due to CUDA async)
         epoch_losses['_timing'] = {
@@ -227,17 +700,10 @@ class Trainer:
 
         return epoch_losses
 
-    def _compute_test_contrib_ratios(self) -> Dict:
-        """Compute contribution ratios and absolute scores by sample type on test set
-
-        Returns:
-            Dict with recon_ratio, disc_ratio, recon_score, disc_score for each sample type
-            and anomaly_type_scores dict for each anomaly type
-        """
-        import numpy as np
-        from mae_anomaly import SLIDING_ANOMALY_TYPE_NAMES
-
-        empty_results = {
+    @staticmethod
+    def _empty_contrib():
+        """Return zero-valued contribution ratios dict."""
+        return {
             'recon_ratio_normal': 0.0, 'disc_ratio_normal': 0.0,
             'recon_ratio_disturbing': 0.0, 'disc_ratio_disturbing': 0.0,
             'recon_ratio_anomaly': 0.0, 'disc_ratio_anomaly': 0.0,
@@ -248,97 +714,6 @@ class Trainer:
             'raw_disc_normal': 0.0, 'raw_disc_disturbing': 0.0, 'raw_disc_anomaly': 0.0,
             'anomaly_type_scores': {}
         }
-
-        if self.test_loader is None:
-            return empty_results
-
-        from mae_anomaly.evaluator import Evaluator
-
-        # All-patches inference via Evaluator (correct inference mechanism)
-        self.model.eval()
-        evaluator = Evaluator(self.model, self.config, self.test_loader,
-                              test_dataset=self.test_dataset if hasattr(self, 'test_dataset') else None)
-        recon_patches, disc_patches, student_recon_patches, labels, sample_types_all, anomaly_types_all = \
-            evaluator._compute_patch_scores_all_patches()
-        del evaluator
-
-        # Window-level scores (mean over patches)
-        recon_all = recon_patches.mean(axis=1)
-        disc_all = disc_patches.mean(axis=1)
-
-        # Compute contributions based on scoring mode
-        score_mode = self.config.anomaly_score_mode
-        lambda_disc = self.config.lambda_disc
-
-        if score_mode == 'adaptive':
-            adaptive_lambda = recon_all.mean() / (disc_all.mean() + 1e-4)
-            recon_contrib_all = recon_all
-            disc_contrib_all = adaptive_lambda * disc_all
-            total = recon_contrib_all + disc_contrib_all + 1e-4
-            recon_ratio_all = recon_contrib_all / total
-            disc_ratio_all = disc_contrib_all / total
-        else:  # default
-            recon_contrib_all = recon_all
-            disc_contrib_all = lambda_disc * disc_all
-            total = recon_contrib_all + disc_contrib_all + 1e-4
-            recon_ratio_all = recon_contrib_all / total
-            disc_ratio_all = disc_contrib_all / total
-
-        # Compute mean ratios and absolute scores by sample type
-        # sample_type: 0=pure_normal, 1=disturbing_normal, 2=anomaly
-        results = {}
-        for type_idx, type_name in [(0, 'normal'), (1, 'disturbing'), (2, 'anomaly')]:
-            mask = (sample_types_all == type_idx)
-            if mask.sum() > 0:
-                results[f'recon_ratio_{type_name}'] = float(recon_ratio_all[mask].mean() * 100)  # as percentage
-                results[f'disc_ratio_{type_name}'] = float(disc_ratio_all[mask].mean() * 100)
-                results[f'recon_score_{type_name}'] = float(recon_contrib_all[mask].mean())
-                results[f'disc_score_{type_name}'] = float(disc_contrib_all[mask].mean())
-                # RAW (unweighted) values
-                results[f'raw_recon_{type_name}'] = float(recon_all[mask].mean())
-                results[f'raw_disc_{type_name}'] = float(disc_all[mask].mean())
-            else:
-                results[f'recon_ratio_{type_name}'] = 0.0
-                results[f'disc_ratio_{type_name}'] = 0.0
-                results[f'recon_score_{type_name}'] = 0.0
-                results[f'disc_score_{type_name}'] = 0.0
-                results[f'raw_recon_{type_name}'] = 0.0
-                results[f'raw_disc_{type_name}'] = 0.0
-
-        # Compute scores by anomaly type (only for anomaly samples, sample_type=2)
-        anomaly_type_scores = {}
-        anomaly_mask = (sample_types_all == 2)
-        # Discover all anomaly types from actual data (supports >9 types, e.g. TEP)
-        unique_atypes = sorted(set(int(x) for x in np.unique(anomaly_types_all[anomaly_mask]))) if anomaly_mask.any() else []
-        for atype_idx in unique_atypes:
-            if atype_idx < len(SLIDING_ANOMALY_TYPE_NAMES):
-                atype_name = SLIDING_ANOMALY_TYPE_NAMES[atype_idx]
-            else:
-                atype_name = f'fault_{atype_idx}'
-            atype_mask = anomaly_mask & (anomaly_types_all == atype_idx)
-            if atype_mask.sum() > 0:
-                anomaly_type_scores[atype_name] = {
-                    'recon_score': float(recon_contrib_all[atype_mask].mean()),
-                    'disc_score': float(disc_contrib_all[atype_mask].mean()),
-                    'recon_ratio': float(recon_ratio_all[atype_mask].mean() * 100),
-                    'disc_ratio': float(disc_ratio_all[atype_mask].mean() * 100),
-                    'count': int(atype_mask.sum())
-                }
-        # Also add normal (sample_type=0) for comparison
-        normal_mask = (sample_types_all == 0)
-        if normal_mask.sum() > 0:
-            anomaly_type_scores['normal'] = {
-                'recon_score': float(recon_contrib_all[normal_mask].mean()),
-                'disc_score': float(disc_contrib_all[normal_mask].mean()),
-                'recon_ratio': float(recon_ratio_all[normal_mask].mean() * 100),
-                'disc_ratio': float(disc_ratio_all[normal_mask].mean() * 100),
-                'count': int(normal_mask.sum())
-            }
-
-        results['anomaly_type_scores'] = anomaly_type_scores
-
-        self.model.train()  # Restore training mode
-        return results
 
     def _print_batch_profiling(self, batch_profiles, epoch_timing):
         """Print batch profiling summary table immediately after epoch 0."""
@@ -425,12 +800,55 @@ class Trainer:
                     offset_pool = list(offset_rng.permutation(stride))
                 train_dataset.set_epoch_offset(offset_pool.pop())
 
+            # --- Teacher freeze (방법 C: eval + requires_grad_(False)) ---
+            if (getattr(self.config, 'freeze_teacher_after_warmup', False) and
+                    epoch == teacher_warmup and not hasattr(self, '_frozen_eval_modules')):
+                import torch.nn as nn
+                freeze_modules = ['encoder', 'shared_decoder', 'teacher_decoder',
+                                  'teacher_output_projection',
+                                  'patch_cnn', 'cnn_flatten_proj', 'cnn_projection',
+                                  'patch_embed']
+                freeze_params = ['teacher_mask_token']
+
+                for name in freeze_modules:
+                    module = getattr(self.model, name, None)
+                    if module is not None:
+                        module.eval()
+                        for param in module.parameters():
+                            param.requires_grad_(False)
+                for name in freeze_params:
+                    param = getattr(self.model, name, None)
+                    if param is not None and isinstance(param, nn.Parameter):
+                        param.requires_grad_(False)
+
+                self._frozen_eval_modules = freeze_modules
+                if self.verbose:
+                    total = sum(p.numel() for p in self.model.parameters())
+                    trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+                    print(f"  [Freeze] Teacher frozen (eval mode). "
+                          f"Trainable: {trainable:,}/{total:,} params")
+
+            # GRL lambda: set BEFORE train_epoch so the current epoch uses the correct value
+            if getattr(self.config, 'use_grl', False):
+                import math
+                _student_start = self.config.teacher_only_warmup_epochs
+                _student_total = max(self.config.num_epochs - _student_start, 1)
+                _student_epoch = epoch - _student_start  # 0-indexed within student phase
+                _p = max(0.0, min((_student_epoch + 1) / _student_total, 1.0))
+                if _student_epoch < 0:
+                    self.model._grl_lambda = 0.0
+                else:
+                    self.model._grl_lambda = 2.0 / (1.0 + math.exp(-10.0 * _p)) - 1.0
+
             # First N epochs are warm-up: train teacher only (no discrepancy/student loss)
             teacher_only = (epoch < teacher_warmup)
             # Profile only on epoch 0
             pb = profile_n_batches if epoch == 0 else 0
             epoch_losses = self.train_epoch(epoch, teacher_only=teacher_only, profile_batches=pb)
             self.scheduler.step()
+            # D scheduler: step only after disc_warmup_epochs (when D is active)
+            if self.use_discriminator and epoch >= self.config.disc_warmup_epochs:
+                self.d_scheduler.step()
 
             # Extract and record per-epoch timing from train_epoch
             epoch_timing = epoch_losses.pop('_timing', {})
@@ -450,48 +868,70 @@ class Trainer:
             self.history['train_teacher_recon_anomaly'].append(epoch_losses['teacher_recon_anomaly'])
             self.history['train_student_recon_normal'].append(epoch_losses['student_recon_normal'])
             self.history['train_student_recon_anomaly'].append(epoch_losses['student_recon_anomaly'])
+            # Feature matching loss
+            self.history['train_fm_loss'].append(epoch_losses['fm_loss'])
+            # FM adaptive lambda
+            if getattr(self.config, 'fm_adaptive_lambda', False):
+                self.history['train_fm_adaptive_lambda'].append(epoch_losses.get('fm_adaptive_lambda', 0.0))
+            # Feature-level stats (training)
+            self.history['train_feature_recon_mean'].append(epoch_losses.pop('_feature_recon_mean', None))
+            self.history['train_feature_recon_max'].append(epoch_losses.pop('_feature_recon_max', None))
+            self.history['train_feature_disc_mean'].append(epoch_losses.pop('_feature_disc_mean', None))
+            self.history['train_feature_disc_max'].append(epoch_losses.pop('_feature_disc_max', None))
+            # Discriminator metrics
+            if self.use_discriminator:
+                self.history['train_d_loss'].append(epoch_losses['d_loss'])
+                self.history['train_d_real_acc'].append(epoch_losses['d_real_acc'])
+                self.history['train_d_fake_acc'].append(epoch_losses['d_fake_acc'])
+                self.history['train_adv_loss'].append(epoch_losses['adv_loss'])
+                self.history['train_adaptive_lambda'].append(epoch_losses['adaptive_lambda'])
+            # GRL metrics + next epoch lambda update
+            if getattr(self.config, 'use_grl', False):
+                self.history['train_grl_cls_loss'].append(epoch_losses['grl_cls_loss'])
+                self.history['train_grl_balanced_acc'].append(epoch_losses['grl_balanced_acc'])
+                self.history['train_grl_anomaly_acc'].append(epoch_losses.get('grl_anomaly_acc', 0.0))
+                self.history['train_grl_normal_acc'].append(epoch_losses.get('grl_normal_acc', 0.0))
+                self.history['train_grl_lambda'].append(epoch_losses['grl_lambda'])
+                self.history['train_grl_effective_weight'].append(epoch_losses.get('grl_effective_weight', 0.0))
+                # _grl_lambda is now set BEFORE train_epoch (see above), no post-epoch update needed
 
-            # Compute and record contribution ratios by sample type (on test set)
-            eval_interval = self.config.eval_interval
-            is_eval_epoch = ((epoch + 1) % eval_interval == 0) or (epoch == self.config.num_epochs - 1)
-            t_contrib_start = time.time()
-            if is_eval_epoch:
-                contrib_ratios = self._compute_test_contrib_ratios()
-                self._last_contrib_ratios = contrib_ratios
-            else:
-                contrib_ratios = getattr(self, '_last_contrib_ratios', self._compute_test_contrib_ratios())
-            t_contrib = time.time() - t_contrib_start
-            self.history['epoch_recon_ratio_normal'].append(contrib_ratios['recon_ratio_normal'])
-            self.history['epoch_recon_ratio_disturbing'].append(contrib_ratios['recon_ratio_disturbing'])
-            self.history['epoch_recon_ratio_anomaly'].append(contrib_ratios['recon_ratio_anomaly'])
-            self.history['epoch_disc_ratio_normal'].append(contrib_ratios['disc_ratio_normal'])
-            self.history['epoch_disc_ratio_disturbing'].append(contrib_ratios['disc_ratio_disturbing'])
-            self.history['epoch_disc_ratio_anomaly'].append(contrib_ratios['disc_ratio_anomaly'])
-            # Absolute scores by sample type (weighted)
-            self.history['epoch_recon_score_normal'].append(contrib_ratios['recon_score_normal'])
-            self.history['epoch_recon_score_disturbing'].append(contrib_ratios['recon_score_disturbing'])
-            self.history['epoch_recon_score_anomaly'].append(contrib_ratios['recon_score_anomaly'])
-            self.history['epoch_disc_score_normal'].append(contrib_ratios['disc_score_normal'])
-            self.history['epoch_disc_score_disturbing'].append(contrib_ratios['disc_score_disturbing'])
-            self.history['epoch_disc_score_anomaly'].append(contrib_ratios['disc_score_anomaly'])
-            # RAW scores by sample type (unweighted)
-            self.history['epoch_raw_recon_normal'].append(contrib_ratios['raw_recon_normal'])
-            self.history['epoch_raw_recon_disturbing'].append(contrib_ratios['raw_recon_disturbing'])
-            self.history['epoch_raw_recon_anomaly'].append(contrib_ratios['raw_recon_anomaly'])
-            self.history['epoch_raw_disc_normal'].append(contrib_ratios['raw_disc_normal'])
-            self.history['epoch_raw_disc_disturbing'].append(contrib_ratios['raw_disc_disturbing'])
-            self.history['epoch_raw_disc_anomaly'].append(contrib_ratios['raw_disc_anomaly'])
-            # Scores by anomaly type
-            self.history['epoch_anomaly_type_scores'].append(contrib_ratios['anomaly_type_scores'])
+            # --- Update prev-epoch adaptive lambdas (for next epoch) ---
+            _adv_l = epoch_losses.get('adaptive_lambda', 0.0)
+            if _adv_l > 0:
+                self._prev_epoch_adv_lambda = _adv_l
+            _fm_l = epoch_losses.get('fm_adaptive_lambda', 0.0)
+            if _fm_l > 0:
+                self._prev_epoch_fm_lambda = _fm_l
+            _grl_l = epoch_losses.get('grl_lambda', 0.0)
+            if _grl_l > 0:
+                self._prev_epoch_grl_lambda = _grl_l
 
-            # Epoch callback (for epoch-wise test evaluation)
+            # Epoch callback (epoch-wise test evaluation + contrib ratio computation)
+            # Callback computes contrib ratios from its GPU inference data (no extra inference).
+            # Sets self._pending_contrib on eval epochs; non-eval epochs use cached values.
+            self._pending_contrib = None
             t_callback_start = time.time()
             if epoch_callback is not None:
                 epoch_callback(epoch, self.model, self.history)
             t_callback = time.time() - t_callback_start
 
+            # Record contribution ratios from callback (or cached / zeros)
+            if self._pending_contrib is not None:
+                contrib = self._pending_contrib
+                self._last_contrib = contrib
+                self._pending_contrib = None
+            else:
+                contrib = getattr(self, '_last_contrib', self._empty_contrib())
+            for key_suffix in ['recon_ratio_normal', 'recon_ratio_disturbing', 'recon_ratio_anomaly',
+                               'disc_ratio_normal', 'disc_ratio_disturbing', 'disc_ratio_anomaly',
+                               'recon_score_normal', 'recon_score_disturbing', 'recon_score_anomaly',
+                               'disc_score_normal', 'disc_score_disturbing', 'disc_score_anomaly',
+                               'raw_recon_normal', 'raw_recon_disturbing', 'raw_recon_anomaly',
+                               'raw_disc_normal', 'raw_disc_disturbing', 'raw_disc_anomaly']:
+                self.history[f'epoch_{key_suffix}'].append(contrib[key_suffix])
+            self.history['epoch_anomaly_type_scores'].append(contrib['anomaly_type_scores'])
+
             # Record per-epoch timing
-            epoch_timing['contrib_ratios'] = t_contrib
             epoch_timing['callback'] = t_callback
             self.history.setdefault('epoch_timings', []).append(epoch_timing)
 

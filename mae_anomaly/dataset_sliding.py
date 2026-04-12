@@ -83,29 +83,37 @@ ANOMALY_TYPE_CONFIGS = {
 }
 
 
-def _normalize_per_feature(signals: np.ndarray) -> np.ndarray:
-    """Per-feature min-max normalization to [0, 1] range.
+def _standardize_per_feature(
+    signals: np.ndarray,
+    train_end: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-feature z-score standardization fitted on train portion only.
 
-    This is preferred over clipping because:
-    1. Preserves relative magnitude of anomalies (spikes won't be capped)
-    2. No artificial saturation at boundaries
-    3. More realistic simulation of real-world data preprocessing
+    Computes mean and std from signals[:train_end] (train split),
+    then applies (x - mean) / std to the entire signals array.
+    This prevents data leakage from test into normalization statistics.
 
     Args:
-        signals: (total_length, num_features) array
+        signals: (total_length, num_features) array (raw, unnormalized)
+        train_end: index separating train / test
 
     Returns:
-        Normalized signals with each feature scaled to [0, 1]
+        (normalized_signals, scaler_mean, scaler_std)
+        - normalized_signals: z-score standardized float32 array
+        - scaler_mean: (num_features,) per-feature mean from train
+        - scaler_std: (num_features,) per-feature std from train
     """
-    signals = signals.copy()  # Don't modify original
-    for f in range(signals.shape[1]):
-        min_val = signals[:, f].min()
-        max_val = signals[:, f].max()
-        if max_val - min_val > 1e-8:  # Avoid division by zero
-            signals[:, f] = (signals[:, f] - min_val) / (max_val - min_val)
-        else:
-            signals[:, f] = 0.5  # Constant signal -> set to middle
-    return signals.astype(np.float32)
+    signals = signals.copy()
+    train_signals = signals[:train_end]
+
+    scaler_mean = train_signals.mean(axis=0)  # (num_features,)
+    scaler_std = train_signals.std(axis=0)    # (num_features,)
+
+    # Protect against constant features (std ≈ 0)
+    scaler_std[scaler_std < 1e-8] = 1.0
+
+    signals = (signals - scaler_mean) / scaler_std
+    return signals.astype(np.float32), scaler_mean.astype(np.float32), scaler_std.astype(np.float32)
 
 
 @dataclass
@@ -316,7 +324,7 @@ class SlidingWindowTimeSeriesGenerator:
         if self.num_features > 7:
             signals[:, 7] = 0.2 + 0.2 * signals[:, 0] + 0.15 * signals[:, 5] + np.random.normal(0, 0.03, self.total_length)
 
-        return _normalize_per_feature(signals)
+        return signals
 
     def _random_regime_params(self) -> Dict:
         """Generate random parameters for a single regime.
@@ -910,10 +918,44 @@ class SlidingWindowTimeSeriesGenerator:
                 inject_funcs[region.anomaly_type](signals, region.start, region.end)
                 point_labels[region.start:region.end] = 1
 
-        # Normalize each feature to [0, 1] range
-        signals = _normalize_per_feature(signals)
-
+        # Return raw (unnormalized) signals.
+        # Normalization is handled by SlidingWindowDataset (train-only fit).
         return signals, point_labels, anomaly_regions
+
+
+def _minmax_per_feature(
+    signals: np.ndarray,
+    train_end: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-feature min-max normalization to [0, 1] fitted on train portion only.
+
+    Computes min and max from signals[:train_end] (train split),
+    then applies (x - min) / (max - min) to the entire signals array.
+    Test values outside [0, 1] are clipped.
+
+    Args:
+        signals: (total_length, num_features) array (raw, unnormalized)
+        train_end: index separating train / test
+
+    Returns:
+        (normalized_signals, scaler_min, scaler_range)
+        - normalized_signals: min-max scaled float32 array clipped to [0, 1]
+        - scaler_min: (num_features,) per-feature min from train
+        - scaler_range: (num_features,) per-feature (max - min) from train
+    """
+    signals = signals.copy()
+    train_signals = signals[:train_end]
+
+    scaler_min = train_signals.min(axis=0)    # (num_features,)
+    scaler_max = train_signals.max(axis=0)    # (num_features,)
+    scaler_range = scaler_max - scaler_min
+
+    # Protect against constant features (range ≈ 0)
+    scaler_range[scaler_range < 1e-8] = 1.0
+
+    signals = (signals - scaler_min) / scaler_range
+    signals = np.clip(signals, 0.0, 1.0)
+    return signals.astype(np.float32), scaler_min.astype(np.float32), scaler_range.astype(np.float32)
 
 
 class SlidingWindowDataset(Dataset):
@@ -939,24 +981,36 @@ class SlidingWindowDataset(Dataset):
         mask_last_n: int,
         split: str,  # 'train' or 'test'
         train_ratio: float = 0.5,
-        target_anomaly_ratio: Optional[float] = None,  # For test set downsampling (legacy, disabled by default)
-        target_counts: Optional[Dict[str, int]] = None,  # Explicit counts per sample type (disabled by default)
         seed: Optional[int] = None,
         run_boundaries: Optional[List[int]] = None,  # Positions where independent runs end (windows must not cross)
+        normalize_mode: str = 'zscore',  # 'zscore' or 'minmax'
     ):
         self.window_size = window_size
         self.mask_last_n = mask_last_n
         self.split = split
-        self.target_counts = target_counts
         self.stride = stride
+        self.normalize_mode = normalize_mode
 
         if seed is not None:
             np.random.seed(seed)
 
-        # Split the time series
+        # Normalize signals fitted on train portion only
         total_length = len(signals)
         train_end = int(total_length * train_ratio)
 
+        if normalize_mode == 'minmax':
+            signals, self.scaler_min, self.scaler_range = _minmax_per_feature(
+                signals, train_end
+            )
+            # Store dummy mean/std for interface compatibility
+            self.scaler_mean = self.scaler_min
+            self.scaler_std = self.scaler_range
+        else:
+            signals, self.scaler_mean, self.scaler_std = _standardize_per_feature(
+                signals, train_end
+            )
+
+        # Split the time series
         if split == 'train':
             self.signals = signals[:train_end]
             self.point_labels = point_labels[:train_end]
@@ -999,12 +1053,6 @@ class SlidingWindowDataset(Dataset):
         # Extract windows
         self._extract_windows()
 
-        # Downsample for target ratio/counts if specified (for test set)
-        if split == 'test' and (target_counts is not None or target_anomaly_ratio is not None):
-            self._downsample_for_ratio(
-                target_counts=target_counts,
-                target_anomaly_ratio=target_anomaly_ratio
-            )
 
     def _extract_windows(self):
         """Extract window metadata (labels, types) without copying signal data.
@@ -1091,68 +1139,6 @@ class SlidingWindowDataset(Dataset):
             return  # No change needed
         self._epoch_offset = offset
         self._extract_windows()
-
-    def _downsample_for_ratio(
-        self,
-        target_counts: Optional[Dict[str, int]] = None,
-        target_anomaly_ratio: Optional[float] = None
-    ):
-        """
-        Downsample to achieve target sample counts or ratio.
-
-        Args:
-            target_counts: Dict with keys 'pure_normal', 'disturbing_normal', 'anomaly'
-                          e.g., {'pure_normal': 1200, 'disturbing_normal': 300, 'anomaly': 500}
-            target_anomaly_ratio: Alternative - just specify anomaly ratio (legacy)
-        """
-        # Get current counts
-        pure_indices = np.where(self.sample_types == 0)[0]
-        disturb_indices = np.where(self.sample_types == 1)[0]
-        anomaly_indices = np.where(self.sample_types == 2)[0]
-
-        if target_counts is not None:
-            # Use explicit target counts
-            target_pure = target_counts.get('pure_normal', len(pure_indices))
-            target_disturb = target_counts.get('disturbing_normal', len(disturb_indices))
-            target_anomaly = target_counts.get('anomaly', len(anomaly_indices))
-
-            # Adjust targets if not enough samples available
-            if len(anomaly_indices) < target_anomaly:
-                target_anomaly = len(anomaly_indices)
-            if len(disturb_indices) < target_disturb:
-                target_disturb = len(disturb_indices)
-            if len(pure_indices) < target_pure:
-                target_pure = len(pure_indices)
-
-            # Sample from each category
-            keep_pure = np.random.choice(pure_indices, size=target_pure, replace=False)
-            keep_disturb = np.random.choice(disturb_indices, size=target_disturb, replace=False)
-            keep_anomaly = np.random.choice(anomaly_indices, size=target_anomaly, replace=False)
-
-            keep_indices = np.sort(np.concatenate([keep_pure, keep_disturb, keep_anomaly]))
-
-        elif target_anomaly_ratio is not None:
-            # Legacy: use anomaly ratio
-            num_anomaly = len(anomaly_indices)
-            if num_anomaly == 0:
-                return
-
-            target_num_normal = int(num_anomaly * (1 - target_anomaly_ratio) / target_anomaly_ratio)
-            normal_indices = np.where(self.sample_types != 2)[0]
-
-            if target_num_normal >= len(normal_indices):
-                return
-
-            keep_normal = np.random.choice(normal_indices, size=target_num_normal, replace=False)
-            keep_indices = np.sort(np.concatenate([anomaly_indices, keep_normal]))
-        else:
-            return
-
-        # Apply downsampling
-        self.seq_labels = self.seq_labels[keep_indices]
-        self.sample_types = self.sample_types[keep_indices]
-        self.anomaly_type_labels = self.anomaly_type_labels[keep_indices]
-        self.window_start_indices = self.window_start_indices[keep_indices]
 
     def __len__(self) -> int:
         return len(self.window_start_indices)

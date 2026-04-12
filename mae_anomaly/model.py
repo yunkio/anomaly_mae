@@ -15,6 +15,107 @@ from typing import Tuple, Optional
 from .config import Config
 
 
+class PatchDiscriminator(nn.Module):
+    """1D CNN Discriminator for patch-level realism assessment.
+
+    Determines whether a patch is real (from original data) or fake (student-generated).
+    Uses Spectral Normalization on all learnable layers for Lipschitz constraint.
+
+    Input:  (batch, num_features, patch_size) — features as channels, time as spatial dim
+    Output: (batch, 1) — real/fake logit (pre-sigmoid)
+    """
+
+    def __init__(self, num_features: int, patch_size: int, channels: tuple = (64, 32)):
+        super().__init__()
+        c1, c2 = channels
+        self.net = nn.Sequential(
+            nn.utils.spectral_norm(nn.Conv1d(num_features, c1, kernel_size=3)),
+            nn.LeakyReLU(0.2),
+            nn.utils.spectral_norm(nn.Conv1d(c1, c2, kernel_size=3)),
+            nn.LeakyReLU(0.2),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.utils.spectral_norm(nn.Linear(c2, 1)),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (batch, num_features, patch_size)
+        Returns:
+            logits: (batch, 1) — real/fake logit
+        """
+        return self.net(x)
+
+
+class GradientReversalFunction(torch.autograd.Function):
+    """Gradient Reversal Layer: identity forward, negate gradient backward."""
+
+    @staticmethod
+    def forward(ctx, x, lambda_):
+        ctx.lambda_ = lambda_
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return -ctx.lambda_ * grad_output, None
+
+
+class AnomalyClassifierHead(nn.Module):
+    """Patch-level anomaly classifier with GRL for adversarial feature suppression.
+
+    Input:  (seq_len, batch, d_model) — student decoder hidden states
+    Output: (seq_len, batch, 1) — anomaly logits per patch
+    """
+
+    def __init__(self, d_model: int, hidden_dim: int = 0):
+        super().__init__()
+        # Auto-scale: d_model 비례 (0이면 d_model // 2)
+        hidden_dim = hidden_dim if hidden_dim > 0 else d_model // 2
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim, 1)
+        )
+
+    def forward(self, hidden: torch.Tensor, lambda_grl: float) -> torch.Tensor:
+        reversed_hidden = GradientReversalFunction.apply(hidden, lambda_grl)
+        return self.classifier(reversed_hidden)
+
+
+class WassersteinCritic(nn.Module):
+    """Wasserstein critic for WDGRL-style domain adaptation.
+
+    No GRL needed — minimax is handled by separate optimizer in trainer.
+    No sigmoid — output is unbounded scalar (Wasserstein distance estimate).
+
+    Input:  (N, d_model) — flattened patch features
+    Output: (N, 1) — critic scores
+    """
+
+    def __init__(self, d_model: int, hidden_dim: int = 0):
+        super().__init__()
+        hidden_dim = hidden_dim if hidden_dim > 0 else d_model // 2
+        self.critic = nn.Sequential(
+            nn.Linear(d_model, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 1)
+        )
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            features: (N, d_model)
+        Returns:
+            scores: (N, 1)
+        """
+        return self.critic(features)
+
+
 class PositionalEncoding(nn.Module):
     """Positional encoding for transformer"""
 
@@ -67,15 +168,21 @@ class SelfDistilledMAEMultivariate(nn.Module):
         else:
             self.decoder_pos_encoder = None
 
-        # Encoder
+        # Encoder (Pre-Norm + GELU + eps=1e-6, matching original MAE)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.d_model,
             nhead=config.nhead,
             dim_feedforward=config.dim_feedforward,
             dropout=config.dropout,
-            batch_first=False
+            batch_first=False,
+            norm_first=True,
+            activation='gelu',
+            layer_norm_eps=1e-6,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.num_encoder_layers)
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=config.num_encoder_layers,
+            norm=nn.LayerNorm(config.d_model, eps=1e-6),
+        )
 
         # Shared decoder (optional, trained with teacher)
         # Option 2: Use TransformerEncoder (self-attention only, MAE-style)
@@ -89,11 +196,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
                     nhead=config.nhead,
                     dim_feedforward=config.dim_feedforward,
                     dropout=config.dropout,
-                    batch_first=False
+                    batch_first=False,
+                    norm_first=True,
+                    activation='gelu',
+                    layer_norm_eps=1e-6,
                 )
                 self.shared_decoder = nn.TransformerEncoder(
                     shared_decoder_layer,
-                    num_layers=self.num_shared_decoder_layers
+                    num_layers=self.num_shared_decoder_layers,
+                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
                 )
             else:
                 # TransformerDecoder (cross-attention with encoder memory)
@@ -102,11 +213,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
                     nhead=config.nhead,
                     dim_feedforward=config.dim_feedforward,
                     dropout=config.dropout,
-                    batch_first=False
+                    batch_first=False,
+                    norm_first=True,
+                    activation='gelu',
+                    layer_norm_eps=1e-6,
                 )
                 self.shared_decoder = nn.TransformerDecoder(
                     shared_decoder_layer,
-                    num_layers=self.num_shared_decoder_layers
+                    num_layers=self.num_shared_decoder_layers,
+                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
                 )
 
         # Teacher decoder
@@ -119,11 +234,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
                     nhead=config.nhead,
                     dim_feedforward=config.dim_feedforward,
                     dropout=config.dropout,
-                    batch_first=False
+                    batch_first=False,
+                    norm_first=True,
+                    activation='gelu',
+                    layer_norm_eps=1e-6,
                 )
                 self.teacher_decoder = nn.TransformerEncoder(
                     teacher_decoder_layer,
-                    num_layers=config.num_teacher_decoder_layers
+                    num_layers=config.num_teacher_decoder_layers,
+                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
                 )
             else:
                 # TransformerDecoder (cross-attention with encoder output)
@@ -132,11 +251,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
                     nhead=config.nhead,
                     dim_feedforward=config.dim_feedforward,
                     dropout=config.dropout,
-                    batch_first=False
+                    batch_first=False,
+                    norm_first=True,
+                    activation='gelu',
+                    layer_norm_eps=1e-6,
                 )
                 self.teacher_decoder = nn.TransformerDecoder(
                     teacher_decoder_layer,
-                    num_layers=config.num_teacher_decoder_layers
+                    num_layers=config.num_teacher_decoder_layers,
+                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
                 )
 
         # Student decoder
@@ -149,11 +272,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
                     nhead=config.nhead,
                     dim_feedforward=config.dim_feedforward,
                     dropout=config.dropout,
-                    batch_first=False
+                    batch_first=False,
+                    norm_first=True,
+                    activation='gelu',
+                    layer_norm_eps=1e-6,
                 )
                 self.student_decoder = nn.TransformerEncoder(
                     student_decoder_layer,
-                    num_layers=config.num_student_decoder_layers
+                    num_layers=config.num_student_decoder_layers,
+                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
                 )
             else:
                 # TransformerDecoder (cross-attention with encoder output)
@@ -162,11 +289,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
                     nhead=config.nhead,
                     dim_feedforward=config.dim_feedforward,
                     dropout=config.dropout,
-                    batch_first=False
+                    batch_first=False,
+                    norm_first=True,
+                    activation='gelu',
+                    layer_norm_eps=1e-6,
                 )
                 self.student_decoder = nn.TransformerDecoder(
                     student_decoder_layer,
-                    num_layers=config.num_student_decoder_layers
+                    num_layers=config.num_student_decoder_layers,
+                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
                 )
 
         # Output projections
@@ -185,13 +316,44 @@ class SelfDistilledMAEMultivariate(nn.Module):
         self.mask_after_encoder = config.mask_after_encoder
 
         if self.shared_mask_token:
-            self.mask_token = nn.Parameter(torch.randn(1, 1, config.d_model))
+            self.mask_token = nn.Parameter(torch.zeros(1, 1, config.d_model))
+            nn.init.normal_(self.mask_token, std=0.02)
         else:
             # Separate mask tokens for teacher and student
             if config.use_teacher:
-                self.teacher_mask_token = nn.Parameter(torch.randn(1, 1, config.d_model))
+                self.teacher_mask_token = nn.Parameter(torch.zeros(1, 1, config.d_model))
+                nn.init.normal_(self.teacher_mask_token, std=0.02)
             if config.use_student:
-                self.student_mask_token = nn.Parameter(torch.randn(1, 1, config.d_model))
+                self.student_mask_token = nn.Parameter(torch.zeros(1, 1, config.d_model))
+                nn.init.normal_(self.student_mask_token, std=0.02)
+
+        # GRL / WDGRL (use_grl=True일 때만)
+        if getattr(config, 'use_grl', False):
+            _grl_mode = getattr(config, 'grl_mode', 'classifier')
+            if _grl_mode == 'wdgrl':
+                self.wasserstein_critic = WassersteinCritic(
+                    config.d_model, getattr(config, 'grl_cls_hidden', 0))
+            else:
+                self.anomaly_classifier = AnomalyClassifierHead(
+                    config.d_model, getattr(config, 'grl_cls_hidden', 0))
+
+        # Weight initialization (matching original MAE: xavier_uniform for Linear, constant for LN)
+        self.apply(self._init_weights)
+
+        # Override: CNN projection with reduced gain for stability (after global init)
+        if self.patchify_mode == 'patch_cnn' and config.use_flatten_linear_embedding:
+            if self.cnn_flatten_proj is not None:
+                nn.init.xavier_uniform_(self.cnn_flatten_proj[0].weight, gain=0.5)
+
+    @staticmethod
+    def _init_weights(m):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
 
     def _build_embedding_layers(self, config: Config):
         """Build embedding layers based on patchify_mode"""
@@ -227,8 +389,6 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 # After flatten: (batch * num_patches, out_channels * patch_size)
                 # Linear: (out_channels * patch_size) -> d_model + LayerNorm for stability
                 _proj_linear = nn.Linear(out_channels * config.patch_size, config.d_model)
-                nn.init.xavier_uniform_(_proj_linear.weight, gain=0.5)
-                nn.init.zeros_(_proj_linear.bias)
                 self.cnn_flatten_proj = nn.Sequential(
                     _proj_linear,
                     nn.LayerNorm(config.d_model)
@@ -625,6 +785,10 @@ class SelfDistilledMAEMultivariate(nn.Module):
             else:
                 # TransformerDecoder: cross-attention with encoder output
                 teacher_hidden = self.teacher_decoder(teacher_latent, latent_visible)
+
+            # Store for FM distance computation (evaluator/loss)
+            self._teacher_hidden = teacher_hidden  # (num_patches, batch, d_model)
+
             teacher_output = self.teacher_output_projection(teacher_hidden)
             teacher_output = teacher_output.transpose(0, 1)
 
@@ -661,6 +825,20 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 # TransformerDecoder: cross-attention with encoder output
                 # Use detached encoder output for memory
                 student_hidden = self.student_decoder(student_latent, latent_visible.detach())
+
+            # Store for FM distance computation (evaluator/loss)
+            self._student_hidden = student_hidden  # (num_patches, batch, d_model)
+
+            # GRL / WDGRL: adversarial training on student hidden (training only)
+            if self.training and hasattr(self, 'anomaly_classifier'):
+                # Classifier mode (DANN-style GRL)
+                lambda_grl = getattr(self, '_grl_lambda', 0.0)
+                cls_logits = self.anomaly_classifier(student_hidden, lambda_grl)
+                self._grl_cls_logits = cls_logits.squeeze(-1).transpose(0, 1)
+            else:
+                self._grl_cls_logits = None
+            # WDGRL: critic scores are computed in trainer.py (separate forward pass)
+
             student_output = self.student_output_projection(student_hidden)
             student_output = student_output.transpose(0, 1)
 
