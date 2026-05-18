@@ -1,5 +1,196 @@
 # Changelog
 
+## 2026-05-19: THOC baseline docstring attribution fix (broken URL)
+
+### Summary
+
+`comparison/baselines/thoc/model.py`의 attribution docstring에 명시된 reproduction 출처 URL이 존재하지 않는 GitHub 계정(`https://github.com/THOC-Pytorch/model.py`, 404)을 가리키고 있었음. 실제 reproduction 출처는 `carrtesy/THOC-Pytorch` (Dongmin Kim, KAIST)로 확인됨. URL을 정정하고, 해당 reproduction이 자체 README에서 "(Unofficial) Implementation"로 명시하며 SWaT/MSL/SMAP/NeurIPS-TS validation 표가 비어 있다는 사실을 docstring에 명기하여 사용자가 결과 해석 시 검증 신뢰도 차이를 인지하도록 함.
+
+### 변경
+
+- `comparison/baselines/thoc/model.py` line 7-8 docstring: `https://github.com/THOC-Pytorch/model.py` → `https://github.com/carrtesy/THOC-Pytorch` + reproduction unvalidated 상태 명기
+
+### 배경
+
+Notion `Baseline Comparison` 페이지 §12.4-pre (Reproduction 상세 정보) 작성 중 발견. Shen et al. (HKUST) THOC 논문(NeurIPS 2020)의 공식 코드는 공개되지 않았으며, 모든 구현은 reproduction임. 다른 baseline (DAGMM, USAD 등)도 reproduction 출처가 명시되어 있어 사용자가 결과 인용 시 origin 검증 가능.
+
+---
+
+## 2026-05-18: Exathlon dataset MAE-side integration (base_experiments registry + 6 apps default)
+
+### Summary
+
+Exathlon 데이터셋을 MAE base experiments 파이프라인에 등록. Comparison 통합(같은 날 오전)에 이어 MAE 학습/평가 파이프라인도 6 apps × per-app evaluation으로 지원. PSM 통합 패턴과 동일한 retrofit 학습 계획 수립 (60-config × 6 apps).
+
+### 주요 변경
+
+**`scripts/run_base_experiments.py`**:
+- `EXATHLON_APP_IDS` import 추가
+- `EXATHLON_DATASETS` 동적 entry 추가 (6 apps × 1 entry each)
+  - `key='exathlon_app{N}', loader='exathlon_app{N}', train_stride=21, normal50=False, results_subdir='Exathlon/app{N}'`
+- `all_datasets = DATASETS + SMD_DATASETS + EXATHLON_DATASETS` (33 → 39 datasets)
+- `aggregate_exathlon_results(experiment_dir)` 함수 추가 (SMD pattern mirror)
+  - 6 apps의 epoch_metrics.json 읽어 best epoch 선정 (pak_auc_f1 기준)
+  - Per-app + AVERAGE 행 → `Exathlon/results/results.csv`
+- `--list` 출력에 39 datasets 표시
+
+**문서 갱신**:
+- `CLAUDE.md`: "5 base + 28 SMD + 6 Exathlon = 39 datasets"
+- `set_guideline.md`: 데이터셋 표 + Exathlon 전용 서브섹션 (per-app statistics) + 결과 디렉토리 구조 갱신
+- `ablation_guideline.md`: DATASET_TYPE 표에 Exathlon 6 entries 추가
+- `docs/ABLATION_STUDIES.md`: DATASET_TYPE 코멘트에 `'exathlon_app1'` 추가
+
+### 검증
+
+- `python scripts/run_base_experiments.py --set C --list` 출력: 33-38번 줄에 `exathlon_app{1,2,4,5,6,9}` 6 entries 표시
+- `Total: 5 base + 28 SMD + 6 Exathlon = 39` 정상 출력
+- `aggregate_exathlon_results` import 성공
+
+### 학습 예정 (Phase F — Q3 baseline 완료 후)
+
+PSM과 동일하게 60-config retrofit:
+- 대상: Exp 119-290 페이지 §4 PSM-target subset의 60 exps (140, 150, ..., 274, ..., 284)
+- 우선순위: **274 first** (6 apps 모두) → 검증 후 → 나머지 59 exps × 6 apps
+- 각 exp의 best_config.json 기반 `--config-override` 적용 (PSM 패턴)
+- 결과: `results/experiments/{N}_*/Exathlon/app{1,2,4,5,6,9}/`
+- 자동 aggregation: `aggregate_exathlon_results(exp_dir)`
+
+---
+
+## 2026-05-18: Exathlon dataset Comparison integration (raw loader + 19 FScustom features + per-app evaluation)
+
+### Summary
+
+Exathlon 데이터셋 (Jacob et al., VLDB 2021) 을 본 프로젝트 파이프라인에 통합. **TimeSeAD가 권장한 2개 dataset 중 하나**로, 실제 Apache Spark cluster trace 기반 설명 가능 이상 탐지 벤치마크. 6개 application으로 평가 (TimeSeAD 6-app convention), 각 app 별도 학습 후 평균.
+
+### 주요 변경
+
+**다운로드/전처리 (`dataset/Exathlon/`)**:
+- `preprocess.py`: 93개 trace 자동 다운로드 + 19 FScustom features 추출 + binary label 생성
+  - GitHub flat layout + nested split-zip layout 모두 처리 (7z multi-volume zip)
+  - 원본 24.6 GB → 19 features로 축소 후 ~175 MB 저장
+- 6 anomaly 종류: T1 bursty input, T2 bursty crash, T3 stalled, T4 CPU contention, T5 driver fail, T6 executor fail
+- 라벨: RCI ∪ EEI (root cause + extended effect)
+
+**`mae_anomaly/datasets/loaders.py`**:
+- `load_exathlon(app)` 함수 추가
+  - 입력: app ID ∈ {1, 2, 4, 5, 6, 9} (apps 7, 8은 구조적 결함으로 제외)
+  - Train = all undisturbed + first `floor(N_dist/2)` disturbed (sorted by trace_id)
+  - Test = remaining disturbed
+  - `run_boundaries`로 trace 경계 보호
+- `EXATHLON_APP_IDS = [1, 2, 4, 5, 6, 9]` 상수
+- `DATASET_LOADERS`에 `exathlon_app{N}` × 6 키 추가
+
+**`comparison/data/unified_loader.py`**:
+- `dataset='exathlon', app=N` 분기 추가
+- normalonly variant 지원 (Q3/Q4용)
+- z-score/minmax 둘 다 호환
+
+**`comparison/experiment_configs.py`**:
+- 12개 config 등록: `exathlon_app{N}` + `exathlon_app{N}_normalonly` × 6 apps
+
+**Queue 파일 추가 (`configs/`)**:
+- `baseline_exathlon_minmax.json` (Q1)
+- `baseline_exathlon_zscore.json` (Q2)
+- `baseline_exathlon_minmax_normalonly.json` (Q3)
+- `baseline_exathlon_zscore_normalonly.json` (Q4)
+
+**문서**:
+- `docs/DATASET.md`: Exathlon 섹션 추가 (스펙, 19 features 정의, app-level statistics, usage)
+
+### 검증
+
+- `load_exathlon(app=1)` smoke test 통과 (44K train, 46K test, 9 anomaly regions)
+- 6개 앱 모두 정상 로드, train/test split 일관성 확인
+- UnifiedLoader 4 conditions (Q1-Q4) 모두 정상 동작
+- Random baseline × app1 × Q1 smoke test 통과 (PRC=0.129, PAK_F1=0.418)
+
+### 평가 단위
+
+각 app 별도 학습/평가 → 6 apps F1/PRC/AUC 평균 = Exathlon 종합 점수 (SMD per-machine pattern 동일).
+
+---
+
+## 2026-05-17: PSM dataset MAE-side integration (base_experiments registry + 60-model PSM run plan)
+
+### Summary
+
+PSM 데이터셋을 MAE base experiments 파이프라인에 등록. 60개 Top-RA 모델 (Exp 119-290 ablation 결과 기반) 대상으로 PSM 추가 학습 수행 예정. 결과는 각 기존 실험 디렉토리의 `PSM/` 서브디렉토리에 SMD/SWaT/WaDi와 동일 형식으로 저장.
+
+### 주요 변경
+
+**`scripts/run_base_experiments.py`**:
+- DATASETS list에 PSM entry 추가 (WaDi_A2 직후)
+  - `key='PSM', loader='PSM', train_stride=21, normal50=False, results_subdir='PSM'`
+- Dynamic d_model: PSM(25 features) × patch_size=10 → d_model=256, dim_ff=1024
+- **비활성 variant 정리**: `simulation_normal50`, `simulation_complex`, `simulation_complex_normal50`, `SWaT_A1A2_normal50`, `SWaT_A1A2_swap` 5개 entry를 default DATASETS에서 제외 (loader는 유지). 활성 데이터셋 = 5 base (simulation, SWaT_A1A2, WaDi_A1, WaDi_A2, PSM) + 28 SMD = **33 datasets**.
+- Docstring 및 주석 갱신: "All 33 datasets" 등
+
+**`comparison/add_mae_results.py`**:
+- `MAE_SOURCE_DIRS["psm"] = "results/PSM"` 매핑 추가
+
+**문서 갱신**:
+- `CLAUDE.md`: "Run base experiments (5 base + 28 SMD = 33 datasets: simulation, SWaT, WaDi A1/A2, PSM, SMD ×28)"로 변경
+- `set_guideline.md`: 데이터셋 표 재구성 (5 active datasets + 28 SMD), 비활성 variant 안내 추가, PSM 전용 서브섹션 추가
+- `ablation_guideline.md`: Dataset Types 표에 PSM 추가
+- `docs/ABLATION_STUDIES.md`: DATASET_TYPE 옵션 코멘트에 PSM 추가
+
+### 검증
+
+- Dry-run (`--dataset PSM --set C --config-override num_epochs=1`) 무에러 완료
+- 생성 결과: `PSM/{epoch_metrics.json, best_config.json, training_histories.json, best_epoch_train_scores.npz, anomaly_type_metrics.json, batch_profiling.json, experiment_metadata.json, visualization/}` — SMD/SWaT와 동일 구조
+- `epoch_metrics.json` 첫 entry 159 keys, `pak_auc_f1=0.585`, `pak_auc_prc_auc=0.564`
+- `best_config.json`: `num_features=25`, `sliding_window_train_ratio=0.8007`, `d_model=256`, `patch_size=10`
+
+### 백업
+
+`/.trash/0517/` — 변경 전 8개 파일 (scripts/, comparison/, docs/, mae_anomaly/utils/) 백업
+
+---
+
+## 2026-05-15: Add PSM dataset integration (Comparison pipeline)
+
+### Summary
+
+PSM (Pooled Server Metrics, eBay) 데이터셋을 파이프라인에 추가. 우선 Comparison 파이프라인에 통합 (MAE base experiments 통합은 별도 작업 예정 — `temp/PSM_MAE_integration_plan.md` 참조). SMD/SWaT와 동일한 50/50 split 패턴, return 시그니처/문서 형식 완전 일관성 유지.
+
+### 주요 변경
+
+**`mae_anomaly/datasets/loaders.py`**:
+- `load_psm()` 추가 — `load_smd_simple` 패턴 그대로 따름 (train = orig train + front 50% test, test = back 50% test)
+- `DATASET_LOADERS['PSM'] = load_psm` 등록
+- 25 features (`feature_0` ~ `feature_24`), 단일 연속 stream
+- 4,195 NaN forward/backward-fill 처리, run_boundaries=[132481]
+
+**`mae_anomaly/datasets/__init__.py`**:
+- `load_psm` export 추가
+
+**`comparison/data/unified_loader.py`**:
+- `_call_raw_loader()` 에 `'psm'` dispatch 추가
+- 에러 메시지 Available 목록에 `psm` 추가
+
+**`comparison/experiment_configs.py`**:
+- `'psm'` (standard) + `'psm_normalonly'` (normalonly variant) 엔트리 추가
+- `results_dir_name: 'PSM'`, `model_preset: 'default'`, `all_models_list: STANDARD_BASELINES`
+
+**문서**:
+- `docs/DATASET.md`: DATASET_LOADERS 표 + PSM 별도 섹션 추가 (Abdulaal et al. KDD 2021, eBay)
+- `comparison/GUIDE.md`: Section 3 "데이터셋 (5개 → 6개)" + PSM 처리 방식 상세
+- `README.md`: line 22 dataset loader 목록에 SMD, PSM, TEP 추가
+- `temp/PSM_integration_plan.md`: 통합 실행계획 (이번 작업의 source-of-truth)
+- `temp/PSM_MAE_integration_plan.md`: 향후 MAE-side 통합 계획
+
+**데이터**:
+- `dataset/PSM/{train.csv, test.csv, test_label.csv, LICENSE}` 배치 (출처: github.com/eBay/RANSynCoders, BSD-3-Clause)
+- shape: train (132,481×25 normal) + test (87,841×25, 27.76% anomaly)
+- 50/50 split 후: train 176,401 (6.20% anom) / test 43,921 (30.63% anom)
+
+### 미적용 (별도 작업)
+
+- `scripts/run_base_experiments.py` DATASETS 엔트리 추가 (MAE-side 통합)
+- `comparison/add_mae_results.py` MAE_SOURCE_DIRS 매핑 (MAE 결과 생성 후)
+- `CLAUDE.md`, `set_guideline.md`, `ablation_guideline.md`, `docs/ABLATION_STUDIES.md` 문서 업데이트 (MAE 통합 시 일괄)
+
 ## 2026-03-05 (Update 69): Unified Post-Training Inference — 3-pass → 1-pass
 
 ### Summary
