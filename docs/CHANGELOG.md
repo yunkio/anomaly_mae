@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-05-19: Add 2 new SOTA baselines — TFMAE (ICDE'24) + TimesNet (ICLR'23) (Phase 1+2 of 10)
+
+### Summary
+
+신규 SOTA baseline 통합 작업 (총 10개 계획)의 Phase 1+2 완료. TFMAE (사용자 MAE 직접 경쟁모델, ICDE 2024)와 TimesNet (1티어 SOTA, ICLR 2023) 두 모델을 `comparison/baselines/`에 통합. 각 모델은 공식 repo에서 vendoring (단일 model.py)되었으며, 기존 baseline (anomaly_transformer 등)과 동일한 wrapper 패턴 (fit/predict/epoch_callback) 준수.
+
+### 통합된 모델
+
+**1. TFMAE** (Temporal-Frequency Masked Autoencoders, ICDE 2024)
+- 출처: [LMissher/TFMAE](https://github.com/LMissher/TFMAE) (MIT License)
+- 카테고리: 이중 MAE (temporal + frequency) + contrastive + adversarial KL
+- 사용자 self-distilled MAE의 직접 경쟁 모델 → 비교 가치 최대
+- Hyperparams: win_size=100, d_model=128, e_layers=3, lr=1e-4, epochs=10, batch_size=64
+
+**2. TimesNet** (Temporal 2D-Variation Modeling, ICLR 2023)
+- 출처: [thuml/Time-Series-Library](https://github.com/thuml/Time-Series-Library) (MIT License)
+- 카테고리: FFT period detect + 2D Inception conv + reconstruction
+- 종합 SOTA, 인용수 ~2,047 (Semantic Scholar, 2026-05)
+- Hyperparams: win_size=100, d_model=64, e_layers=3, top_k=3, lr=1e-4, epochs=10, batch_size=128
+
+### 변경 파일
+
+**신규 생성 (gitignored 디렉토리, 로컬 변경)**:
+- `comparison/baselines/tfmae/{__init__.py, model.py, wrapper.py}`
+- `comparison/baselines/timesnet/{__init__.py, model.py, wrapper.py}`
+
+**기존 수정**:
+- `comparison/baselines/__init__.py`: 2 import + `__all__`
+- `comparison/baseline_common.py`: 2 try/except + HAS_TFMAE/HAS_TIMESNET + BASELINE_MODELS/SOTA_MODELS/SOTA_AVAILABILITY + MODEL_PRESETS + `create_model` dispatch
+- `comparison/experiment_configs.py`: `STANDARD_BASELINES` 리스트에 2 key 추가
+
+**백업**: 모든 수정 파일의 원본은 `./.trash/260519/comparison/`에 보존.
+
+### 검증
+
+End-to-end import + 1 epoch fit + predict (tiny dummy data, T=500/200, D=8) 양 모델 통과:
+- TFMAE: scores shape=(200,), dtype=float32, range=[0.000, 1.000] (softmax 정규화)
+- TimesNet: scores shape=(200,), dtype=float32, range=[0.395, 3.068] (raw MSE)
+
+### 다음 단계
+
+Phase 1+2 외 8개 모델 (NPSR, DCdetector, MEMTO, ModernTCN, CAROTS, AnomalyBERT, CrossAD, CATCH)은 별도 세션에서 진행. NPSR은 `performer-pytorch` 패키지 설치 필요 (blocker, 사용자 승인 대기).
+
+Q1/Q3 전체 데이터셋 실행 계획은 별도 Notion subpage에 상세 작성 (실행 정책상 현재 미수행).
+
+상세 계획: `/plan/SOTA_BASELINE_10_INTEGRATION_PLAN.md` + `/plan/SOTA_BASELINE_CHECKLIST.md` + [Notion subpage](https://www.notion.so/36487856b20781a29441e1ddf95900a0).
+
+---
+
 ## 2026-05-19: THOC baseline docstring attribution fix (broken URL)
 
 ### Summary
