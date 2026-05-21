@@ -1,5 +1,225 @@
 # Changelog
 
+## 2026-05-21: Dynamic d_model 후보 확장 (64, 96 추가) + seq_length 일관성 검증
+
+### Summary
+
+Set C dynamic d_model의 candidate list를 확장하고, `seq_length / patch_size / num_patches` 의 silent inconsistency를 차단하는 명시적 ValueError 검증을 도입.
+
+### 핵심 변경
+
+- **`D_MODEL_CANDIDATES`**: `[128, 192, 256, 384, 512]` → **`[64, 96, 128, 192, 256, 384, 512]`**
+  - low-F 데이터셋 (simulation F=8) 에서 raw=patch_size×F 가 80일 때, 기존엔 d_model=128 (최소 후보) 으로 over-provisioned. 이제 raw에 더 가까운 후보 선택 가능.
+  - 모든 후보는 nhead=8 의 배수 (64/8=8, 96/8=12).
+  - Cap은 512로 동일 유지.
+- **`make_config()` 일관성 검증**: 함수 종료 직전 다음 두 검사 추가, 위반 시 `ValueError` 발생:
+  1. `seq_length % patch_size != 0` → "must be divisible"
+  2. `seq_length != patch_size * num_patches` → "Inconsistent patch configuration"
+- **`Trainer.__init__` validation rule #7** 추가 (defense-in-depth, 동일 두 검사).
+- **`SelfDistilledMAEMultivariate.__init__`** 에 `assert config.seq_length % config.patch_size == 0` 추가 (model 직접 생성 경로 보호).
+
+### Impact
+
+#### patch_size=10 (Set C / #274 baseline)
+
+| 데이터셋 | F | 기존 d_model | 신규 d_model | 변화 |
+|----------|----|-----------|------------|------|
+| **Simulation** | 8 | 128 | **96** | ⚠️ 28% ↓ (raw=80 ≤ 96) |
+| Exathlon | 19 | 192 | 192 | — |
+| PSM | 25 | 256 | 256 | — |
+| SMD | 38 | 384 | 384 | — |
+| SWaT | 51 | 512 | 512 | — (cap) |
+| WaDi A1 | 123 | 512 | 512 | — (cap) |
+| WaDi A2 | 127 | 512 | 512 | — (cap) |
+
+→ **Simulation 한 데이터셋만 d_model 변화 (128 → 96)**. 기존 simulation 실험 결과와는 baseline 비교 불가하므로, 신규 baseline 으로 재학습 필요.
+
+#### patch_size=5 (Set A, dynamic 미사용이므로 영향 없음)
+
+Set A는 `d_model=128` 으로 fixed. dynamic 경로 안 탐. 직접 dynamic 사용 시:
+- F=8 sim: 40 → 64 (이전 128)
+- F=13~19: 64 또는 96 (이전 128)
+- F≥20: 변화 없음
+
+#### Silent break 방지
+
+- 기존: `seq_length=500, patch_size=7` 같은 inconsistent override 시 `model.py:179` 의 `self.num_patches = 500 // 7 = 71` 으로 silent 절단. timestep 3개는 model에서 reshape 안되어 runtime error 가능.
+- 신규: `make_config()` 단계에서 즉시 `ValueError` 발생. 명확한 진단.
+
+### 변경 파일
+
+- `mae_anomaly/utils/experiment.py` — D_MODEL_CANDIDATES 갱신, `make_config` 검증 추가, `resolve_dynamic_d_model` docstring 갱신
+- `mae_anomaly/trainer.py` — validation rule #7 추가
+- `mae_anomaly/model.py` — `__init__` 에 assert 추가
+- `docs/ARCHITECTURE.md` — D_MODEL_CANDIDATES 명시 갱신
+- `temp/test_d_model_extension.py` (신규) — 10개 regression test (전부 통과)
+- `temp/d_model_extension_plan.md` (신규) — 작업 계획
+
+### Verification
+
+```
+$ python temp/test_d_model_extension.py
+Test 9: D_MODEL_CANDIDATES constant verification             ✓
+Test 1: patch_size=10 expected values (Option B)             ✓
+Test 2: patch_size=5 new candidate effect (low-F datasets)   ✓
+Test 3: patch_size=20 (unaffected by new candidates)         ✓
+Test 4: make_config raises on indivisible seq_length         ✓
+Test 5: make_config raises on inconsistent num_patches       ✓
+Test 6: default Config() passes validation                   ✓
+Test 7: Set A/B/C presets pass                               ✓
+Test 8: model.py assertion on direct instantiation           ✓
+Test 10: cap value (= 512)                                   ✓
+============================================================
+ALL REGRESSION TESTS PASSED
+```
+
+---
+
+## 2026-05-21: Q3 v7 — Beyond Inference Investigation (P23-P26)
+
+### Summary
+
+Q3 v6 P20의 19% inverted anomaly subtype의 본질을 4 hypothesis (label noise, reverse learning, feature absence, training contamination)로 정량 검증. 4 새 실험 + 4 새 modules 작성, alignment 버그 수정 후 corrected statistics 발견.
+
+### 핵심 발견
+
+- **H1 (label noise) + H3 (feature absence) 둘 다 73% datasets에서 STRONGLY SUPPORTED** — median magnitude ratio 0.045
+- **Inverted anomalies의 27%는 channel adversarial mixing** (raw distinct but adaptive_combine fails)
+- **P24 raw feature subset이 5 hard dataset에서 274 model을 압도** (smd_machine-3-7: +0.184 with single feature)
+- **P25 anomaly type별 274 model 성능 매우 다름** (quasi_normal win_rate 30.8% vs noise_burst 78.3%)
+- **P26 train quality vs detection performance 약한 양의 상관 (r=+0.46)** — train ↔ test shift가 클수록 detection 쉬움 (H2 hypothesis falsified)
+
+### 변경 — Code (new modules)
+
+- `mae_anomaly/scripts/q3_exploration/core/inverted_signal_analysis.py` — 286 LOC, H1-H4 utilities
+- `mae_anomaly/scripts/q3_exploration/core/feature_attribution.py` — 178 LOC, per-feature importance
+- `mae_anomaly/scripts/q3_exploration/core/synthetic_anomaly.py` — 171 LOC, synthetic anomaly injection
+- `mae_anomaly/scripts/q3_exploration/core/training_audit.py` — 160 LOC, train data quality metrics
+
+### 변경 — Experiments
+
+- `mae_anomaly/scripts/q3_exploration/experiments/exp_P23_inverted_signal_investigation.py` — 4 hypothesis tests, alignment fix
+- `mae_anomaly/scripts/q3_exploration/experiments/exp_P24_per_feature_importance.py` — per-feature subset comparison vs 274 model
+- `mae_anomaly/scripts/q3_exploration/experiments/exp_P25_anomaly_type_response.py` — 5-type anomaly classification + per-channel response
+- `mae_anomaly/scripts/q3_exploration/experiments/exp_P26_training_distribution_audit.py` — train quality vs PAK correlation
+
+### Bug Fix
+
+- P23 초기 실행에서 raw signals (full=train+test)과 ds.regions (test indices) alignment 잘못 → metrics 일부 왜곡
+- 모든 4 experiments에서 `get_raw_signals(alias, ds)` helper로 align (`test_signals = signals[full_len - test_len:]`)
+- P23 v2 corrected 결과는 H1/H3 강력 지지 (median ratio 0.045)
+
+### 변경 — Docs
+
+- `mae_anomaly/scripts/q3_exploration/RESULTS_v7.md` — comprehensive report (450+ lines)
+
+## 2026-05-19: 신규 SOTA 10개 통합 (TFMAE/TimesNet에 이어 DCdetector/MEMTO/ModernTCN/AnomalyBERT/CrossAD/CATCH/CAROTS/NPSR 추가)
+
+### Summary
+
+비교 baseline을 15 → 25 standard baselines로 확장. 2023-2025 frontier TS-AD 논문 10개를 단일 배치로 통합 (`comparison/baselines/<model>/{model.py, wrapper.py, __init__.py}` + 3곳 등록).
+
+### 새로 추가된 모델 (10개)
+
+| Phase | 모델 | 학회 | Distinct objective |
+|---|---|---|---|
+| 1 | TFMAE | ICDE'24 | Dual temporal+frequency MAE w/ adversarial KL |
+| 1 | NPSR | NeurIPS'23 | Point + induction MSE, nominality-conditioned score |
+| 2 | TimesNet | ICLR'23 | FFT top-k period → 2D Inception conv recon |
+| 2 | DCdetector | KDD'23 | Patch + in-patch dual attention, symmetric KL |
+| 3 | MEMTO | NeurIPS'23 | Memory module w/ K-means init, 2-phase training |
+| 3 | ModernTCN | ICLR'24 Spot | Large-kernel DW + dual ConvFFN mixers |
+| 4 | AnomalyBERT | ICLR'23 WS | 4-type degradation self-supervision (BCE) |
+| 4 | CAROTS | ICML'25 | Pos/neg augmenters + triplet + energy scorer |
+| 5 | CrossAD | NeurIPS'25 | Multi-scale + learnable query library, recon |
+| 5 | CATCH | ICLR'25 | Channel-mask + freq recon + channel discovery |
+
+### 변경 — Code
+
+- `comparison/baselines/<model>/` — 10개 신규 디렉토리, 모두 (model.py + wrapper.py + __init__.py).
+- `comparison/baselines/__init__.py` — 10개 `XxxBaseline` import + `__all__` 갱신.
+- `comparison/baseline_common.py` — 10개 `HAS_XXX` import-guard, `BASELINE_MODELS` / `SOTA_MODELS` / `SOTA_AVAILABILITY` 등록, `MODEL_PRESETS['default']` 등록 (각 모델 단일 preset, 전 데이터셋 동일), `create_model()` dispatch `elif` 분기.
+- `comparison/experiment_configs.py` — `STANDARD_BASELINES` 리스트에 10개 key 추가.
+
+### 변경 — Docs
+
+- `comparison/MODELS.md` — 헤더 "17 baseline models" → "25 baseline models", New SOTA 섹션 확장 (16–25). 모델별 description + configuration table + reference.
+- `comparison/GUIDE.md` — 디렉토리 트리에 신규 10개 엔트리, 모델 분류 표 갱신 (17개 → 25개), 신규 10개 모델 description.
+
+### 검증
+
+End-to-end import + create_model + 모델 forward smoke-test (10개 모두 통과):
+
+| 모델 | Params | 비고 |
+|---|---|---|
+| tfmae | 0.67M | |
+| timesnet | 7.03M | |
+| dcdetector | 0.87M | |
+| memto | 5.28M | 2-phase (random→K-means init) |
+| moderntcn | 0.10M | |
+| anomalybert | 18.93M | |
+| crossad | 4.88M | 구조적 재구성 |
+| catch | 0.43M | 구조적 재구성 |
+| carots | 2.52M | 구조적 재구성 |
+| npsr | 6.35M | Performer fallback → MHA |
+
+**Note**: CrossAD/CATCH/CAROTS는 paper architecture + integration-plan hyperparameters 기준 structural reconstruction. NPSR은 `performer-pytorch` 의존을 optional로 만들어 미설치 시 `nn.MultiheadAttention` fallback.
+
+### Pending (별도 작업)
+
+- 신규 10개 모델 학습 실험 (사용자 요청: "실행만 빼고 코드구현 다 해봐").
+- TFMAE/TimesNet/DCdetector는 이전 세션에서 동일 패턴 통합, 본 배치에서 코드 검증만 추가.
+
+---
+
+## 2026-05-19: Baseline 정리 — THOC 제거 (16 → 15 standard baselines)
+
+### Summary
+
+`THOC` (Shen et al., NeurIPS 2020) baseline을 비교 명단에서 완전 제거. 코드/문서/결과/Notion 페이지 모든 흔적 삭제 후 `.trash/thoc/`로 백업.
+
+### 사유
+
+1. **공식 코드 부재**: 원저자 (HKUST) 코드 미공개. 사용 가능한 모든 구현이 community reproduction.
+2. **Reproduction 신뢰도 미검증**: 본 codebase가 사용한 [carrtesy/THOC-Pytorch](https://github.com/carrtesy/THOC-Pytorch) (Dongmin Kim, KAIST)는 README에서 "Unofficial Implementation" 명시 + SWaT/MSL/SMAP/NeurIPS-TS validation 표 빈 칸으로 reproduction 정확도 자체가 검증 안 됨.
+3. **QuoVadisTAD 비교 명단에서도 제외**: 본 codebase의 baseline 셋의 기준이 되는 [QuoVadisTAD](https://arxiv.org/abs/2405.02678) (ICML 2024 Position Paper)도 THOC를 비교 SOTA에서 의도적으로 제외하고, PA(Point Adjustment) 평가 함정을 도입한 paper로만 인용.
+
+### 변경 — Code
+
+- `comparison/baselines/thoc/` (전체 디렉토리) → `.trash/thoc/code/baselines_thoc/`
+- `comparison/baselines/__init__.py` — `THOCBaseline` import + `__all__` + docstring 제거
+- `comparison/baseline_common.py` — HAS_THOC import-guard, BASELINE_MODELS/SOTA_MODELS/SOTA_AVAILABILITY 등록, MODEL_PRESETS hyperparameter dict, dispatch `elif model_name == 'thoc'` 분기 모두 제거
+- `comparison/experiment_configs.py` — `STANDARD_BASELINES`에서 `'thoc'` 제거 + comment "16 baselines" → "15 baselines"
+- `comparison/scripts/aggregate_exathlon.py` — BASELINE_MODELS list에서 'thoc' 제거
+
+### 변경 — Docs
+
+- `comparison/MODELS.md` — §16. THOC 섹션 전체 삭제, §17→§16 (TimesNet), §18→§17 (TFMAE) 번호 재정렬. 헤더 "18 baseline models" → "17 baseline models". "8 legacy SOTA" → "7 legacy SOTA"
+- `comparison/GUIDE.md` — 디렉토리 트리 thoc 엔트리 제거, "SOTA (legacy) 8 → 7", `seq_len` 100 모델 목록에서 thoc 제거, 특이 모델 설명 thoc 제거, Notion 페이지 제목 "16 Models → 15 Models"
+- `docs/CHANGELOG.md` — 이전 "2026-05-19 THOC docstring fix" 항목 제거 (THOC 제거로 무의미)
+
+### 변경 — Results
+
+- Q1 (`1_…_baseline_minmax`), Q3 (`3_…_baseline_minmax_normalonly`) 각 데이터셋 디렉토리 안 `thoc/` 서브폴더 (총 80개) → `.trash/thoc/results/` 로 이동, 원본 디렉토리 구조 보존
+
+### 변경 — Notion
+
+- 페이지 [Baseline Comparison](https://www.notion.so/Baseline-Comparison-16-Models-6-Datasets-4-Conditions-32087856b2078112b500c81664181ee7): THOC 행 + 관련 분석 내용 제거, "16 Models" → "15 Models" 카운트 갱신
+
+### 백업 위치
+
+- `.trash/thoc/code/baselines_thoc/` — THOC 구현 코드 (model.py, __init__.py)
+- `.trash/thoc/code/original_files/` — 수정 대상 7개 파일의 수정 전 원본
+- `.trash/thoc/plan_temp_originals/` — plan/temp markdown 문서 12개 수정 전 원본
+- `.trash/thoc/results/` — 80개 thoc 결과 서브폴더
+
+### 영향
+
+- 향후 `--model all` 호출 시 자동으로 17개 모델 (Standard 15 + 2026-05-19 batch 2)만 실행
+- THOC 관련 분석/그래프/순위 비교는 모두 무효화. 기존 보고서는 .trash 백업 참조
+
+---
+
 ## 2026-05-19: Add 2 new SOTA baselines — TFMAE (ICDE'24) + TimesNet (ICLR'23) (Phase 1+2 of 10)
 
 ### Summary
@@ -46,22 +266,6 @@ Phase 1+2 외 8개 모델 (NPSR, DCdetector, MEMTO, ModernTCN, CAROTS, AnomalyBE
 Q1/Q3 전체 데이터셋 실행 계획은 별도 Notion subpage에 상세 작성 (실행 정책상 현재 미수행).
 
 상세 계획: `/plan/SOTA_BASELINE_10_INTEGRATION_PLAN.md` + `/plan/SOTA_BASELINE_CHECKLIST.md` + [Notion subpage](https://www.notion.so/36487856b20781a29441e1ddf95900a0).
-
----
-
-## 2026-05-19: THOC baseline docstring attribution fix (broken URL)
-
-### Summary
-
-`comparison/baselines/thoc/model.py`의 attribution docstring에 명시된 reproduction 출처 URL이 존재하지 않는 GitHub 계정(`https://github.com/THOC-Pytorch/model.py`, 404)을 가리키고 있었음. 실제 reproduction 출처는 `carrtesy/THOC-Pytorch` (Dongmin Kim, KAIST)로 확인됨. URL을 정정하고, 해당 reproduction이 자체 README에서 "(Unofficial) Implementation"로 명시하며 SWaT/MSL/SMAP/NeurIPS-TS validation 표가 비어 있다는 사실을 docstring에 명기하여 사용자가 결과 해석 시 검증 신뢰도 차이를 인지하도록 함.
-
-### 변경
-
-- `comparison/baselines/thoc/model.py` line 7-8 docstring: `https://github.com/THOC-Pytorch/model.py` → `https://github.com/carrtesy/THOC-Pytorch` + reproduction unvalidated 상태 명기
-
-### 배경
-
-Notion `Baseline Comparison` 페이지 §12.4-pre (Reproduction 상세 정보) 작성 중 발견. Shen et al. (HKUST) THOC 논문(NeurIPS 2020)의 공식 코드는 공개되지 않았으며, 모든 구현은 reproduction임. 다른 baseline (DAGMM, USAD 등)도 reproduction 출처가 명시되어 있어 사용자가 결과 인용 시 origin 검증 가능.
 
 ---
 

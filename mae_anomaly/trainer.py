@@ -3,6 +3,7 @@ Trainer for Self-Distilled MAE Anomaly Detection
 """
 
 import time
+import random
 import torch
 from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
@@ -69,6 +70,26 @@ class Trainer:
             raise ValueError(
                 "shared_mask_token=True와 freeze_teacher_after_warmup=True는 "
                 "동시 사용 불가합니다.")
+
+        # 6. freeze_encoder_only + freeze_teacher_after_warmup 동시 금지
+        if getattr(config, 'freeze_encoder_only', False) and getattr(config, 'freeze_teacher_after_warmup', False):
+            raise ValueError(
+                "freeze_encoder_only=True와 freeze_teacher_after_warmup=True는 "
+                "동시 사용 불가합니다. 하나만 선택하세요.")
+
+        # 7. seq_length / patch_size / num_patches 일관성 (defense-in-depth;
+        #    make_config()에서도 검증되나 Trainer가 직접 호출되는 경로 보호)
+        if config.seq_length % config.patch_size != 0:
+            raise ValueError(
+                f"seq_length ({config.seq_length}) must be divisible by "
+                f"patch_size ({config.patch_size})."
+            )
+        if config.seq_length != config.patch_size * config.num_patches:
+            raise ValueError(
+                f"seq_length ({config.seq_length}) != "
+                f"patch_size ({config.patch_size}) * num_patches "
+                f"({config.num_patches})."
+            )
 
         self.criterion = SelfDistillationLoss(config)
 
@@ -314,6 +335,11 @@ class Trainer:
                 module = getattr(self.model, name, None)
                 if module is not None:
                     module.eval()
+        if hasattr(self, '_frozen_encoder_modules'):
+            for name in self._frozen_encoder_modules:
+                module = getattr(self.model, name, None)
+                if module is not None:
+                    module.eval()
 
         epoch_losses = {
             'total_loss': 0.0,
@@ -390,8 +416,14 @@ class Trainer:
             t_fwd = time.time()
             if do_profile:
                 self.model._profiling = True
+            # Masking ratio: anneal > random range > default
+            _mr = getattr(self, '_annealed_masking_ratio', None)
+            if _mr is None:
+                _mr_min = getattr(self.config, 'masking_ratio_min', -1.0)
+                _mr_max = getattr(self.config, 'masking_ratio_max', -1.0)
+                _mr = random.uniform(_mr_min, _mr_max) if (_mr_min >= 0 and _mr_max >= 0) else None
             with autocast('cuda', enabled=self.use_amp):
-                teacher_output, student_output, mask = self.model(sequences, point_labels=point_labels)
+                teacher_output, student_output, mask = self.model(sequences, masking_ratio=_mr, point_labels=point_labels)
 
                 if do_profile:
                     self.model._profiling = False
@@ -585,22 +617,29 @@ class Trainer:
             elif getattr(self.config, 'use_grl', False) and not teacher_only and 'grl_cls_loss' in loss_tensors:
                 # === Classifier mode (DANN-style GRL, default) ===
                 _grl_cls_loss = loss_tensors['grl_cls_loss']
-
-                # Adaptive scaling: GRL gradient ≈ main gradient (auto 1:1 balancing)
-                _last_w = list(self.model.student_decoder.parameters())[-1]
-                with autocast('cuda', enabled=False):
-                    _main_g = torch.autograd.grad(loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
-                    _grl_g = torch.autograd.grad(_grl_cls_loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
-                if _main_g is None or _grl_g is None:
-                    _grl_lambda_adp = torch.tensor(1.0, device=loss.device)
-                else:
-                    _grl_lambda_adp = (_main_g.norm() / (_grl_g.norm() + 1e-4)).clamp(0.0, 10.0).detach()
-
                 _grl_w = getattr(self.config, 'grl_loss_weight', 1.0)
-                _grl_effective = self._prev_epoch_grl_lambda * _grl_w
-                loss = loss + _grl_effective * _grl_cls_loss
-                loss_dict['grl_lambda'] = _grl_lambda_adp.item()
-                loss_dict['grl_effective_weight'] = _grl_effective
+
+                if getattr(self.config, 'grl_adaptive_lambda', True):
+                    # Adaptive scaling: GRL gradient ≈ main gradient (auto 1:1 balancing)
+                    _last_w = list(self.model.student_decoder.parameters())[-1]
+                    with autocast('cuda', enabled=False):
+                        _main_g = torch.autograd.grad(loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
+                        _grl_g = torch.autograd.grad(_grl_cls_loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
+                    if _main_g is None or _grl_g is None:
+                        _grl_lambda_adp = torch.tensor(1.0, device=loss.device)
+                    else:
+                        _grl_lambda_adp = (_main_g.norm() / (_grl_g.norm() + 1e-4)).clamp(0.0, 10.0).detach()
+
+                    _grl_effective = self._prev_epoch_grl_lambda * _grl_w
+                    loss = loss + _grl_effective * _grl_cls_loss
+                    loss_dict['grl_lambda'] = _grl_lambda_adp.item()
+                    loss_dict['grl_effective_weight'] = _grl_effective
+                else:
+                    # Fixed weight: no adaptive lambda, direct grl_loss_weight
+                    _grl_lambda_adp = torch.tensor(1.0, device=loss.device)
+                    loss = loss + _grl_w * _grl_cls_loss
+                    loss_dict['grl_lambda'] = 1.0
+                    loss_dict['grl_effective_weight'] = _grl_w
             elif getattr(self.config, 'use_grl', False):
                 # teacher_only or GRL inactive: zero metrics
                 loss_dict.setdefault('grl_cls_loss', 0.0)
@@ -828,6 +867,26 @@ class Trainer:
                     print(f"  [Freeze] Teacher frozen (eval mode). "
                           f"Trainable: {trainable:,}/{total:,} params")
 
+            # --- Encoder-only freeze ---
+            if (getattr(self.config, 'freeze_encoder_only', False) and
+                    epoch == teacher_warmup and not hasattr(self, '_frozen_encoder_modules')):
+                import torch.nn as nn
+                freeze_modules = ['encoder', 'patch_cnn', 'cnn_flatten_proj',
+                                  'cnn_projection', 'patch_embed']
+                for name in freeze_modules:
+                    module = getattr(self.model, name, None)
+                    if module is not None:
+                        module.eval()
+                        for param in module.parameters():
+                            param.requires_grad_(False)
+
+                self._frozen_encoder_modules = freeze_modules
+                if self.verbose:
+                    total = sum(p.numel() for p in self.model.parameters())
+                    trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+                    print(f"  [Freeze] Encoder-only frozen (decoders still trainable). "
+                          f"Trainable: {trainable:,}/{total:,} params")
+
             # GRL lambda: set BEFORE train_epoch so the current epoch uses the correct value
             if getattr(self.config, 'use_grl', False):
                 import math
@@ -839,6 +898,19 @@ class Trainer:
                     self.model._grl_lambda = 0.0
                 else:
                     self.model._grl_lambda = 2.0 / (1.0 + math.exp(-10.0 * _p)) - 1.0
+
+            # --- Masking ratio annealing ---
+            if getattr(self.config, 'masking_ratio_anneal', False) and epoch >= teacher_warmup:
+                _anneal_progress = (epoch - teacher_warmup) / max(self.config.num_epochs - teacher_warmup - 1, 1)
+                _anneal_target = 1.0 / self.config.num_patches  # 1 patch
+                self._annealed_masking_ratio = (
+                    self.config.masking_ratio * (1 - _anneal_progress) + _anneal_target * _anneal_progress
+                )
+                if self.verbose and epoch == teacher_warmup:
+                    print(f"  [Anneal] masking_ratio: {self.config.masking_ratio:.3f} → "
+                          f"{_anneal_target:.4f} over epochs {teacher_warmup}-{self.config.num_epochs-1}")
+            else:
+                self._annealed_masking_ratio = None
 
             # First N epochs are warm-up: train teacher only (no discrepancy/student loss)
             teacher_only = (epoch < teacher_warmup)

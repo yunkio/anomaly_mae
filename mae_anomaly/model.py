@@ -68,17 +68,44 @@ class AnomalyClassifierHead(nn.Module):
     Output: (seq_len, batch, 1) — anomaly logits per patch
     """
 
-    def __init__(self, d_model: int, hidden_dim: int = 0):
+    def __init__(self, d_model: int, hidden_dim: int = 0, arch: str = 'default'):
         super().__init__()
-        # Auto-scale: d_model 비례 (0이면 d_model // 2)
-        hidden_dim = hidden_dim if hidden_dim > 0 else d_model // 2
-        self.classifier = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, hidden_dim),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim, 1)
-        )
+        if arch == 'dann':
+            # DANN-style: 3-layer MLP, ReLU, Dropout(0.5), wider (d_model*2)
+            # Matches Ganin et al. 2016 discriminator architecture
+            h = d_model * 2
+            self.classifier = nn.Sequential(
+                nn.Linear(d_model, h),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(h, h),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(h, 1),
+            )
+        elif arch == '2layer':
+            # 2-layer MLP: intermediate between default (1-layer) and dann (3-layer)
+            hidden_dim = hidden_dim if hidden_dim > 0 else d_model
+            self.classifier = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(0.2),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.GELU(),
+                nn.Dropout(0.2),
+                nn.Linear(hidden_dim // 2, 1),
+            )
+        else:
+            # Default: 1-layer MLP with LayerNorm
+            hidden_dim = hidden_dim if hidden_dim > 0 else d_model // 2
+            self.classifier = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(hidden_dim, 1)
+            )
 
     def forward(self, hidden: torch.Tensor, lambda_grl: float) -> torch.Tensor:
         reversed_hidden = GradientReversalFunction.apply(hidden, lambda_grl)
@@ -149,6 +176,13 @@ class SelfDistilledMAEMultivariate(nn.Module):
         self.patchify_mode = config.patchify_mode
 
         # Patch configuration (always defined for both strategies)
+        # Hard assert: seq_length must be divisible by patch_size. This is also
+        # checked in make_config() and trainer.py, but kept here as a final
+        # safeguard for direct model instantiation paths.
+        assert config.seq_length % config.patch_size == 0, (
+            f"seq_length ({config.seq_length}) must be divisible by "
+            f"patch_size ({config.patch_size})"
+        )
         self.num_patches = config.seq_length // config.patch_size
         self.patch_size = config.patch_size
 
@@ -335,7 +369,8 @@ class SelfDistilledMAEMultivariate(nn.Module):
                     config.d_model, getattr(config, 'grl_cls_hidden', 0))
             else:
                 self.anomaly_classifier = AnomalyClassifierHead(
-                    config.d_model, getattr(config, 'grl_cls_hidden', 0))
+                    config.d_model, getattr(config, 'grl_cls_hidden', 0),
+                    arch=getattr(config, 'grl_cls_arch', 'default'))
 
         # Weight initialization (matching original MAE: xavier_uniform for Linear, constant for LN)
         self.apply(self._init_weights)

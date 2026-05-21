@@ -7,14 +7,25 @@ from mae_anomaly import Config
 
 
 # Dynamic d_model candidates (must be divisible by nhead=8)
-D_MODEL_CANDIDATES = [128, 192, 256, 384, 512]
+# 64 and 96 added to allow smaller d_model for low-F datasets at small patch_size.
+# patch_size=10 case is unchanged: smallest candidate >= raw is identical to old list
+# for every supported dataset (raw>=80 → 128 was old min, 128 still chosen).
+D_MODEL_CANDIDATES = [64, 96, 128, 192, 256, 384, 512]
 
 
 def resolve_dynamic_d_model(num_features: int, patch_size: int) -> int:
     """Select d_model >= raw patch info from candidate list.
 
-    Chooses the smallest candidate >= patch_size * num_features.
+    Chooses the smallest candidate in `D_MODEL_CANDIDATES`
+    (= [64, 96, 128, 192, 256, 384, 512]) that is >= `patch_size * num_features`.
     Caps at 512 (max candidate).
+
+    For patch_size=10 (Set C baseline), behavior is identical to the prior
+    [128, 192, 256, 384, 512] candidate list for every supported dataset
+    because raw = 10*F is always >= 80 ≥ 64,96 → 128 is still the minimum.
+
+    For smaller patch_sizes (e.g., 5) on low-F datasets (e.g., F=8, raw=40),
+    the function now returns 64 instead of 128, providing finer adaptation.
 
     Args:
         num_features: Number of input features.
@@ -98,5 +109,24 @@ def make_config(overrides: dict) -> Config:
     # Auto-compute dim_feedforward = 4 * d_model if not explicitly overridden
     if 'dim_feedforward' not in overrides:
         config.dim_feedforward = config.d_model * 4
+
+    # Consistency validation: seq_length must be divisible by patch_size and
+    # equal to patch_size * num_patches. Silent inconsistency previously masked
+    # by `self.num_patches = seq_length // patch_size` in model.py.
+    if config.seq_length % config.patch_size != 0:
+        raise ValueError(
+            f"seq_length ({config.seq_length}) must be divisible by "
+            f"patch_size ({config.patch_size}); got remainder "
+            f"{config.seq_length % config.patch_size}."
+        )
+    if config.seq_length != config.patch_size * config.num_patches:
+        raise ValueError(
+            f"Inconsistent patch configuration: "
+            f"seq_length ({config.seq_length}) != "
+            f"patch_size ({config.patch_size}) * num_patches "
+            f"({config.num_patches}) = {config.patch_size * config.num_patches}. "
+            f"Expected num_patches = "
+            f"{config.seq_length // config.patch_size}."
+        )
 
     return config

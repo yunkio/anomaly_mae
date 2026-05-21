@@ -691,14 +691,31 @@ All scoring formulas above produce **patch-level** scores (n_windows × num_patc
 
 ### Dynamic d_model (Set C)
 
-When `d_model='dynamic'`, the model dimension is auto-selected per-dataset based on `num_features`:
+When `d_model='dynamic'`, the model dimension is auto-selected per-dataset based on `num_features` and `patch_size`:
 
 ```python
 # resolve_dynamic_d_model(num_features, patch_size)
 raw = patch_size * num_features
-d_model = min(d for d in [128, 192, 256, 384, 512] if d >= raw)
+d_model = min(d for d in [64, 96, 128, 192, 256, 384, 512] if d >= raw)
 # Capped at 512; dim_feedforward = 4 * d_model (auto-computed)
 ```
+
+All candidates are divisible by `nhead=8` (64/8=8, 96/8=12, 128/8=16, …). The
+64/96 candidates were added (2026-05-21) so that low-F datasets at small
+`patch_size` (e.g., simulation F=8 with `patch_size=5`, raw=40 → d_model=64)
+get a tight model size instead of being over-provisioned at 128.
+
+**Note**: For Set C (`patch_size=10`), simulation (F=8, raw=80) now selects
+`d_model=96` (was 128); all other supported datasets (F≥19) remain unchanged.
+
+### Consistency Validation (added 2026-05-21)
+
+`make_config()` and `Trainer.__init__` now raise `ValueError` when:
+- `seq_length % patch_size != 0` — sequence length must be divisible by patch size
+- `seq_length != patch_size * num_patches` — explicit num_patches must match
+
+`SelfDistilledMAEMultivariate.__init__` includes an `assert` for the
+divisibility check as a final safeguard on direct instantiation paths.
 
 Set C config: `patch_size=10, patchify_mode='linear', d_model='dynamic'`. See `set_guideline.md` for details.
 
