@@ -1,5 +1,71 @@
 # Changelog
 
+## 2026-05-23: SCAD (Supervised Contrastive Anomaly Discrimination) 통합
+
+**기능 추가** — Student decoder hidden 위에 작용하는 새로운 supervised contrastive loss. GRL의 대체 옵션으로 추가 (`use_scad: bool = False` 기본 OFF).
+
+**Motivation**: 현재 GRL의 5가지 문제 (adversarial cat-and-mouse / L_FM과 모순 / window-mode noise / domain adaptation 부적절 차용 / FM에 압도) 해결. **4가지 엄격한 디자인 요구사항** — Anomaly anchor only, 단방향 push, no normal-normal attraction, no anomaly-anomaly attraction — 을 모두 만족하는 free-energy log-sum-exp 형태.
+
+**핵심 수식 (Form A)**: L_SCAD = (1/|P_a|) Σ_{i∈P_a} log Σ_{n∈P_n} exp(z_i·z_n/τ)
+
+**Reference Lineage (IEEE style — 4 핵심 ancestor)**:
+- [1] PASCL (Wang et al., ICML 2022 Oral) — Asymmetric anchor philosophy
+- [2] COBRA (Mirzaei et al., ICLR 2025) — Spurious negative pairs counterproductive
+- [3] DevNet (Pang et al., KDD 2019) — 정상→이상 push spirit
+- [4] Energy OOD (Liu et al., NeurIPS 2020) — Free energy log-sum-exp 수학 origin
+
+**변경 사항** (6 source files, +440 LoC, backward-compatible):
+- `mae_anomaly/config.py`: 11개 SCAD config 필드 추가 (default 비활성)
+- `mae_anomaly/model.py`: `ScadProjectionHead` 클래스 + 조건부 `self.scad_head` 인스턴스화 + forward에서 `self._scad_z` 저장
+- `mae_anomaly/loss.py`: `compute_scad_loss()` (Form A + Form B), `SelfDistillationLoss.forward()`에 `scad_z` 인자 + SCAD branch + 6 scalar metrics + loss_tensors['scad_loss']
+- `mae_anomaly/trainer.py`: validation 3 rules (mutual exclusion), 12 history keys, adaptive λ + sigmoid/linear/none ramp-up, total_loss 추가
+- `scripts/run_base_experiments.py`: `cb_metrics` SCAD 12 metrics attach, `plot_epoch_scad()` 블록 8 → `epoch_scad.png` (1×4)
+- `mae_anomaly/visualization/best_model_visualizer.py`: `plot_scad_contribution_trend()` → `SCAD_contribution_trend.png` (1×3)
+
+**Metric 수집 (12 keys, GRL pattern mirroring)**:
+`scad_loss`, `scad_n_anom`, `scad_n_norm`, `scad_z_separation`, `scad_z_anom_var`, `scad_z_norm_var`, `scad_lambda`, `scad_adaptive_lambda`, `scad_ramp`, `scad_effective_weight`, `scad_grad_norm`, `scad_main_grad_norm`
+
+**On/Off Switch (backward compat)**:
+- Default `use_scad=False` → 모든 SCAD 코드 경로 비활성, 기존 baseline 동작 그대로
+- `use_scad=True, use_grl=False`: SCAD 활성 (GRL 비활성)
+- `use_scad=True, use_grl=True`: ValueError (mutual exclusion)
+- `use_scad=True, patch_level_loss=False`: ValueError
+
+**검증 통과** (8 unit tests, 4 integration tests): Config default, Model use_scad=False/True, ScadProjectionHead forward (L2 norm = 1.0), compute_scad_loss Form A/B, edge cases (empty P_a / P_n), mutual exclusion validation 3 케이스, default Trainer history dict.
+
+**파일 백업**: `./temp/0523/{config,model,loss,trainer,run_base_experiments,best_model_visualizer}.py`
+**구현 plan**: `./temp/scad_implementation_plan.md`, `./temp/scad_code_implementation_plan_0523.md`
+**Notion page**: SCAD page (16 sections, 42 ablation configs, IEEE-style references in § 17)
+
+## 2026-05-22: RevIN (Reversible Instance Normalization) 통합
+
+**기능 추가** — Group P의 Exp 303 `271_revin` 준비 (학습 미실행, 코드만 구현).
+
+**Reference 검토**: PatchTST (ICLR'23), ModernTCN (ICLR'24), CATCH (NeurIPS'24), TimesNet, DCdetector (KDD'23). 4개 baseline 모두 동일한 시점 패턴 확인:
+- Step 2 (loader): `StandardScaler.fit(train)` → `transform(train+test)` (우리 `_standardize_per_feature()`)
+- Step 6 (model forward 첫 줄): `revin.normalize(x)` per-window
+- Step 7 (encoder/decoder): 정규화 공간에서 작동
+- Step 8 (output 직후): `revin.denormalize(output)` per-window
+
+**변경 사항**:
+- `config.py`: `use_revin`, `revin_affine`, `revin_eps`, `revin_visible_only` 4개 필드 추가 (default 비활성)
+- `model.py`: `RevIN` 클래스 추가 (per-feature learnable γ/β, detached stats, optional visible-only)
+- `model.py:SelfDistilledMAEMultivariate.__init__()`: `self.revin = RevIN(...)` 조건부 인스턴스화
+- `model.py:SelfDistilledMAEMultivariate.forward()`: 입력 시 `revin.normalize()`, teacher/student output 직후 `revin.denormalize()`
+- 영향 받지 않음: encoder, decoder, FM hidden discrepancy, GRL classifier 입력 (모두 정규화 공간에서 작동), loss/evaluator (denorm 후 원본 공간)
+
+**검증 통과**:
+- Roundtrip (normalize → denormalize): max error < 1e-6
+- Baseline regression (`use_revin=False`): 동일 동작 보존
+- Train backward: affine γ/β gradient flow OK
+- Inference fallback: `visible_only=True` + `point_labels=None` → full window stats 사용
+- Visible-only stats: anomaly 위치 제외 정확 (test mean 1.0 vs 50.5)
+
+**참고**: Exp 303 사용 시 `normalize_mode='zscore'` 함께 적용 (271은 minmax → zscore로 변경 필수). RevIN은 raw 또는 zscore된 입력에 적용되는 표준이므로 minmax + RevIN 조합은 비추천.
+
+**파일 백업**: `./.trash/0522/{model,config,dataset_sliding,trainer,loss,evaluator}.py.bak`
+**구현 plan**: `./temp/revin_plan.md` (선행연구 시점 분석 + 시점별 구현 매핑)
+
 ## 2026-05-21: Dynamic d_model 후보 확장 (64, 96 추가) + seq_length 일관성 검증
 
 ### Summary

@@ -134,7 +134,8 @@ class SelfDistillationLoss(nn.Module):
         teacher_only: bool = False,
         grl_cls_logits: Optional[torch.Tensor] = None,
         teacher_hidden: Optional[torch.Tensor] = None,
-        student_hidden: Optional[torch.Tensor] = None
+        student_hidden: Optional[torch.Tensor] = None,
+        scad_z: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, torch.Tensor]]:
         """
         Args:
@@ -323,6 +324,31 @@ class SelfDistillationLoss(nn.Module):
                 else:
                     _grl_results = None
 
+                # SCAD: compute on student projection embedding (replaces GRL when use_scad=True)
+                if scad_z is not None and getattr(self.config, 'use_scad', False):
+                    _scad_label_mode = getattr(self.config, 'scad_patch_label_mode', 'patch')
+                    if _scad_label_mode == 'window':
+                        # Window-level: all patches in anomaly window get target=1
+                        _scad_patch_labels = has_anomaly_sample.unsqueeze(1).expand_as(patch_has_anomaly).float()
+                    else:
+                        # Patch-level (default): only patches actually containing anomaly
+                        _scad_patch_labels = patch_has_anomaly.float()
+
+                    _scad_loss_tensor, _scad_info = compute_scad_loss(
+                        z=scad_z,
+                        patch_has_anomaly=_scad_patch_labels,
+                        patch_has_masked=patch_has_masked.float(),
+                        form=getattr(self.config, 'scad_form', 'A'),
+                        temperature=getattr(self.config, 'scad_temperature', 0.1),
+                        margin=getattr(self.config, 'scad_margin', 0.3),
+                    )
+                    _scad_results = {
+                        'scad_loss_tensor': _scad_loss_tensor,
+                        **_scad_info,
+                    }
+                else:
+                    _scad_results = None
+
                 sample_discrepancy = (patch_discrepancy * patch_has_masked).sum(dim=1) / (patch_has_masked.sum(dim=1) + 1e-4)
 
             else:
@@ -442,6 +468,18 @@ class SelfDistillationLoss(nn.Module):
             if _grl['grl_cls_loss_tensor'] is not None:
                 loss_tensors['grl_cls_loss'] = _grl['grl_cls_loss_tensor']
 
+        # SCAD metrics (from patch_level_loss block) — mirrors GRL pattern
+        _scad = locals().get('_scad_results')
+        if _scad is not None:
+            loss_dict['scad_loss'] = _scad['scad_loss']
+            loss_dict['scad_n_anom'] = _scad['scad_n_anom']
+            loss_dict['scad_n_norm'] = _scad['scad_n_norm']
+            loss_dict['scad_z_separation'] = _scad['scad_z_separation']
+            loss_dict['scad_z_anom_var'] = _scad['scad_z_anom_var']
+            loss_dict['scad_z_norm_var'] = _scad['scad_z_norm_var']
+            if _scad['scad_loss_tensor'] is not None:
+                loss_tensors['scad_loss'] = _scad['scad_loss_tensor']
+
         return total_loss, loss_dict, loss_tensors
 
 
@@ -508,6 +546,106 @@ def compute_student_adversarial_loss(
         fake_logits, torch.ones_like(fake_logits)
     )
     return adv_loss
+
+
+def compute_scad_loss(
+    z: torch.Tensor,
+    patch_has_anomaly: torch.Tensor,
+    patch_has_masked: torch.Tensor,
+    form: str = 'A',
+    temperature: float = 0.1,
+    margin: float = 0.3,
+    memory_queue: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """SCAD: Supervised Contrastive Anomaly Discrimination loss.
+
+    Anomaly anchor only. No positive pairs. Negatives = all normal patches.
+    Form A (default): free-energy log-sum-exp (smooth hard negative mining).
+        L = (1/|P_a|) Σ_i log Σ_n exp(z_i · z_n / τ)
+    Form B: margin hinge (BGAD-style semi-push, stop when outside margin).
+        L = (1/|P_a||P_n|) Σ_i Σ_n max(0, z_i · z_n + m)²
+
+    Args:
+        z: (P, B, d_proj) L2-normalized projection of student hidden (training only).
+        patch_has_anomaly: (B, P) — 1 if patch contains anomaly (patch-level or window-mode).
+        patch_has_masked: (B, P) — 1 if patch was masked this step.
+        form: 'A' (log-sum-exp) | 'B' (hinge margin).
+        temperature: τ for Form A.
+        margin: m for Form B (push to cosine ≤ -m).
+        memory_queue: (Q, d_proj) detached anomaly hidden queue (optional, not used here).
+
+    Returns:
+        (loss tensor, info dict with 6 scalar metrics).
+        On empty P_a or P_n: returns zero tensor with requires_grad to keep autograd intact.
+    """
+    P, B, d_proj = z.shape
+    # (P, B, d_proj) → (B*P, d_proj)
+    z_flat = z.permute(1, 0, 2).reshape(B * P, d_proj)
+    y_flat = patch_has_anomaly.flatten()
+    m_flat = patch_has_masked.flatten()
+
+    valid = m_flat.bool()
+    z_v = z_flat[valid]
+    y_v = y_flat[valid]
+
+    P_a_mask = y_v > 0.5
+    P_n_mask = ~P_a_mask & (y_v >= 0)  # both masked + non-anomaly
+
+    n_anom = int(P_a_mask.sum().item())
+    n_norm = int(P_n_mask.sum().item())
+
+    # Edge case: insufficient anchors or negatives → return zero (autograd-safe)
+    if n_anom == 0 or n_norm == 0:
+        # zero tensor connected to graph for safety
+        zero = (z * 0.0).sum()
+        return zero, {
+            'scad_loss': 0.0,
+            'scad_n_anom': n_anom,
+            'scad_n_norm': n_norm,
+            'scad_z_separation': 0.0,
+            'scad_z_anom_var': 0.0,
+            'scad_z_norm_var': 0.0,
+        }
+
+    z_anom = z_v[P_a_mask]
+    z_norm = z_v[P_n_mask]
+
+    if form == 'A':
+        # Free-energy log-sum-exp
+        sim_matrix = z_anom @ z_norm.T / max(temperature, 1e-6)  # (Na, Nn)
+        log_sum_exp = torch.logsumexp(sim_matrix, dim=1)         # (Na,)
+        loss = log_sum_exp.mean()
+    elif form == 'B':
+        # Margin hinge
+        sim_matrix = z_anom @ z_norm.T  # (Na, Nn) — cosine sim ∈ [-1, 1]
+        hinge = torch.clamp(sim_matrix + margin, min=0.0).pow(2)
+        loss = hinge.mean()
+    else:
+        raise ValueError(f"Unknown SCAD form: {form!r}. Use 'A' or 'B'.")
+
+    # Diagnostic metrics (no grad)
+    with torch.no_grad():
+        # Pairwise distance separation
+        diff = z_anom.unsqueeze(1) - z_norm.unsqueeze(0)  # (Na, Nn, d)
+        separation = diff.norm(dim=-1).mean().item()
+        # Intra-cluster variance (collapse detection)
+        if n_anom > 1:
+            z_anom_var = float(z_anom.var(dim=0).sum().item())
+        else:
+            z_anom_var = 0.0
+        if n_norm > 1:
+            z_norm_var = float(z_norm.var(dim=0).sum().item())
+        else:
+            z_norm_var = 0.0
+
+    return loss, {
+        'scad_loss': loss.item(),
+        'scad_n_anom': n_anom,
+        'scad_n_norm': n_norm,
+        'scad_z_separation': separation,
+        'scad_z_anom_var': z_anom_var,
+        'scad_z_norm_var': z_norm_var,
+    }
 
 
 def compute_adaptive_lambda(

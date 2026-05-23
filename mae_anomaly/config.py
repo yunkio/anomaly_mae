@@ -40,6 +40,9 @@ class Config:
     dim_feedforward: int = 512  # 4 * d_model
     dropout: float = 0.15
     masking_ratio: float = 0.15
+    masking_ratio_min: float = -1.0  # Random masking range min (-1 = disabled, use fixed masking_ratio)
+    masking_ratio_max: float = -1.0  # Random masking range max (-1 = disabled)
+    # When both >= 0: sample uniform(min, max) per batch. Overrides masking_ratio during training.
     num_patches: int = 100  # seq_length / patch_size (dynamically computed when window size changes)
     patch_size: int = 5  # Fixed patch size; num_patches = seq_length / patch_size
     patchify_mode: str = 'patch_cnn'  # 'patch_cnn', 'linear'
@@ -67,6 +70,18 @@ class Config:
     cnn_kernel_size: int = 3  # Kernel size for patch_cnn Conv1d layers
     # - 3: Default (receptive field = 3 per layer)
     # - 5: Wider receptive field (better for larger patch_size)
+
+    # RevIN (Reversible Instance Normalization, Kim et al. ICLR'22) — per-window normalization
+    # Applied INSIDE model.forward(): normalize at input → encoder/decoder operate in normalized space → denormalize at output.
+    # Use with normalize_mode='zscore' (loader-level standardization) for upstream-consistent behavior
+    # (matches PatchTST / ModernTCN / CATCH / TimesNet pattern).
+    use_revin: bool = False
+    revin_affine: bool = True  # Learnable per-feature γ (weight) and β (bias)
+    revin_eps: float = 1e-5  # Variance floor for numerical stability
+    revin_visible_only: bool = False  # Stats from non-anomaly timesteps during training
+    # - False (default): mean/std over all timesteps in window (matches all 4 baselines)
+    # - True: exclude anomaly timesteps using point_labels (training only;
+    #         inference uses full window since point_labels not available)
 
     # Loss parameters
     margin: float = 0.5
@@ -127,6 +142,14 @@ class Config:
     # - 1.0: Same LR as main model (default, existing behavior)
     # - <1.0: Slower classifier convergence to prevent collapse (e.g., 0.1)
     #   Only applies to classifier mode (grl_mode='classifier')
+    grl_cls_arch: str = 'default'  # GRL classifier architecture
+    # - 'default': 1-layer MLP (LayerNorm → d_model//2 → GELU → Dropout(0.1) → 1)
+    # - '2layer': 2-layer MLP (LayerNorm → hidden → GELU → Drop(0.2) → hidden//2 → GELU → Drop(0.2) → 1)
+    # - 'dann': DANN-style 3-layer (d_model → d_model*2 → ReLU → Dropout(0.5) → d_model*2 → ReLU → Dropout(0.5) → 1)
+    grl_cls_hidden: int = 0  # GRL classifier hidden dimension (0 = auto: d_model//2 for default, d_model for 2layer)
+    grl_adaptive_lambda: bool = True  # Adaptive λ for GRL gradient balancing
+    # - True: Auto-computed λ to balance GRL vs main gradients (default, VQGAN-style)
+    # - False: Fixed weight — loss += grl_loss_weight * grl_cls_loss (no adaptive scaling)
     wdgrl_k_critic: int = 5  # Critic update steps per main update (WDGRL only)
     wdgrl_gp_weight: float = 10.0  # Gradient penalty weight (WDGRL only)
     wdgrl_critic_lr: float = 1e-4  # Critic optimizer learning rate (WDGRL only)
@@ -147,14 +170,62 @@ class Config:
     #   At inference, disc component is excluded from scoring (w_disc=0).
     fm_loss_weight: float = 1.0  # FM:disc training weight ratio (1.0 = equal)
 
+    # --- SCAD (Supervised Contrastive Anomaly Discrimination) parameters ---
+    use_scad: bool = False  # Enable SCAD loss for direct anomaly discrimination
+    # - False: SCAD disabled (default, GRL or no anomaly-aware loss used)
+    # - True: SCAD active on student hidden → replaces GRL classifier
+    # Mutual exclusion: use_scad ⊕ use_grl (enforced in trainer.py validation)
+
+    scad_form: str = 'A'  # SCAD loss variant
+    # - 'A': Free-energy log-sum-exp (default, smooth hard negative mining)
+    # - 'B': Margin hinge (BGAD-spirit, semi-push outside margin only)
+
+    scad_d_proj: int = 128  # Projection head output dim (SimCLR convention)
+    scad_temperature: float = 0.1  # Temperature for log-sum-exp (Form A only)
+    scad_margin: float = 0.3  # Cosine margin for hinge (Form B only)
+
+    scad_loss_weight: float = 0.5  # SCAD base multiplier × adaptive λ × ramp
+    # Smaller than fm_loss_weight (1.0) since SCAD is new; larger than
+    # grl_loss_weight (0.2) since direct optimization vs adversarial
+
+    scad_adaptive_lambda: bool = True  # VQGAN-style gradient balancing
+    scad_ramp_up: str = 'sigmoid'  # 'sigmoid' (Ganin) | 'linear' | 'none'
+
+    scad_patch_label_mode: str = 'patch'  # 'patch' (recommended) | 'window'
+    # - 'patch': y_p = 1 iff patch p contains ≥1 anomaly timestep (precise)
+    # - 'window': window-mode (legacy, same as GRL's noisy mode)
+
+    scad_use_memory_bank: bool = False  # Optional: anomaly memory queue
+    scad_memory_bank_size: int = 1024  # FIFO queue size for anomaly hidden
+
+    scad_proj_head_arch: str = 'default'  # SCAD projection head architecture
+    # - 'default': 2-layer MLP (LN → Linear → GELU → Linear) — SimCLR convention
+    # - 'linear': 1-layer (LN → Linear) — mitigates absorption issue
+    # - 'deep': 3-layer MLP — more expressive (absorption risk)
+
     # Inference scoring weight override (-1 = use training weight)
     eval_disc_weight: float = -1.0  # Disc weight at inference (-1 → 1.0)
     eval_fm_weight: float = -1.0    # FM weight at inference (-1 → fm_loss_weight)
+
+    # Inference: Complementary Masking
+    eval_complementary_masking: bool = False  # Use K-group complementary masking at inference
+    # - False: Leave-one-out masking (default, existing behavior)
+    # - True: Partition patches into K non-overlapping groups (~15% each), 7 forward passes
+    eval_complementary_k: int = 7  # Number of complementary groups (100/7 ≈ 14-15 patches per group)
 
     # Teacher Freeze
     freeze_teacher_after_warmup: bool = False  # Freeze encoder/teacher after warmup (method C: eval + no_grad)
     # - False: All parameters trainable throughout (default)
     # - True: Freeze at teacher_only_warmup_epochs (forced to num_epochs // 2)
+    freeze_encoder_only: bool = False  # Freeze encoder only (teacher/student decoders keep training)
+    # - False: No effect (default)
+    # - True: Freeze encoder+patch_embed at warmup. Decoders, output projections, mask tokens stay trainable.
+    #   Mutually exclusive with freeze_teacher_after_warmup.
+
+    # Training: Masking Ratio Annealing
+    masking_ratio_anneal: bool = False  # Linear anneal masking_ratio after warmup
+    # - False: Fixed masking_ratio throughout (default)
+    # - True: After warmup, linearly decrease from masking_ratio to 1/num_patches (1 patch)
 
     # Discriminator (Adversarial Realism) parameters
     use_discriminator: bool = False  # Enable adversarial discriminator for student decoder

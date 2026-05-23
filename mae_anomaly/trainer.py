@@ -3,6 +3,7 @@ Trainer for Self-Distilled MAE Anomaly Detection
 """
 
 import time
+import math
 import random
 import torch
 from torch.utils.data import DataLoader
@@ -77,7 +78,24 @@ class Trainer:
                 "freeze_encoder_only=True와 freeze_teacher_after_warmup=True는 "
                 "동시 사용 불가합니다. 하나만 선택하세요.")
 
-        # 7. seq_length / patch_size / num_patches 일관성 (defense-in-depth;
+        # 7. use_scad + use_grl 동시 금지 (mutually exclusive)
+        if getattr(config, 'use_scad', False) and getattr(config, 'use_grl', False):
+            raise ValueError(
+                "use_scad과 use_grl은 동시에 True일 수 없습니다. "
+                "둘 중 하나만 활성화하세요.")
+
+        # 8. use_scad + use_discriminator 동시 금지 (mutually exclusive)
+        if getattr(config, 'use_scad', False) and getattr(config, 'use_discriminator', False):
+            raise ValueError(
+                "use_scad과 use_discriminator는 동시에 True일 수 없습니다.")
+
+        # 9. use_scad → patch_level_loss 필수
+        if getattr(config, 'use_scad', False) and not config.patch_level_loss:
+            raise ValueError(
+                "use_scad=True는 patch_level_loss=True를 필요로 합니다. "
+                "SCAD는 patch-level supervision으로 동작합니다.")
+
+        # 10. seq_length / patch_size / num_patches 일관성 (defense-in-depth;
         #    make_config()에서도 검증되나 Trainer가 직접 호출되는 경로 보호)
         if config.seq_length % config.patch_size != 0:
             raise ValueError(
@@ -211,6 +229,7 @@ class Trainer:
             'train_disc_loss': [],
             'train_normal_loss': [],
             'train_anomaly_loss': [],
+            'train_mean_discrepancy': [],
             # Detailed metrics by sample type
             'train_teacher_recon_normal': [],
             'train_teacher_recon_anomaly': [],
@@ -262,6 +281,19 @@ class Trainer:
             'train_grl_normal_acc': [],
             'train_grl_lambda': [],
             'train_grl_effective_weight': [],  # lambda * grl_loss_weight = actual multiplier
+            # SCAD metrics (populated only when use_scad=True) — mirror GRL pattern
+            'train_scad_loss': [],
+            'train_scad_n_anom': [],
+            'train_scad_n_norm': [],
+            'train_scad_z_separation': [],
+            'train_scad_z_anom_var': [],
+            'train_scad_z_norm_var': [],
+            'train_scad_lambda': [],            # adaptive λ (raw value)
+            'train_scad_adaptive_lambda': [],   # adaptive λ (clamped to [0, 10])
+            'train_scad_ramp': [],              # sigmoid ramp ∈ [0, 1]
+            'train_scad_effective_weight': [],  # lambda * ramp * scad_loss_weight
+            'train_scad_grad_norm': [],         # ||∇_w L_SCAD||
+            'train_scad_main_grad_norm': [],    # ||∇_w L_main||
         }
 
     def _compute_warmup_factor(self, epoch: int) -> float:
@@ -367,6 +399,21 @@ class Trainer:
                 'grl_cls_loss': 0.0, 'grl_balanced_acc': 0.0, 'grl_lambda': 0.0,
                 'grl_anomaly_acc': 0.0, 'grl_normal_acc': 0.0, 'grl_effective_weight': 0.0,
             })
+        if getattr(self.config, 'use_scad', False):
+            epoch_losses.update({
+                'scad_loss': 0.0,
+                'scad_n_anom': 0,
+                'scad_n_norm': 0,
+                'scad_z_separation': 0.0,
+                'scad_z_anom_var': 0.0,
+                'scad_z_norm_var': 0.0,
+                'scad_lambda': 0.0,
+                'scad_adaptive_lambda': 0.0,
+                'scad_ramp': 0.0,
+                'scad_effective_weight': 0.0,
+                'scad_grad_norm': 0.0,
+                'scad_main_grad_norm': 0.0,
+            })
 
         warmup_factor = self._compute_warmup_factor(epoch)
 
@@ -436,11 +483,14 @@ class Trainer:
                 # Hidden states for FM loss
                 _t_hidden = getattr(self.model, '_teacher_hidden', None)
                 _s_hidden = getattr(self.model, '_student_hidden', None)
+                # SCAD projection embedding (None if use_scad=False or teacher_only)
+                _scad_z = getattr(self.model, '_scad_z', None)
 
                 loss, loss_dict, loss_tensors = self.criterion(
                     teacher_output, student_output, sequences, mask, point_labels, warmup_factor,
                     teacher_only=teacher_only, grl_cls_logits=_grl_logits,
-                    teacher_hidden=_t_hidden, student_hidden=_s_hidden
+                    teacher_hidden=_t_hidden, student_hidden=_s_hidden,
+                    scad_z=_scad_z
                 )
 
             if do_profile:
@@ -648,6 +698,74 @@ class Trainer:
                 loss_dict.setdefault('grl_normal_acc', 0.0)
                 loss_dict.setdefault('grl_lambda', 0.0)
                 loss_dict.setdefault('grl_effective_weight', 0.0)
+
+            # --- SCAD step (replaces GRL when use_scad=True) ---
+            if getattr(self.config, 'use_scad', False) and not teacher_only and 'scad_loss' in loss_tensors:
+                _scad_loss_tensor = loss_tensors['scad_loss']
+                _scad_loss_val = float(_scad_loss_tensor.item() if torch.is_tensor(_scad_loss_tensor) else _scad_loss_tensor)
+                _scad_w = getattr(self.config, 'scad_loss_weight', 0.5)
+
+                # Sigmoid / linear / none ramp-up
+                _ramp_mode = getattr(self.config, 'scad_ramp_up', 'sigmoid')
+                _twe = self.config.teacher_only_warmup_epochs
+                if epoch < _twe:
+                    _ramp = 0.0
+                else:
+                    _denom = max(1, self.config.num_epochs - _twe)
+                    _p = (epoch - _twe) / _denom
+                    if _ramp_mode == 'sigmoid':
+                        _ramp = 2.0 / (1.0 + math.exp(-10.0 * _p)) - 1.0
+                    elif _ramp_mode == 'linear':
+                        _ramp = min(1.0, _p)
+                    else:  # 'none' — full strength once warmup ends
+                        _ramp = 1.0
+
+                # Adaptive λ (VQGAN-style gradient balancing)
+                _scad_grad_norm = 0.0
+                _main_grad_norm = 0.0
+                if getattr(self.config, 'scad_adaptive_lambda', True) and _scad_loss_val > 1e-12:
+                    _last_w_scad = list(self.model.student_decoder.parameters())[-1]
+                    with autocast('cuda', enabled=False):
+                        _main_g_scad = torch.autograd.grad(
+                            loss.float(), _last_w_scad,
+                            retain_graph=True, allow_unused=True,
+                        )[0]
+                        _scad_g = torch.autograd.grad(
+                            _scad_loss_tensor.float(), _last_w_scad,
+                            retain_graph=True, allow_unused=True,
+                        )[0]
+                    if _main_g_scad is not None and _scad_g is not None:
+                        _main_grad_norm = float(_main_g_scad.norm().item())
+                        _scad_grad_norm = float(_scad_g.norm().item())
+                        _scad_lambda = max(0.0, min(10.0, _main_grad_norm / (_scad_grad_norm + 1e-4)))
+                    else:
+                        _scad_lambda = 1.0
+                else:
+                    _scad_lambda = 1.0
+
+                _scad_effective = _scad_lambda * _ramp * _scad_w
+                loss = loss + _scad_effective * _scad_loss_tensor
+
+                loss_dict['scad_lambda'] = _scad_lambda
+                loss_dict['scad_adaptive_lambda'] = _scad_lambda
+                loss_dict['scad_ramp'] = _ramp
+                loss_dict['scad_effective_weight'] = _scad_effective
+                loss_dict['scad_grad_norm'] = _scad_grad_norm
+                loss_dict['scad_main_grad_norm'] = _main_grad_norm
+            elif getattr(self.config, 'use_scad', False):
+                # teacher_only or SCAD inactive: zero metrics for downstream logging
+                loss_dict.setdefault('scad_loss', 0.0)
+                loss_dict.setdefault('scad_n_anom', 0)
+                loss_dict.setdefault('scad_n_norm', 0)
+                loss_dict.setdefault('scad_z_separation', 0.0)
+                loss_dict.setdefault('scad_z_anom_var', 0.0)
+                loss_dict.setdefault('scad_z_norm_var', 0.0)
+                loss_dict.setdefault('scad_lambda', 0.0)
+                loss_dict.setdefault('scad_adaptive_lambda', 0.0)
+                loss_dict.setdefault('scad_ramp', 0.0)
+                loss_dict.setdefault('scad_effective_weight', 0.0)
+                loss_dict.setdefault('scad_grad_norm', 0.0)
+                loss_dict.setdefault('scad_main_grad_norm', 0.0)
 
             # Backward pass with AMP (loss now includes λ*adv_loss or λ*grl_cls_loss if applicable)
             t_bwd = time.time()
@@ -935,6 +1053,7 @@ class Trainer:
             self.history['train_disc_loss'].append(epoch_losses['discrepancy_loss'])
             self.history['train_normal_loss'].append(epoch_losses['normal_loss'])
             self.history['train_anomaly_loss'].append(epoch_losses['anomaly_loss'])
+            self.history['train_mean_discrepancy'].append(epoch_losses.get('mean_discrepancy', 0.0))
             # Detailed metrics by sample type
             self.history['train_teacher_recon_normal'].append(epoch_losses['teacher_recon_normal'])
             self.history['train_teacher_recon_anomaly'].append(epoch_losses['teacher_recon_anomaly'])
@@ -966,6 +1085,20 @@ class Trainer:
                 self.history['train_grl_lambda'].append(epoch_losses['grl_lambda'])
                 self.history['train_grl_effective_weight'].append(epoch_losses.get('grl_effective_weight', 0.0))
                 # _grl_lambda is now set BEFORE train_epoch (see above), no post-epoch update needed
+
+            if getattr(self.config, 'use_scad', False):
+                self.history['train_scad_loss'].append(epoch_losses.get('scad_loss', 0.0))
+                self.history['train_scad_n_anom'].append(epoch_losses.get('scad_n_anom', 0))
+                self.history['train_scad_n_norm'].append(epoch_losses.get('scad_n_norm', 0))
+                self.history['train_scad_z_separation'].append(epoch_losses.get('scad_z_separation', 0.0))
+                self.history['train_scad_z_anom_var'].append(epoch_losses.get('scad_z_anom_var', 0.0))
+                self.history['train_scad_z_norm_var'].append(epoch_losses.get('scad_z_norm_var', 0.0))
+                self.history['train_scad_lambda'].append(epoch_losses.get('scad_lambda', 0.0))
+                self.history['train_scad_adaptive_lambda'].append(epoch_losses.get('scad_adaptive_lambda', 0.0))
+                self.history['train_scad_ramp'].append(epoch_losses.get('scad_ramp', 0.0))
+                self.history['train_scad_effective_weight'].append(epoch_losses.get('scad_effective_weight', 0.0))
+                self.history['train_scad_grad_norm'].append(epoch_losses.get('scad_grad_norm', 0.0))
+                self.history['train_scad_main_grad_norm'].append(epoch_losses.get('scad_main_grad_norm', 0.0))
 
             # --- Update prev-epoch adaptive lambdas (for next epoch) ---
             _adv_l = epoch_losses.get('adaptive_lambda', 0.0)

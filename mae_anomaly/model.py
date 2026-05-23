@@ -10,9 +10,87 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import Tuple, Optional
 
 from .config import Config
+
+
+class RevIN(nn.Module):
+    """Reversible Instance Normalization (Kim et al., ICLR'22).
+
+    Per-window per-feature mean/std normalization with optional learnable affine.
+    Statistics are detached — no gradient through mean/std.
+
+    Upstream pattern (matches ModernTCN/CATCH/TimesNet/PatchTST):
+        normalize at model entry (before patch embedding) →
+        encoder/decoder operate in normalized space →
+        denormalize at decoder output (before loss / scoring).
+
+    Storage: mean/stdev are stored on self per forward call (single-GPU pattern).
+    Suitable for serial forward passes; not safe for nn.DataParallel.
+
+    Args:
+        num_features: per-feature affine dimension
+        eps: variance floor for numerical stability
+        affine: enable learnable γ, β (per-feature)
+    """
+
+    def __init__(self, num_features: int, eps: float = 1e-5, affine: bool = True):
+        super().__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.affine = affine
+        if self.affine:
+            self.affine_weight = nn.Parameter(torch.ones(num_features))
+            self.affine_bias = nn.Parameter(torch.zeros(num_features))
+        # Per-forward statistics (overwritten each normalize() call)
+        self.mean: Optional[torch.Tensor] = None
+        self.stdev: Optional[torch.Tensor] = None
+
+    def normalize(
+        self,
+        x: torch.Tensor,
+        point_labels: Optional[torch.Tensor] = None,
+        visible_only: bool = False,
+    ) -> torch.Tensor:
+        """Compute and apply per-window normalization. Stores stats on self.
+
+        Args:
+            x: (B, L, M) input
+            point_labels: (B, L) — 1=anomaly, 0=normal. Required if visible_only=True.
+            visible_only: if True + point_labels given, exclude anomaly positions from stats
+        Returns:
+            x_norm: (B, L, M) normalized
+        """
+        if visible_only and point_labels is not None:
+            # Keep non-anomaly positions for stats (point_labels==0 → keep=1)
+            keep = (1.0 - point_labels.float()).unsqueeze(-1).to(x.dtype)  # (B, L, 1)
+            cnt = keep.sum(dim=1, keepdim=True).clamp(min=1.0)  # (B, 1, 1)
+            mean = (x * keep).sum(dim=1, keepdim=True) / cnt
+            var = ((x - mean) ** 2 * keep).sum(dim=1, keepdim=True) / cnt
+        else:
+            mean = x.mean(dim=1, keepdim=True)
+            var = x.var(dim=1, keepdim=True, unbiased=False)
+
+        # Detach: no gradient through statistics
+        self.mean = mean.detach()
+        self.stdev = torch.sqrt(var + self.eps).detach()
+
+        x = (x - self.mean) / self.stdev
+        if self.affine:
+            x = x * self.affine_weight + self.affine_bias
+        return x
+
+    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
+        """Inverse of the most recent normalize() call."""
+        if self.mean is None or self.stdev is None:
+            raise RuntimeError("RevIN.denormalize() called before normalize()")
+        if self.affine:
+            # eps**2 in denominator matches upstream RevIN repo for numerical guard
+            x = (x - self.affine_bias) / (self.affine_weight + self.eps * self.eps)
+        x = x * self.stdev + self.mean
+        return x
 
 
 class PatchDiscriminator(nn.Module):
@@ -112,6 +190,45 @@ class AnomalyClassifierHead(nn.Module):
         return self.classifier(reversed_hidden)
 
 
+class ScadProjectionHead(nn.Module):
+    """SCAD projection head: maps student hidden to L2-normalized embedding.
+
+    Training-only — not used at inference (SimCLR convention).
+    Input:  (seq_len, batch, d_model) — student decoder hidden
+    Output: (seq_len, batch, d_proj) — L2-normalized projection in contrastive space
+    """
+
+    def __init__(self, d_model: int, d_proj: int = 128, arch: str = 'default'):
+        super().__init__()
+        if arch == 'linear':
+            # 1-layer linear (mitigates projection-head absorption)
+            self.proj = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, d_proj),
+            )
+        elif arch == 'deep':
+            # 3-layer (more expressive, but higher absorption risk)
+            self.proj = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, d_proj),
+            )
+        else:  # default: 2-layer MLP (SimCLR convention)
+            self.proj = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, d_proj),
+            )
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        z = self.proj(h)
+        return F.normalize(z, p=2, dim=-1)
+
+
 class WassersteinCritic(nn.Module):
     """Wasserstein critic for WDGRL-style domain adaptation.
 
@@ -189,6 +306,32 @@ class SelfDistilledMAEMultivariate(nn.Module):
         # Both strategies use patch-based processing
         self.use_patch = True
         self.effective_seq_len = self.num_patches
+
+        # RevIN (per-window instance normalization) — optional
+        # Active path: normalize at forward() entry, denormalize at teacher/student output
+        self.use_revin = getattr(config, 'use_revin', False)
+        self.revin_visible_only = getattr(config, 'revin_visible_only', False)
+        if self.use_revin:
+            # Enforce upstream pattern (PatchTST / ModernTCN / CATCH / TimesNet):
+            # loader MUST be 'zscore' (global StandardScaler fit on train).
+            # With minmax (default for 271), the loader+RevIN combination is non-standard
+            # and clipping to [0,1] before per-window normalization can cause numerical
+            # issues (very small per-window stdev → 1/stdev amplifies noise under AMP).
+            norm_mode = getattr(config, 'normalize_mode', 'zscore')
+            if norm_mode != 'zscore':
+                raise ValueError(
+                    f"use_revin=True requires normalize_mode='zscore' (got '{norm_mode}'). "
+                    "RevIN is designed for raw or zscore-normalized inputs (PatchTST/ModernTCN/"
+                    "CATCH/TimesNet standard). With minmax, the [0,1] clipping followed by "
+                    "per-window normalization is non-standard and may cause numerical instability."
+                )
+            self.revin = RevIN(
+                num_features=config.num_features,
+                eps=getattr(config, 'revin_eps', 1e-5),
+                affine=getattr(config, 'revin_affine', True),
+            )
+        else:
+            self.revin = None
 
         # Build embedding layers based on patchify_mode
         self._build_embedding_layers(config)
@@ -371,6 +514,25 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self.anomaly_classifier = AnomalyClassifierHead(
                     config.d_model, getattr(config, 'grl_cls_hidden', 0),
                     arch=getattr(config, 'grl_cls_arch', 'default'))
+
+        # SCAD (use_scad=True일 때만) — replaces GRL classifier
+        if getattr(config, 'use_scad', False):
+            self.scad_head = ScadProjectionHead(
+                d_model=config.d_model,
+                d_proj=getattr(config, 'scad_d_proj', 128),
+                arch=getattr(config, 'scad_proj_head_arch', 'default'),
+            )
+            if getattr(config, 'scad_use_memory_bank', False):
+                _q_size = getattr(config, 'scad_memory_bank_size', 1024)
+                _d_proj = getattr(config, 'scad_d_proj', 128)
+                self.register_buffer(
+                    'scad_anom_queue',
+                    torch.zeros(_q_size, _d_proj),
+                )
+                self.register_buffer(
+                    'scad_queue_ptr', torch.zeros(1, dtype=torch.long)
+                )
+                self.scad_queue_initialized = False
 
         # Weight initialization (matching original MAE: xavier_uniform for Linear, constant for LN)
         self.apply(self._init_weights)
@@ -700,6 +862,16 @@ class SelfDistilledMAEMultivariate(nn.Module):
 
         batch_size, seq_length, num_features = x.shape
 
+        # RevIN normalize (Step 6 in plan): per-window mean/std on top of loader-level zscore.
+        # Computes stats from current window, stores on self.revin for later denormalize().
+        # Upstream pattern matches ModernTCN/CATCH/TimesNet/PatchTST.
+        if self.use_revin:
+            x = self.revin.normalize(
+                x,
+                point_labels=point_labels if self.training else None,
+                visible_only=self.revin_visible_only,
+            )
+
         # Embed input based on patchify_mode
         x_embed = self._embed_input(x)  # (seq_len, batch, d_model)
         seq_len = x_embed.size(0)
@@ -830,6 +1002,12 @@ class SelfDistilledMAEMultivariate(nn.Module):
             if self.use_patch:
                 teacher_output = self.unpatchify(teacher_output)
 
+            # RevIN denormalize (Step 8 in plan): inverse per-window normalization.
+            # Output is now in the same scale as the loader-zscored input,
+            # so loss vs original_input and anomaly scoring operate in that consistent space.
+            if self.use_revin:
+                teacher_output = self.revin.denormalize(teacher_output)
+
         if _profiling:
             torch.cuda.synchronize()
             _t_teacher = time.time()
@@ -874,11 +1052,23 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self._grl_cls_logits = None
             # WDGRL: critic scores are computed in trainer.py (separate forward pass)
 
+            # SCAD: project student hidden to L2-normalized embedding space (training only)
+            # Note: stored as (num_patches, batch, d_proj) — same layout as student_hidden
+            if self.training and hasattr(self, 'scad_head'):
+                self._scad_z = self.scad_head(student_hidden)
+            else:
+                self._scad_z = None
+
             student_output = self.student_output_projection(student_hidden)
             student_output = student_output.transpose(0, 1)
 
             if self.use_patch:
                 student_output = self.unpatchify(student_output)
+
+            # RevIN denormalize: inverse per-window normalization.
+            # Uses same stats stored by self.revin during normalize() at forward entry.
+            if self.use_revin:
+                student_output = self.revin.denormalize(student_output)
 
         if _profiling:
             torch.cuda.synchronize()
