@@ -613,6 +613,101 @@ def _apply_pa_k_segment_adjustment(
     return adjusted
 
 
+def compute_extra_metrics(
+    point_scores: np.ndarray,
+    point_labels: np.ndarray,
+    threshold: float,
+    sliding_window: int = 100,
+) -> Dict[str, float]:
+    """VUS-PR, VUS-ROC, Affiliation-F1, R-based F1 — non-PA%K TSAD metrics.
+
+    VUS-PR / VUS-ROC: Paparrizos et al., "Volume Under the Surface", VLDB 2022.
+        Official: https://github.com/TheDatumOrg/VUS (pip install vus)
+    Affiliation-F1: Huet, Navarro, Rossi, "Local Evaluation of Time Series
+        Anomaly Detection Algorithms", KDD 2022.
+        Official: https://github.com/ahstat/affiliation-metrics-py
+    R-based F1: Tatbul, Lee, Zdonik, Alam, Gottschlich, "Precision and Recall
+        for Time Series", NeurIPS 2018.
+        Official wrapper used: TSB-AD's `basic_metricor.metric_RF1`
+        (https://github.com/TheDatumOrg/TSB-AD), pip install TSB-AD.
+        Called with `preds=` (fixed-threshold mode) for per-epoch cost ~ms;
+        the sweep mode (preds=None) is 100x slower (~30s on full SWaT).
+
+    Args:
+        point_scores: 1-D anomaly score per timestep.
+        point_labels: 1-D binary ground truth (1 = anomaly).
+        threshold: cutoff for converting scores -> binary predictions (used by
+                   Affiliation + R-based F1 — VUS is threshold-free).
+        sliding_window: VUS buffer length (typical 100 for TSAD benchmarks).
+
+    Returns:
+        dict with keys vus_roc, vus_pr, affiliation_precision, affiliation_recall,
+        affiliation_f1, r_based_f1. Returns zeros for degenerate input
+        (all-normal / all-anomaly / empty).
+    """
+    from vus.metrics import get_metrics as _vus_get
+    from affiliation.metrics import pr_from_events as _aff_pr
+    from affiliation.generics import convert_vector_to_events as _aff_v2e
+    from TSB_AD.evaluation.basic_metrics import basic_metricor as _rf1_grader_cls
+
+    out = {
+        'vus_roc': 0.0, 'vus_pr': 0.0,
+        'affiliation_precision': 0.0, 'affiliation_recall': 0.0,
+        'affiliation_f1': 0.0,
+        'r_based_f1': 0.0,
+    }
+
+    s = np.asarray(point_scores, dtype=float).ravel()
+    y = np.asarray(point_labels, dtype=int).ravel()
+    if len(s) == 0 or len(s) != len(y):
+        return out
+    n_pos = int(y.sum())
+    if n_pos == 0 or n_pos == len(y):
+        return out  # degenerate: VUS / Affiliation / RF1 undefined
+
+    pred = (s >= float(threshold)).astype(int)
+
+    # VUS — official example normalizes scores to [0,1] via MinMaxScaler.
+    smin, smax = float(s.min()), float(s.max())
+    s_norm = (s - smin) / (smax - smin + 1e-12)
+    try:
+        vr = _vus_get(s_norm, y, metric='all', slidingWindow=sliding_window)
+        out['vus_roc'] = float(vr.get('VUS_ROC', 0.0))
+        out['vus_pr']  = float(vr.get('VUS_PR', 0.0))
+    except Exception as e:
+        print(f"  [VUS warn] {type(e).__name__}: {e}")
+
+    # Affiliation — convert binary preds + GT to event intervals.
+    try:
+        evt_pred = _aff_v2e(pred.tolist())
+        evt_gt   = _aff_v2e(y.tolist())
+        if len(evt_pred) > 0 and len(evt_gt) > 0:
+            ar = _aff_pr(evt_pred, evt_gt, (0, len(s)))
+            p  = float(ar.get('precision', 0.0))
+            r_ = float(ar.get('recall', 0.0))
+            out['affiliation_precision'] = p
+            out['affiliation_recall']    = r_
+            out['affiliation_f1'] = (2.0 * p * r_ / (p + r_)) if (p + r_) > 0 else 0.0
+    except Exception as e:
+        print(f"  [Aff warn] {type(e).__name__}: {e}")
+
+    # R-based F1 — Tatbul 2018 via TSB-AD's metric_RF1 at fixed threshold.
+    try:
+        rf1 = _rf1_grader_cls().metric_RF1(y, s, preds=pred)
+        out['r_based_f1'] = float(rf1)
+    except Exception as e:
+        print(f"  [RF1 warn] {type(e).__name__}: {e}")
+
+    return out
+
+
+EXTRA_METRIC_KEYS = (
+    'vus_roc', 'vus_pr',
+    'affiliation_precision', 'affiliation_recall', 'affiliation_f1',
+    'r_based_f1',
+)
+
+
 def compute_pa_k_auc(
     point_scores: np.ndarray,
     point_labels: np.ndarray,
@@ -1719,7 +1814,7 @@ class Evaluator:
         pak_auc_keys = ['pak_auc_prc_auc', 'pak_auc_roc_auc', 'pak_auc_f1',
                         'pak_auc_f1_t', 'pak_auc_precision', 'pak_auc_recall',
                         'pak_auc_f1_raw', 'pak_auc_f1_t_raw',
-                        'pak_auc_precision_raw', 'pak_auc_recall_raw']
+                        'pak_auc_precision_raw', 'pak_auc_recall_raw'] + list(EXTRA_METRIC_KEYS)
         zero_results = {
             'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
             'f1_score': 0.0, 'optimal_threshold': 0.0,
@@ -1798,6 +1893,9 @@ class Evaluator:
         )
         results.update(pak_auc)
 
+        # === VUS-PR/ROC + Affiliation-F1 (official implementations) ===
+        results.update(compute_extra_metrics(point_scores, pt_labels, threshold))
+
         # Disturbing normal performance (window-level, descriptive)
         # sample_type: 0=pure_normal, 1=disturbing_normal, 2=anomaly
         _fm_w = self._get_cached_fm_scores()
@@ -1851,7 +1949,7 @@ class Evaluator:
         pak_auc_keys = ['pak_auc_prc_auc', 'pak_auc_roc_auc', 'pak_auc_f1',
                         'pak_auc_f1_t', 'pak_auc_precision', 'pak_auc_recall',
                         'pak_auc_f1_raw', 'pak_auc_f1_t_raw',
-                        'pak_auc_precision_raw', 'pak_auc_recall_raw']
+                        'pak_auc_precision_raw', 'pak_auc_recall_raw'] + list(EXTRA_METRIC_KEYS)
         zero_results = {
             'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
             'f1_score': 0.0, 'optimal_threshold': 0.0,
@@ -1923,6 +2021,9 @@ class Evaluator:
             point_scores, pt_labels, anomaly_regions, threshold, eval_mask
         )
         results.update(pak_auc)
+
+        # === VUS-PR/ROC + Affiliation-F1 (official implementations) ===
+        results.update(compute_extra_metrics(point_scores, pt_labels, threshold))
 
         return results
 
@@ -2012,5 +2113,8 @@ def compute_metrics_with_exclusion(point_scores, pt_labels, anomaly_regions, exc
         point_scores, pt_labels, filtered_regions, threshold, eval_mask
     )
     results.update(pak_auc)
+
+    # === VUS-PR/ROC + Affiliation-F1 (official implementations) ===
+    results.update(compute_extra_metrics(point_scores, pt_labels, threshold))
 
     return results
