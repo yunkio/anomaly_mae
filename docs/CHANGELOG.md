@@ -1,5 +1,185 @@
 # Changelog
 
+## 2026-05-26: Comparison boundary-safe predicate 를 MAE-strict 형태로 통일 (effective span = window + target)
+
+**Predicate 표기 통일 (numerical 결과 0 영향)** — `<= end` 표기를 `< end_eff` (where `end_eff = i + seq_len + 1`) 로 변경. `b <= X` ⇔ `b < X + 1` 정수 동치에 의해 algebraically 같으나, 표기 형태가 MAE 의 `start < b < end` 와 글자 그대로 동일해짐. Effective span 을 `(window, target)` 결합 = `seq_len + 1` 로 정의하여 next-step target boundary leak 까지 자동 차단.
+
+**핵심**: window 자체 길이 `seq_len` 은 유지, "boundary check 단위" 만 `seq_len + 1` 로 확장. MAE 가 reconstruction-only (target 개념 없음) 라 window-only check 면 충분한 것과 자연스럽게 호환 — MAE 의 `window_size = SEQ + 1` 설정 시 comparison 과 정확히 같은 start indices 산출 (검증됨).
+
+**변경 method**:
+- `create_train_windows_boundary_safe` (standard): `for i in range(0, n - seq_len, stride): end_eff = i + seq_len + 1; if any(i < b < end_eff for b in bs): continue`
+- `create_windows_from_segments` (normalonly): 위 + anomaly skip `if pl[i:end_eff].sum() > 0: continue`
+
+**3-axis 검증 (CPU-only, all PASS)**:
+
+### (1) Byte-identical to `<= end` (이전 버전)
+14 entries (8 standard + 6 normalonly) — shape + 모든 값 완전 일치:
+```
+Standard:    smap/msl/smap_simple/msl_simple/swat/psm/smd_simple/exathlon → byte_identical=True
+NormalOnly:  smap/msl/smap_simple/msl_simple/psm/smd_simple → byte_identical=True
+```
+
+### (2) MAE SlidingWindowDataset (window_size = seq_len+1) 와 start indices 완전 일치
+같은 boundary set 에 대해 comparison `i < b < i+seq_len+1` 와 MAE `start < b < start+window_size` (with window_size = SEQ+1) 이 같은 인덱스 produce:
+```
+smap         {}: cmp=345,105 mae=345,105 identical=True
+msl          {}: cmp= 89,871 mae= 89,871 identical=True
+smap_simple  {A-1}: cmp=7,000 mae=7,000 identical=True
+msl_simple   {C-1}: cmp=3,090 mae=3,090 identical=True
+swat         {}: cmp=719,759 mae=719,759 identical=True
+psm          {}: cmp=176,201 mae=176,201 identical=True
+smd_simple   {m-1-1}: cmp=42,518 mae=42,518 identical=True
+exathlon     {app=1}: cmp=43,492 mae=43,492 identical=True
+```
+
+### (3) Next-step prediction target safety (모든 dataset)
+어떤 accepted window 의 target index 도 boundary 위에 떨어지지 않음 + normalonly 에서는 anomaly point 위에도 떨어지지 않음:
+```
+Standard variant:    8 dataset 모두 next-step target violations = 0
+NormalOnly variant:  6 dataset 모두 boundary_viol=0, anomaly_target_viol=0
+```
+
+### (4) Pattern A/B regression
+`verify_pattern_ab.py`: **23/23 PASS**
+
+**의의**:
+- MAE 와 comparison 양쪽이 같은 predicate 형태 (`start < b < end`) 사용 — strict identical
+- 단 effective span 정의가 다름: MAE = window only, comparison = window + target (target convention 반영)
+- 결과: 같은 boundary skip set 산출 (검증됨), 모든 baseline type (reconstruction + next-step forecasting + simple) 안전
+- Numerical 결과는 직전 `<= end` 버전과 byte-identical → 진행 중/완료된 실험 영향 0
+
+**Backup**: `/home/ykio/notebooks/claude/.trash/0526/smap_msl_pattern_b/comparison/data/unified_loader.py.strict_mae.pre`.
+
+---
+
+## 2026-05-26: Comparison 측 boundary-safe 구현을 MAE-style single-pass 로 통일
+
+**구현 통일** — `comparison/data/unified_loader.py` 의 boundary-safe 윈도우 생성 두 method 를 MAE 측 (`mae_anomaly.dataset_sliding.SlidingWindowDataset._extract_windows`) 와 동일한 single-pass-with-skip 알고리즘으로 재작성. 이전 segment-split (각 segment 내부 sliding) → MAE-style (전체 train 1 회 pass + in-loop skip) 로 변경.
+
+**변경 method**:
+1. `create_train_windows_boundary_safe` (standard variant) — `self.train_features[:train_end]` 위에 single global pass, `i < b <= i+seq_len` 이면 skip
+2. `create_windows_from_segments` (normalonly variant) — `self.features[:original_train_length]` (anomaly 보존 view) 위에 single global pass, (a) boundary skip (`i < b <= end`) + (b) anomaly point skip (`point_labels[i:end+1].sum() > 0`) 두 조건 모두 통과 시 사용. 즉 anomaly + boundary 처리를 한 pass 에 통합.
+
+**MAE 와 차이점 (의도적)**:
+- `_epoch_offset` 없음 (deterministic, 사용자 명시) — MAE 는 epoch 마다 random shift
+- Skip predicate 가 `start < b <= end` (MAE 는 `start < b < end`) — comparison 의 next-step target 이 boundary 의 첫 timestep 에 떨어지는 case 도 차단. MAE 는 target 개념이 없어 strict less-than 만으로 충분.
+- target/label 표현: MAE 는 reconstruction (window 자체), comparison 은 next-step (`train_X[end]`) — baseline task 특성 유지
+
+**그 외 부분 (stride 정렬, last timestep 처리, single-pass 형태)**: MAE 와 동일.
+
+**검증 (CPU-only)**:
+- **Byte-identical** 검증: 14개 entry (8 standard + 6 normalonly) 의 새 single-pass output 이 이전 segment-split output 과 **shape + 모든 값 완전 일치**. `verify_mae_style.py` 결과:
+  ```
+  Standard:  smap, msl, smap_simple, msl_simple, swat, psm, smd_simple, exathlon — 모두 identical=True
+  NormalOnly: smap, msl, smap_simple, msl_simple, psm, smd_simple — 모두 diff=+0
+  ```
+- `verify_pattern_ab.py` **23/23 PASS** (Pattern A/B regression 0)
+
+**의의**: 같은 boundary-safe set 을 두 다른 알고리즘 (single-pass vs segment-split) 으로 생성해도 stride=1 일 때 윈도우가 정확히 일치함을 증명. 이제 MAE 와 comparison 양쪽이 **알고리즘 형태도 동일** (epoch_offset, target convention 제외).
+
+**Backup**: `/home/ykio/notebooks/claude/.trash/0526/smap_msl_pattern_b/comparison/data/unified_loader.py.mae_style.pre`.
+
+---
+
+## 2026-05-26: Boundary-safe sliding windows — 모든 multi-segment dataset standard variant 적용 (확장)
+
+**안전성 수정 (전 dataset 확장)** — `data_info['run_boundaries']` 가 비지 않은 모든 dataset 의 comparison/baseline standard variant 에서 boundary cross sliding window 자동 차단. MAE 메인 파이프라인 (`SlidingWindowDataset`) 이 이미 enforce 하는 것을 baseline 측에도 동일 적용.
+
+**문제**: 이전 동작에서는 `is_segment_aware=False` (standard variant) 인 모든 entry 가 `model._create_windows(train_X)` / `model.fit(train_X)` 로 boundary 무시 sliding 을 수행 → 시간적으로 비연속한 두 recording 의 timestep 이 한 윈도우에 들어감.
+
+| 경계 종류 | 해당 dataset | 한 윈도우에 mixed 가능했던 것 |
+|---|---|---|
+| Cross-channel concat | `smap` / `msl` (Pattern A) | 다른 telemetry channel 의 timestep |
+| Cross-recording | `swat_a1a2`, `wadi_14days_A1`/`A2`, `psm`, `smd_*`, `smap_simple`, `msl_simple` | 다른 recording 시점의 timestep |
+| Cross-trace | `exathlon_app*` | 다른 Spark application 의 timestep |
+
+**적용 범위 (모든 multi-segment dataset 의 standard variant)**:
+
+| Entry | run_boundaries | Dropped windows (seq_len=100, stride=1) | drop % |
+|---|---|---|---|
+| `smap` (Pattern A) | 161 | 10,700 | 3.01% |
+| `msl` (Pattern A) | 80 | 5,300 | 5.57% |
+| `smap_{ch}` (Pattern B) × 54 | 1 each | ~100 each | 1.4% |
+| `msl_{ch}` (Pattern B) × 27 | 1 each | ~100 each | 3.1% |
+| `swat_a1a2` | 1 | 100 | 0.01% |
+| `wadi_14days_A1`/`A2` | 1 | 100 | <0.01% |
+| `psm` | 1 | 100 | 0.06% |
+| `smd_*` × 28 | 1 each | 100 each | ~0.25% |
+| `exathlon_app*` × 6 | trace 별 6-8개 | 600-800 each | 0.18-1.36% |
+| `simulation` | 0 | 0 (변화 없음) | — |
+| 모든 `*_normalonly` | — | 변화 없음 (이미 처리) | — |
+
+**구현 (2 files, additive)**:
+- `comparison/data/unified_loader.py`: `UnifiedLoader.get_boundary_train_segments()` + `create_train_windows_boundary_safe(seq_len, stride)` 헬퍼 추가 (dataset-agnostic) — anomaly 보존 + run_boundaries 기준 segment 분리.
+- `comparison/run_baseline.py`: NEURAL/SOTA baseline dispatch 에서 `has_run_boundaries = bool(loader.data_info.get('run_boundaries'))` 만 체크. `is_segment_aware=False` + `has_run_boundaries=True` 이면 boundary-safe path 사용. simulation 만 변화 없음 (run_boundaries 없음).
+
+**의도된 numerical 영향**:
+- 기존 SWaT/WaDi/PSM/SMD/Exathlon baseline 결과와 numerical 차이 발생 — boundary 가로지르는 학습 sample 들이 제거됨. 작지만 (대부분 < 1.5%) 재현성 비교 시 알려져야 함.
+- SMAP/MSL Pattern A 가 가장 큰 영향 (3-5.6% drop) — 가장 부자연스러운 cross-channel mixing 제거.
+
+**MAE pipeline 영향**: 없음 (`SlidingWindowDataset` 은 이미 `run_boundaries` 인식).
+
+**검증 (CPU-only)**:
+- Pattern A/B regression: `verify_pattern_ab.py` **23/23 PASS**
+- 10-entry dispatch matrix: simulation (run_boundaries 없음) 만 `uses_bsafe=False`, 나머지 모두 `True`
+- 각 dataset 의 segment 분할 정확 (Exathlon trace 별, SMD/PSM/SWaT/WaDi orig↔test_front, SMAP 108 sub-blocks = 54 ch × 2, MSL 54 sub-blocks = 27 × 2)
+
+**Backup**: `/home/ykio/notebooks/claude/.trash/0526/smap_msl_pattern_b/comparison/{unified_loader.py.cross_channel_fix.pre, run_baseline.py.cross_channel_fix.pre}`.
+
+---
+
+## 2026-05-26: NASA SMAP + MSL (Telemanom) — Pattern A (concat) + Pattern B (per-channel) 통합
+
+**기능 추가** — Hundman et al. *"Detecting Spacecraft Anomalies Using LSTMs and Nonparametric Dynamic Thresholding"* (KDD 2018, DOI [`10.1145/3219819.3219845`](https://doi.org/10.1145/3219819.3219845), arXiv [`1802.04431`](https://arxiv.org/abs/1802.04431)) Telemanom benchmark 의 SMAP (54 channels × 25 features) / MSL (27 channels × 55 features) 두 dataset 을 baseline comparison pipeline 에 통합.
+
+**Source**: `https://s3-us-west-2.amazonaws.com/telemanom/data.zip` (현재 HTTP 403 → Wayback Machine 2022-10-16 snapshot 사용; Telemanom README 는 최근 Kaggle 미러 안내). Labels: `https://raw.githubusercontent.com/khundman/telemanom/master/labeled_anomalies.csv`.
+
+**2 가지 통합 패턴 (additive, 둘 다 사용 가능)**:
+- **Pattern A** (`smap` / `smap_normalonly` / `msl` / `msl_normalonly` — 4 entries): 모든 channel 을 시간축으로 concat 한 single stream. `run_boundaries` 가 channel 경계 + intra-channel `orig_train↔test_front` junction 모두 등록 (SMAP 161, MSL 80). UnifiedLoader 가 모든 채널의 train portion 에 single per-feature minmax fit — Anomaly Transformer/TimesNet/DCdetector 가 사용하는 OmniAnomaly preprocessed mirror 의 묵시적 가정과 일치.
+- **Pattern B** (`smap_{ch}` / `smap_{ch}_normalonly` × 54 + `msl_{ch}` / `msl_{ch}_normalonly` × 27 — 162 entries): 각 channel 을 독립으로 처리. UnifiedLoader 가 해당 channel 의 train portion 만으로 minmax fit — **per-channel scaler**, OmniAnomaly (KDD'19) + 원본 Telemanom 의 entity-level 처리 관례 + 우리 pipeline 의 SMD per-machine / Exathlon per-app 패턴과 일관. SMD `smd_{machine}` 패턴 그대로 (162 entries dynamic for-loop 생성).
+
+**Split rule (둘 다 공통)**:
+- 각 channel 별로 `train = orig_train.npy (all normal) + test_front_50%`, `test = test_back_50%` (PSM convention)
+- 50% cut 은 anomaly region 밖으로 ±10 timestamps 이동 (SMD `_find_safe_cut_point` 재사용)
+- 검증: boundary-straddling anomaly = **0건** (SMAP 54/54, MSL 27/27). MSL 4 channels (D-16, M-1, M-2, S-2) 에서 cut 이동 발생.
+
+**SMAP P-2 channel duplicate** — CSV 에 P-2 가 2 번 등장 (anomaly_sequences `[[5350,6575]]` vs `[[5300,6420]]`). 처리 정책 **UNION** (`[5300, 6575]` 가 anomaly) — 가장 conservative. 다른 baseline 처리 4 variants: OmniAnomaly excludes, TranAD silent overwrite, QuoVadis MSL `P-2_` 만 remove, 우리 = UNION.
+
+**변경 사항** (6 source files, ~280 LoC, additive only — 기존 dataset 동작 영향 0):
+- `mae_anomaly/datasets/loaders.py`: 이전 작업 (`_load_smap_msl_combined` + `load_smap_combined` + `load_msl_combined` Pattern A) 위에 `SMAP_CHANNEL_NAMES` (54), `MSL_CHANNEL_NAMES` (27), `_load_smap_msl_simple_single`, `load_smap_simple(channel)`, `load_msl_simple(channel)` Pattern B 추가
+- `mae_anomaly/datasets/__init__.py`: 6 신규 식별자 exports
+- `comparison/data/unified_loader.py`: `channel` parameter + `'smap_simple'` / `'msl_simple'` dispatch
+- `comparison/experiment_configs.py`: SMD pattern dynamic for-loop 으로 162 entries 자동 생성
+- `set_guideline.md` + `docs/DATASET.md`: SMAP/MSL Pattern A+B 섹션 + 출처/citation/통계
+
+**Verification (CPU-only, 23/23 PASS)**:
+- Pattern A regression 5/5 (shape, train_end, run_boundaries, normalonly NormalSegments 모두 일치)
+- Pattern B sanity 6/6 (shape, train_end, run_boundaries=[orig_train_len], MSL 55 feats, normalonly)
+- Per-channel scaler vs concat scaler 차이 증명 (max |min_A - min_B| = 1.999)
+- Boundary-safety: SMAP 0/54 violations, MSL 0/27 violations
+- experiment_configs entries: 4 Pattern A + 108 SMAP Pattern B + 54 MSL Pattern B
+- Smoke load: SMAP 54/54 + MSL 27/27
+- GPU 미사용 (`torch.cuda.is_initialized() == False`)
+
+**미통합 (의도된 scope 분리, 별도 작업)**:
+- `mae_anomaly/datasets/loaders.py:DATASET_LOADERS` 등록 — MAE 학습 통합
+- `scripts/run_base_experiments.py:DATASETS` 추가 — MAE 학습 통합
+- `comparison/configs/baseline_queue_*.json` 에 162 entries — automation queue
+
+**Notion 업데이트**:
+- "Baseline Comparison" 페이지 (`32087856b2078112b500c81664181ee7`): 13 곳 (title, snapshot callout, §2 dataset 표, §6.4/6.5/6.6/6.7 citation/license/refs/ack, §8 changelog) additive update, page +14.6%
+- "0. MAE" 페이지 (`31387856b20781cd8d4ed14df7f65470`): 4 곳 (§1.2 데이터셋 카운트 self-inconsistency 정정 + SMAP/MSL callout, §5.2.2 향후 확장 row, §5.4 References [12] Hundman 2018)
+
+**작업 로그**:
+- `/home/ykio/notebooks/claude/temp/msl_smap_pattern_ab_0526/10_FINAL_REPORT.md` (메인 보고서)
+- `/home/ykio/notebooks/claude/temp/smap_dataset_integration_0526/FINAL_REPORT.md` (이전 Pattern A 작업)
+
+**Backup**: `/home/ykio/notebooks/claude/.trash/0526/smap_msl_pattern_b/` (6 파일 SHA-256 검증).
+
+**Independent review (critical-reviewer agent)**: **ACCEPT** (10/10 axes PASS, 8 critical issues 모두 처리, 5 non-blocking + 3 missing insights documented).
+
+---
+
 ## 2026-05-23: SCAD (Supervised Contrastive Anomaly Discrimination) 통합
 
 **기능 추가** — Student decoder hidden 위에 작용하는 새로운 supervised contrastive loss. GRL의 대체 옵션으로 추가 (`use_scad: bool = False` 기본 OFF).
@@ -179,13 +359,13 @@ Q3 v6 P20의 19% inverted anomaly subtype의 본질을 4 hypothesis (label noise
 
 - `mae_anomaly/scripts/q3_exploration/RESULTS_v7.md` — comprehensive report (450+ lines)
 
-## 2026-05-19: 신규 SOTA 10개 통합 (TFMAE/TimesNet에 이어 DCdetector/MEMTO/ModernTCN/AnomalyBERT/CrossAD/CATCH/CAROTS/NPSR 추가)
+## 2026-05-19: 신규 SOTA 7개 통합 (TFMAE/TimesNet/DCdetector/MEMTO/ModernTCN/CATCH/NPSR)
 
 ### Summary
 
-비교 baseline을 15 → 25 standard baselines로 확장. 2023-2025 frontier TS-AD 논문 10개를 단일 배치로 통합 (`comparison/baselines/<model>/{model.py, wrapper.py, __init__.py}` + 3곳 등록).
+비교 baseline을 15 → 22 standard baselines로 확장. 2023-2025 frontier TS-AD 논문 7개를 단일 배치로 통합 (`comparison/baselines/<model>/{model.py, wrapper.py, __init__.py}` + 3곳 등록).
 
-### 새로 추가된 모델 (10개)
+### 새로 추가된 모델 (7개)
 
 | Phase | 모델 | 학회 | Distinct objective |
 |---|---|---|---|
@@ -195,26 +375,23 @@ Q3 v6 P20의 19% inverted anomaly subtype의 본질을 4 hypothesis (label noise
 | 2 | DCdetector | KDD'23 | Patch + in-patch dual attention, symmetric KL |
 | 3 | MEMTO | NeurIPS'23 | Memory module w/ K-means init, 2-phase training |
 | 3 | ModernTCN | ICLR'24 Spot | Large-kernel DW + dual ConvFFN mixers |
-| 4 | AnomalyBERT | ICLR'23 WS | 4-type degradation self-supervision (BCE) |
-| 4 | CAROTS | ICML'25 | Pos/neg augmenters + triplet + energy scorer |
-| 5 | CrossAD | NeurIPS'25 | Multi-scale + learnable query library, recon |
 | 5 | CATCH | ICLR'25 | Channel-mask + freq recon + channel discovery |
 
 ### 변경 — Code
 
-- `comparison/baselines/<model>/` — 10개 신규 디렉토리, 모두 (model.py + wrapper.py + __init__.py).
-- `comparison/baselines/__init__.py` — 10개 `XxxBaseline` import + `__all__` 갱신.
-- `comparison/baseline_common.py` — 10개 `HAS_XXX` import-guard, `BASELINE_MODELS` / `SOTA_MODELS` / `SOTA_AVAILABILITY` 등록, `MODEL_PRESETS['default']` 등록 (각 모델 단일 preset, 전 데이터셋 동일), `create_model()` dispatch `elif` 분기.
-- `comparison/experiment_configs.py` — `STANDARD_BASELINES` 리스트에 10개 key 추가.
+- `comparison/baselines/<model>/` — 7개 신규 디렉토리, 모두 (model.py + wrapper.py + __init__.py).
+- `comparison/baselines/__init__.py` — 7개 `XxxBaseline` import + `__all__` 갱신.
+- `comparison/baseline_common.py` — 7개 `HAS_XXX` import-guard, `BASELINE_MODELS` / `SOTA_MODELS` / `SOTA_AVAILABILITY` 등록, `MODEL_PRESETS['default']` 등록 (각 모델 단일 preset, 전 데이터셋 동일), `create_model()` dispatch `elif` 분기.
+- `comparison/experiment_configs.py` — `STANDARD_BASELINES` 리스트에 7개 key 추가.
 
 ### 변경 — Docs
 
-- `comparison/MODELS.md` — 헤더 "17 baseline models" → "25 baseline models", New SOTA 섹션 확장 (16–25). 모델별 description + configuration table + reference.
-- `comparison/GUIDE.md` — 디렉토리 트리에 신규 10개 엔트리, 모델 분류 표 갱신 (17개 → 25개), 신규 10개 모델 description.
+- `comparison/MODELS.md` — 헤더 "17 baseline models" → "22 baseline models", New SOTA 섹션 확장 (16–22). 모델별 description + configuration table + reference.
+- `comparison/GUIDE.md` — 디렉토리 트리에 신규 7개 엔트리, 모델 분류 표 갱신 (17개 → 22개), 신규 7개 모델 description.
 
 ### 검증
 
-End-to-end import + create_model + 모델 forward smoke-test (10개 모두 통과):
+End-to-end import + create_model + 모델 forward smoke-test (7개 모두 통과):
 
 | 모델 | Params | 비고 |
 |---|---|---|
@@ -223,17 +400,14 @@ End-to-end import + create_model + 모델 forward smoke-test (10개 모두 통�
 | dcdetector | 0.87M | |
 | memto | 5.28M | 2-phase (random→K-means init) |
 | moderntcn | 0.10M | |
-| anomalybert | 18.93M | |
-| crossad | 4.88M | 구조적 재구성 |
 | catch | 0.43M | 구조적 재구성 |
-| carots | 2.52M | 구조적 재구성 |
 | npsr | 6.35M | Performer fallback → MHA |
 
-**Note**: CrossAD/CATCH/CAROTS는 paper architecture + integration-plan hyperparameters 기준 structural reconstruction. NPSR은 `performer-pytorch` 의존을 optional로 만들어 미설치 시 `nn.MultiheadAttention` fallback.
+**Note**: CATCH는 paper architecture + integration-plan hyperparameters 기준 structural reconstruction. NPSR은 `performer-pytorch` 의존을 optional로 만들어 미설치 시 `nn.MultiheadAttention` fallback.
 
 ### Pending (별도 작업)
 
-- 신규 10개 모델 학습 실험 (사용자 요청: "실행만 빼고 코드구현 다 해봐").
+- 신규 7개 모델 학습 실험 (사용자 요청: "실행만 빼고 코드구현 다 해봐").
 - TFMAE/TimesNet/DCdetector는 이전 세션에서 동일 패턴 통합, 본 배치에서 코드 검증만 추가.
 
 ---
@@ -327,7 +501,7 @@ End-to-end import + 1 epoch fit + predict (tiny dummy data, T=500/200, D=8) 양 
 
 ### 다음 단계
 
-Phase 1+2 외 8개 모델 (NPSR, DCdetector, MEMTO, ModernTCN, CAROTS, AnomalyBERT, CrossAD, CATCH)은 별도 세션에서 진행. NPSR은 `performer-pytorch` 패키지 설치 필요 (blocker, 사용자 승인 대기).
+Phase 1+2 외 5개 모델 (NPSR, DCdetector, MEMTO, ModernTCN, CATCH)은 별도 세션에서 진행. NPSR은 `performer-pytorch` 패키지 설치 필요 (blocker, 사용자 승인 대기).
 
 Q1/Q3 전체 데이터셋 실행 계획은 별도 Notion subpage에 상세 작성 (실행 정책상 현재 미수행).
 

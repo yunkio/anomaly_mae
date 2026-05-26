@@ -46,57 +46,108 @@ Claude용 참조 문서. 실험 재현/새 실험 지시 시 사용.
 
 정확한 값: `scripts/run_base_experiments.py` 내 `CONFIG_PRESETS` dict 참조.
 
-## 데이터셋 (9 + 56개)
+## 데이터셋 (MAE 학습: 5 base + 28 SMD + 6 Exathlon = 39개 / Baseline 비교: 추가 SMAP·MSL Pattern A+B)
 
-`python scripts/run_base_experiments.py --set A --list` 로 확인 가능.
+`python scripts/run_base_experiments.py --set A --list` 로 MAE 학습 대상 확인 가능.
+Baseline 비교 entry 전체 (Pattern A + Pattern B 포함) 는 `comparison/experiment_configs.py:EXPERIMENT_CONFIGS` 참조.
 
-| Key | Loader | Normal50 | Subdir |
-|-----|--------|----------|--------|
-| simulation | simulation | No | simulation/simulation |
-| simulation_normal50 | simulation | Yes | simulation/simulation_normal50 |
-| simulation_complex | simulation_complex | No | simulation/simulation_complex |
-| simulation_complex_normal50 | simulation_complex | Yes | simulation/simulation_complex_normal50 |
-| SWaT_A1A2 | swat_A1A2 | No | SWaT/A1A2_full + SWaT/A1A2_excl22 |
-| SWaT_A1A2_normal50 | swat_A1A2 | Yes | SWaT/A1A2_normal50_full + SWaT/A1A2_normal50_excl22 |
-| SWaT_A1A2_swap | swat_A1A2_swap | No | SWaT/A1A2_swap |
-| WaDi_A1 | WaDi_14days_A1 | No | WaDi/A1 |
-| WaDi_A2 | WaDi_14days_A2 | No | WaDi/A2 |
+### Active datasets (MAE default 실행 대상)
+
+| Key | Loader | Subdir | 비고 |
+|-----|--------|--------|------|
+| `simulation` | simulation | `simulation/simulation` | 코드 내 생성 |
+| `SWaT_A1A2` | swat_A1A2 | `SWaT/A1A2_full` + `SWaT/A1A2_excl22` | **단일 학습 + dual eval** (region22 제외 평가 별도 기록) |
+| `WaDi_A1` | WaDi_14days_A1 | `WaDi/A1` | |
+| `WaDi_A2` | WaDi_14days_A2 | `WaDi/A2` | |
+| `PSM` | PSM | `PSM` | 단일 stream, eBay RANSynCoders 출처 |
+| `smd_{machine}` × 28 | smd_simple_{machine} | `SMD/{machine}/` | 동적 생성, 28머신 |
+| `exathlon_app{N}` × 6 | exathlon_app{N} | `Exathlon/app{N}/` | 동적 생성, 6 apps {1,2,4,5,6,9} (TimeSeAD 6-app convention) |
+
+### Baseline 비교 전용 datasets (Pattern A + Pattern B, NASA Telemanom)
+
+Hundman et al. KDD 2018 (DOI `10.1145/3219819.3219845`, arXiv `1802.04431`) 공식 SMAP/MSL telemetry anomaly benchmark.
+Data: `https://s3-us-west-2.amazonaws.com/telemanom/data.zip` (현재 HTTP 403 → Wayback Machine 2022-10-16 snapshot 사용).
+
+| Key | Loader | Pattern | 비고 |
+|-----|--------|---------|------|
+| `smap` / `smap_normalonly` | load_smap_combined | **A** — all-channels concat (54 ch × 25 feat) | 단일 stream + `run_boundaries` 161개로 channel 경계 marking. minmax는 cross-channel single fit. |
+| `msl` / `msl_normalonly` | load_msl_combined | **A** (27 ch × 55 feat) | run_boundaries 80개. |
+| `smap_{channel}` / `smap_{channel}_normalonly` × 54 | load_smap_simple(channel) | **B** — per-channel (SMD/Exathlon 패턴) | OmniAnomaly/Telemanom entity-level scaler — per-channel minmax fit. |
+| `msl_{channel}` / `msl_{channel}_normalonly` × 27 | load_msl_simple(channel) | **B** (per-channel) | 동일 |
+
+Pattern A vs B 차이: 동일 raw npy + 동일 50/50 PSM-style split + 동일 safe-cut margin=10 → sample은 동일. **차이는 minmax/zscore fit 범위 (concat vs per-channel) + entry granularity 만**. 보고: Pattern B 의 per-channel F1/PRC 평균을 SMD/Exathlon 처럼 spacecraft 단위 집계.
 
 모든 데이터셋 train stride = 21, test stride = 21.
-Normal50 = 학습 데이터의 anomaly region 중 50%를 normal로 재라벨링 (seed=123).
 Loader 레지스트리: `mae_anomaly/datasets/loaders.py` → `DATASET_LOADERS`
+
+> **비활성 variant** (`*_normal50`, `simulation_complex`, `SWaT_A1A2_swap`): 2026-05-17 자로 default DATASETS에서 제외. loader는 유지되어 명시적 `--dataset` 호출로만 사용 가능.
 
 **데이터 파일 (raw CSV만 사용)**:
 - SWaT: `dataset/SWaT/SWaT.A1 & A2_Dec 2015/SWaT_A1_normal_raw.csv`, `SWaT_A2_attack_raw.csv`
 - WaDi A1: `dataset/WaDi/WADI.A1_9 Oct 2017/WADI_A1_14days_raw.csv` + `WADI_A1_attack_raw.csv`
 - WaDi A2: `dataset/WaDi/WADI.A2_19 Nov 2019/WADI_A2_14days_raw.csv` + `WADI_A2_attack_raw.csv`
+- PSM: `dataset/PSM/{train.csv, test.csv, test_label.csv}` (eBay RANSynCoders, BSD-3-Clause)
+- SMD: `dataset/SMD/{machine}/{train.txt, test.txt, test_label.txt}` (28머신)
+- Exathlon: `dataset/Exathlon/app{N}/{trace_name}.csv` (19 FScustom features + label, preprocess.py로 추출)
 - Simulation: 코드 내 생성 (`load_simulation()`)
 
 ### SMD 데이터셋 (28머신)
 
-SWaT/WaDi와 동일한 50/50 split 방식.
-
-| Key 패턴 | Loader | Subdir |
-|-----------|--------|--------|
-| `smd_{machine_id}` | `smd_simple_{machine_id}` | `SMD/{machine}` |
+SWaT/WaDi/PSM와 동일한 50/50 split 방식.
 
 - Train = 원본 train 파일 (전부 정상) + test 파일 앞 50%
 - Test = test 파일 뒤 50%
 - 집계: `aggregate_smd_results(experiment_dir)` → `SMD/results/results.csv`
 
-**SMD 결과 디렉토리 구조**:
+### PSM 데이터셋 (단일 stream)
+
+- Train = 원본 train 파일 (132,481 전부 정상) + test 파일 앞 50% (43,920) → 176,401
+- Test = test 파일 뒤 50% (43,921)
+- 25 features, run_boundaries=[132481]
+- 220,322 timesteps, train_ratio=0.8007, 72 anomaly regions
+- 단일 stream이므로 머신별 분리 없음 (key 1개)
+- NaN 처리: ffill + bfill (loader 내부 처리)
+- 결과 디렉토리: `{experiment_dir}/PSM/` (subdir 없음)
+
+### Exathlon 데이터셋 (6 apps)
+
+Spark cluster trace 기반 explainable AD 벤치마크 (Jacob et al., VLDB 2021). TimeSeAD 권장 dataset 중 하나.
+
+- 출처: 10 Spark applications × 93 traces, 2.5개월, 1Hz 샘플링
+- 원본 2,283 features → **19 FScustom features** 추출 (manual domain selection, paper upper-bound)
+- Apps used: **{1, 2, 4, 5, 6, 9}** (apps 7, 8 제외 — 구조적 결함)
+- 각 app당 별도 학습 + 6 apps 평균 (SMD per-machine pattern)
+- Train = 모든 undisturbed traces + first floor(N_dist/2) disturbed traces (sorted by trace_id)
+- Test = 나머지 disturbed traces
+- 6 anomaly 종류: T1 bursty input, T2 bursty crash, T3 stalled input, T4 CPU contention, T5 driver failure, T6 executor failure
+- 라벨: RCI ∪ EEI (root cause + extended effect)
+- 집계: `aggregate_exathlon_results(experiment_dir)` → `Exathlon/results/results.csv`
+- Preprocessing: `dataset/Exathlon/preprocess.py`
+
+| App | Train Rows | Test Rows | Train Anom% | Test Anom% | #Anomaly Regions |
+|:---:|:----------:|:---------:|:-----------:|:----------:|:----------------:|
+| app1 | 44,192 | 46,705 | 5.24% | 13.24% | 9 |
+| app2 | 118,230 | 46,720 | 3.89% | 26.46% | 9 |
+| app4 | 337,373 | 3,621 | 4.77% | 17.34% | 11 |
+| app5 | 269,387 | 53,388 | 5.26% | 7.29% | 21 |
+| app6 | 348,832 | 50,270 | 1.39% | 8.84% | 11 |
+| app9 | 326,571 | 49,023 | 2.25% | 12.47% | 14 |
+
+### 결과 디렉토리 구조
+
 ```
 {experiment_dir}/
-├── simulation/simulation/       # 기존 9개 데이터셋
-├── SWaT/A1A2_full/
-├── SWaT/A1A2_excl22/
-├── WaDi/A1/
-├── WaDi/A2/
-└── SMD/                        # SMD 28머신
-    ├── machine-1-1/            # epoch_metrics.json 등 직접 저장
-    ├── machine-1-2/
-    ├── ...
-    └── results/results.csv     # 28머신 평균
+├── simulation/simulation/        # 1 dataset
+├── SWaT/A1A2_full/               # SWaT 단일 학습
+├── SWaT/A1A2_excl22/             # SWaT excl region22 평가 (별도 결과)
+├── WaDi/A1/, WaDi/A2/            # 2 datasets
+├── PSM/                          # PSM 단일 stream
+├── SMD/                          # SMD 28머신
+│   ├── machine-1-1/ ... machine-3-11/   # 28개
+│   └── results/results.csv               # 머신별 best metric 집계
+└── Exathlon/                     # Exathlon 6 apps
+    ├── app1/ ... app9/                   # 6개 (1,2,4,5,6,9)
+    └── results/results.csv               # 앱별 best metric 집계
 ```
 
 ## 실행
@@ -104,7 +155,7 @@ SWaT/WaDi와 동일한 50/50 split 방식.
 ```bash
 conda activate dc_vis
 
-# 전체 실행 (기존 9개 데이터셋)
+# 전체 MAE 학습 실행 (5 base + 28 SMD + 6 Exathlon = 39 데이터셋; SMAP/MSL은 현재 baseline 비교 전용)
 python scripts/run_base_experiments.py --set A
 python scripts/run_base_experiments.py --set B
 python scripts/run_base_experiments.py --set C

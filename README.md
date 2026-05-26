@@ -19,7 +19,7 @@ Self-Distilled Masked Autoencoder (MAE) 구현으로, 다변량 시계열 데이
     ├── trainer.py            # 학습 로직
     ├── evaluator.py          # 평가 로직
     ├── datasets/             # 데이터셋 로더
-    │   ├── loaders.py        # SWaT, WaDi, Simulation 데이터 로더
+    │   ├── loaders.py        # SWaT, WaDi, SMD, PSM, Simulation, TEP 데이터 로더
     │   └── noisy.py          # 노이즈 레이블 데이터셋
     └── utils/                # 유틸리티
         ├── system.py         # GPU 메모리 관리

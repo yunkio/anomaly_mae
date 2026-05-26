@@ -1,6 +1,6 @@
 # Dataset Documentation
 
-**Last Updated**: 2026-02-15
+**Last Updated**: 2026-05-18
 
 ---
 
@@ -893,6 +893,7 @@ In addition to the simulation dataset, the project supports several real-world t
 | `tep_faultN` | TEP | Single fault type N (1-20) |
 | `smd` | SMD | All 28 server machines |
 | `smd_machine-X-Y` | SMD | Single machine (e.g. `smd_machine-1-1`) |
+| `PSM` | PSM | Pooled Server Metrics (eBay, KDD 2021), 25 features, single contiguous stream |
 
 ### TEP (Tennessee Eastman Process)
 
@@ -967,6 +968,229 @@ for machine_id in SMD_MACHINE_NAMES:
     loader = get_dataset_loader(f'smd_{machine_id}')
     signals, labels, regions, features, ratio, info = loader()
 ```
+
+### PSM (Pooled Server Metrics, eBay)
+
+**Source**: Abdulaal et al. (KDD 2021), eBay Application Performance Management
+
+**Data Structure**:
+- Single contiguous stream from anonymized eBay server pool (no per-machine separation, unlike SMD)
+- 25 anonymized server metrics (`feature_0` ~ `feature_24`)
+- Train file: 132,481 samples (all normal)
+- Test file: 87,841 samples (test anomaly ratio ~27.76%, 72 anomaly regions)
+- Sampling: 1 minute
+- Anomaly regions: NOT individually documented (anonymous incidents)
+- NaN values present in train (~4,195) — handled by forward/backward-fill
+
+**Loader Design** (`load_psm()`):
+- Same simple 50/50 split pattern as `load_smd_simple`:
+  - Train = original train file (132,481, all normal) + front 50% of test file (43,920)
+  - Test  = back 50% of test file (43,921)
+- `run_boundaries = [len(train_data)]` — windows must not cross orig_train / test_front boundary
+- Constant column removal (typically 0 columns removed for PSM)
+- Train-only z-score normalization handled by `SlidingWindowDataset`
+
+**Registry**:
+- `PSM`: Single key in `DATASET_LOADERS` (no per-machine variants — PSM is a single stream)
+
+```python
+from mae_anomaly.datasets.loaders import load_psm
+
+signals, labels, regions, features, train_ratio, data_info = load_psm()
+# signals: (220322, 25) float32
+# labels:  (220322,) int64, anom=24,381
+# regions: 72 AnomalyRegion objects
+# train_ratio: 0.8007  (176,401 train / 43,921 test)
+# data_info['run_boundaries']: [132481]
+```
+
+**Data Files** (`dataset/PSM/`):
+```
+dataset/PSM/
+├── train.csv          # timestamp_(min) + feature_0 ~ feature_24 (132,481 rows)
+├── test.csv           # timestamp_(min) + feature_0 ~ feature_24 (87,841 rows)
+├── test_label.csv     # timestamp_(min) + label                 (87,841 rows)
+└── LICENSE            # BSD-3-Clause (eBay)
+```
+
+Source: [github.com/eBay/RANSynCoders](https://github.com/eBay/RANSynCoders) (official eBay release).
+
+---
+
+## Exathlon Dataset (Spark Cluster Anomaly Benchmark)
+
+**Source**: Jacob et al., "Exathlon: A Benchmark for Explainable Anomaly Detection over Time Series", VLDB 2021. [arXiv:2010.05073](https://arxiv.org/abs/2010.05073) · [GitHub](https://github.com/exathlonbenchmark/exathlon)
+
+**Construction**: Real data traces from repeated executions of 10 distributed streaming applications on a 4-node Apache Spark cluster over 2.5 months, sampled at 1 Hz.
+
+### Raw Dataset Specs
+
+| Item | Value |
+|------|-------|
+| Total traces (after curation) | 93 |
+| Total data points | 2,335,781 (≈ 649 hours) |
+| Raw features per trace | 2,283 metrics |
+| Anomaly types | 6 (T1 Bursty input, T2 Bursty until crash, T3 Stalled input, T4 CPU contention, T5 Driver failure, T6 Executor failure) |
+| Total anomaly instances | 97 (main) + 12 unknown side anomalies |
+| Raw data size | 24.6 GB |
+
+### Feature Reduction: FScustom 19 features
+
+This project uses **FScustom** (manually selected by domain knowledge in the Exathlon paper) — defined as "upper-bound performance" reference in the paper:
+
+| Group | Count | Description |
+|-------|:-:|-----|
+| 1. Identity (raw) | 3 | Driver streaming delays: processingDelay, schedulingDelay, totalDelay |
+| 2. 1-Difference | 8 | Driver counters (×4) + Driver memory + JVM heap + 4× node CPU idle |
+| 3. Executor average + 1-Difference | 6 | 5-executor avg then diff for: hdfs_write_ops, cpuTime, runTime, shuffleRead, shuffleWritten, jvm_heap_used |
+| **Total** | **19** | |
+
+Preprocessing script: [`dataset/Exathlon/preprocess.py`](../dataset/Exathlon/preprocess.py)
+- Downloads all 93 traces from GitHub (handles flat + split-zip layouts via 7z)
+- Extracts 19 features per trace
+- Generates point-level binary labels (anomaly = RCI ∪ EEI)
+- Saves to `dataset/Exathlon/app{N}/{trace_name}.csv` (~175 MB total after reduction)
+
+### App-based Evaluation Convention
+
+Apps used: **{1, 2, 4, 5, 6, 9}** (6 apps, following TimeSeAD 6-app subset)
+- App 7 excluded: no disturbed traces (test impossible)
+- App 8 excluded: no undisturbed traces (train impossible)
+- App 3, 10 retained (paper excludes for distributional shift, but kept here per user spec)
+
+Per-app train/test split:
+- **Train** = all undisturbed traces (concat by trace_id) + first `floor(N_dist/2)` disturbed traces
+- **Test** = remaining disturbed traces
+
+Sliding windows respect `run_boundaries` (trace boundaries within both train and test portions).
+
+### Per-app Statistics (after split)
+
+| App | Total Rows | Train Rows | Test Rows | Train Anom% | Test Anom% | #Anomaly Regions | #Train Traces | #Test Traces |
+|:---:|:----------:|:----------:|:---------:|:-----------:|:----------:|:----------------:|:-------------:|:------------:|
+| app1 | 90,897 | 44,192 | 46,705 | 5.24% | 13.24% | 9 | 7 | 2 |
+| app2 | 164,950 | 118,230 | 46,720 | 3.89% | 26.46% | 9 | 5 | 2 |
+| app4 | 340,994 | 337,373 | 3,621 | 4.77% | 17.34% | 11 | 7 | 1 |
+| app5 | 322,775 | 269,387 | 53,388 | 5.26% | 7.29% | 21 | 11 | 4 |
+| app6 | 399,102 | 348,832 | 50,270 | 1.39% | 8.84% | 11 | 13 | 2 |
+| app9 | 375,594 | 326,571 | 49,023 | 2.25% | 12.47% | 14 | 8 | 2 |
+
+### Usage
+
+```python
+from mae_anomaly.datasets.loaders import load_exathlon, EXATHLON_APP_IDS
+
+# Load a single app
+signals, labels, regions, features, train_ratio, data_info = load_exathlon(app=1)
+# signals: (90897, 19) float32
+# labels:  (90897,) int64
+# regions: 9 AnomalyRegion objects
+# train_ratio: 0.4862
+# data_info['run_boundaries']: list of trace boundaries (7 for app1)
+```
+
+Comparison pipeline:
+```python
+from comparison.data.unified_loader import UnifiedLoader
+
+loader = UnifiedLoader(
+    dataset='exathlon',
+    app=1,
+    normalize_mode='minmax',  # or 'zscore'
+    variant=None,             # or 'normalonly' (Q3/Q4)
+).load()
+```
+
+DATASET_LOADERS keys: `exathlon_app1`, `exathlon_app2`, `exathlon_app4`, `exathlon_app5`, `exathlon_app6`, `exathlon_app9`.
+
+### Evaluation Protocol
+
+Each app evaluated independently. Final metrics reported as **mean across 6 apps** (following TimeSeAD's per-app aggregation pattern).
+
+---
+
+## NASA SMAP / MSL (Telemanom, Hundman et al. KDD 2018)
+
+NASA Soil Moisture Active Passive (SMAP) satellite + Mars Science Laboratory (MSL) Curiosity rover telemetry anomaly benchmark — Telemanom dataset.
+
+### Source / Citation
+
+- **Paper**: Hundman, Kyle; Constantinou, Valentino; Laporte, Christopher; Colwell, Ian; Soderstrom, Tom. *"Detecting Spacecraft Anomalies Using LSTMs and Nonparametric Dynamic Thresholding"*. Proc. 24th ACM SIGKDD KDD 2018, **pp. 387–395**. DOI [`10.1145/3219819.3219845`](https://doi.org/10.1145/3219819.3219845) · arXiv [`1802.04431`](https://arxiv.org/abs/1802.04431).
+- **Official repo**: <https://github.com/khundman/telemanom> (Apache 2.0 for code; data are NASA-derived telemetry, repo does not explicitly state a data license; commonly redistributed as a public benchmark).
+- **Canonical data URL**: `https://s3-us-west-2.amazonaws.com/telemanom/data.zip` (currently HTTP 403). The Telemanom README now points to a Kaggle mirror (`patrickfleith/nasa-anomaly-detection-dataset-smap-msl`).
+- **Labels CSV**: `https://raw.githubusercontent.com/khundman/telemanom/master/labeled_anomalies.csv`.
+- **Used in this repo**: Wayback Machine snapshot `http://web.archive.org/web/20221016205142/http://s3-us-west-2.amazonaws.com/telemanom/data.zip` (2022-10-16, 85,899,803 bytes compressed → 272 MB / 417 npy entries).
+- **Distinct from**: NSIDC's NASA SMAP science archive (L-band radiometer/radar L1–L4 products). Telemanom is the *engineering telemetry* benchmark, not raw mission science.
+
+### Channels & dimensions
+
+| Spacecraft | Unique channels | Feature dim | Notes |
+|---|---|---|---|
+| SMAP | **54** | **25** (1 telemetry + 24 commanded actions) | `labeled_anomalies.csv` has 55 rows — P-2 appears twice with different anomaly_sequences |
+| MSL  | **27** | **55** | P-2 is a SMAP channel; absent from MSL data |
+
+**P-2 duplicate handling** (4 known variants in the literature — see `temp/msl_smap_pattern_ab_0526/01_SOURCE_AND_LABEL_CHECK.md`):
+- **This repo**: UNION of the two annotated intervals (`[5300, 6575]`) — conservative
+- OmniAnomaly (KDD'19): explicit exclude
+- TranAD (VLDB'22): silent overwrite (second row wins)
+- QuoVadis (ICML'24): MSL `P-2_` removed; SMAP P-2 unspecified
+
+### Split rule (both patterns)
+
+Per channel:
+- `train_portion = orig_train.npy (all normal) + test_front_50%` (chronological)
+- `test_portion  = test_back_50%`
+- 50% split point is pushed outside any anomaly region by ±10 timestamps (`_find_safe_cut_point`, reused from SMD). Verified: **0 boundary-straddling anomalies** across all 54 + 27 channels.
+
+### Pattern A — all-channels concat (legacy convention)
+
+**Loaders**: `load_smap_combined()`, `load_msl_combined()`. **Entries**: `smap`, `smap_normalonly`, `msl`, `msl_normalonly` (4 total).
+
+Channels are time-concatenated into a single 2D stream. `data_info['run_boundaries']` lists every discontinuity (intra-channel `orig_train ↔ test_front` junction + inter-channel boundaries). `UnifiedLoader` applies a **single per-feature min-max fit across all channels' train portion** (Anomaly-Transformer / TimesNet / DCdetector convention via the OmniAnomaly preprocessed mirror).
+
+Trade-off: cross-channel concat means `0.5` in normalized space can mean different physical values for different channels. `run_boundaries` + `compute_segment_safe_window_indices` guarantee windows never cross channel boundaries.
+
+| Spacecraft | Total | Train | Test | train_ratio | train anom% | test anom% | run_boundaries | safe-cut moved |
+|---|---|---|---|---|---|---|---|---|
+| SMAP | 573,830 | 355,905 | 217,925 | 0.6202 | 0.70% | 24.54% | 161 | 0/54 |
+| MSL  | 132,046 |  95,271 |  36,775 | 0.7215 | 1.70% | 16.72% |  80 | 4/27 (D-16, M-1, M-2, S-2) |
+
+### Pattern B — per-channel (SMD/Exathlon-style, OmniAnomaly/Telemanom entity-level)
+
+**Loaders**: `load_smap_simple(channel)`, `load_msl_simple(channel)`. **Entries** (dynamic): `smap_{ch}` + `smap_{ch}_normalonly` × 54 + `msl_{ch}` + `msl_{ch}_normalonly` × 27 = **162 total** (SMD `smd_{machine}` pattern).
+
+Each entry loads a single channel only. `UnifiedLoader` fits min-max / z-score **on this single channel's train portion** — per-entity scaler, matching the per-machine SMD and per-app Exathlon conventions, and the entity-level treatment in the original Telemanom and OmniAnomaly papers. `run_boundaries = [len(orig_train)]` (one intra-channel junction).
+
+| Aggregate over per-channel sums | SMAP | MSL |
+|---|---|---|
+| total samples | 573,830 | 132,046 |
+| train anomaly points | 2,499 | 1,616 |
+| test anomaly points | 53,473 | 6,150 |
+| channels with safe-cut moved | 0/54 | 4/27 |
+
+Pattern A vs Pattern B use the **same raw npy + same 50/50 PSM-style split + same safe-cut margin** → samples are identical. Differences are limited to (a) scaler fit scope and (b) entry granularity / reporting unit.
+
+### Reporting convention
+
+- Pattern B: per-channel metrics aggregated as **mean across 54 SMAP channels / 27 MSL channels** (SMD/Exathlon convention).
+- Pattern A: single global metric per spacecraft (channel mixing inherent).
+
+### Boundary safety
+
+- **Pattern A**: `_apply_normalonly` is aware of `run_boundaries` → anomaly-removal segments never straddle channel/recording joins. `compute_segment_safe_window_indices` drops any window that would cross a boundary (verified on SMAP normalonly: 11,385 / 353,307 = 3.22% windows dropped).
+- **Pattern B**: single channel ⇒ no cross-channel risk. The one intra-channel junction at `orig_train ↔ test_front` is registered in `run_boundaries` and handled identically.
+
+### Loaders / dispatch
+
+- Raw loaders: `mae_anomaly/datasets/loaders.py` — `_load_smap_msl_combined` (A), `_load_smap_msl_simple_single` (B), `load_smap_combined`/`load_msl_combined`/`load_smap_simple`/`load_msl_simple` wrappers.
+- Channel inventories: `SMAP_CHANNEL_NAMES` (54), `MSL_CHANNEL_NAMES` (27).
+- `comparison/data/unified_loader.py` accepts `dataset='smap'|'msl'|'smap_simple'|'msl_simple'` (+ `channel` kwarg for `*_simple`).
+- `comparison/experiment_configs.py` generates the 162 Pattern B entries via for-loop over channel name lists (mirrors SMD's `for _machine in SMD_MACHINE_NAMES`).
+- **MAE side**: SMAP/MSL not yet registered in `DATASET_LOADERS`; available for `comparison/` baselines first. MAE-side training integration is intentionally deferred and is a separate work item.
+
+### Per-channel statistics
+
+See `temp/msl_smap_pattern_ab_0526/07_DATASET_STATISTICS.md` for full per-channel rows (54 SMAP + 27 MSL) and `stats_pattern_b_smap.json` / `stats_pattern_b_msl.json` for machine-readable counts.
 
 ---
 

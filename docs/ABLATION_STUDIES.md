@@ -276,7 +276,7 @@ python scripts/ablation/run_ablation.py --config <config>.py --start-from 50
 
 ```python
 # Example config file (scripts/ablation/configs/my_experiment.py)
-DATASET_TYPE = 'swat_A1A2'  # 'simulation', 'swat_A1A2', 'wadi_14days_A1', etc.
+DATASET_TYPE = 'swat_A1A2'  # 'simulation', 'swat_A1A2', 'wadi_14days_A1', 'PSM', 'exathlon_app1', etc.
 
 PHASE_NAME = "my_experiment"
 PHASE_DESCRIPTION = "Description of experiment"
