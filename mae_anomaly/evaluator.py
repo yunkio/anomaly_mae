@@ -937,6 +937,23 @@ class Evaluator:
 
         # Mixed Precision Training (AMP) for inference
         self.use_amp = config.use_amp and torch.cuda.is_available()
+        amp_dtype_name = getattr(config, 'amp_dtype', 'fp16').lower()
+        if amp_dtype_name == 'fp16':
+            self.amp_dtype = torch.float16
+        elif amp_dtype_name == 'bf16':
+            self.amp_dtype = torch.bfloat16
+            # Match trainer's safety: bf16 requires CUDA capability >= 8.0 (Ampere/Ada/Hopper).
+            if self.use_amp:
+                _cc = torch.cuda.get_device_capability()
+                if _cc < (8, 0):
+                    raise RuntimeError(
+                        f"amp_dtype='bf16' requires CUDA capability >= 8.0 (Ampere/Ada/Hopper); "
+                        f"got sm_{_cc[0]}{_cc[1]}. Use amp_dtype='fp16' on older GPUs."
+                    )
+        else:
+            raise ValueError(
+                f"config.amp_dtype must be 'fp16' or 'bf16', got {amp_dtype_name!r}"
+            )
 
         # Point-level PA%K requires test_dataset with specific attributes
         self.can_compute_point_level_pa_k = (
@@ -1229,7 +1246,7 @@ class Evaluator:
         patch_size = self.config.patch_size
         num_patches = self.config.num_patches
 
-        with torch.no_grad(), autocast('cuda', enabled=self.use_amp):
+        with torch.no_grad(), autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
             for batch in tqdm(self.test_loader, desc="Patch scores", leave=False):
                 if len(batch) == 5:
                     sequences, window_labels, point_labels, sample_types, anomaly_types = batch

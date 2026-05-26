@@ -268,6 +268,13 @@ class Config:
     use_amp: bool = True  # Mixed Precision Training (Automatic Mixed Precision)
     # - True: Use float16 for forward pass, float32 for loss/gradients (faster on Tensor Core GPUs)
     # - False: Use float32 everywhere (more stable, required for older GPUs)
+    amp_dtype: str = 'bf16'  # AMP compute dtype. One of 'fp16' | 'bf16'.
+    # Default changed 2026-05-27: 'fp16' -> 'bf16' (RTX 30/40 / A100 / H100).
+    # bf16 has the fp32 exponent range -> safer for SCAD logsumexp / focal exp(-bce);
+    # no GradScaler needed. Requires CUDA capability >= 8.0; trainer.py raises
+    # RuntimeError on older GPUs (silent fallback intentionally avoided).
+    # To reproduce pre-flip fp16 results: pass amp_dtype='fp16' via config_override
+    # or Config(amp_dtype='fp16').
 
     # Ablation flags
     use_discrepancy_loss: bool = True

@@ -198,7 +198,35 @@ class Trainer:
 
         # Mixed Precision Training (AMP)
         self.use_amp = config.use_amp and torch.cuda.is_available()
-        self.scaler = GradScaler('cuda') if self.use_amp else None
+        amp_dtype_name = getattr(config, 'amp_dtype', 'fp16').lower()
+        if amp_dtype_name == 'fp16':
+            self.amp_dtype = torch.float16
+        elif amp_dtype_name == 'bf16':
+            self.amp_dtype = torch.bfloat16
+            # bf16 requires Ampere (sm_80) or later. Reject silent fallback on older GPUs.
+            if self.use_amp:
+                _cc = torch.cuda.get_device_capability()
+                if _cc < (8, 0):
+                    raise RuntimeError(
+                        f"amp_dtype='bf16' requires CUDA capability >= 8.0 (Ampere/Ada/Hopper); "
+                        f"got sm_{_cc[0]}{_cc[1]}. Use amp_dtype='fp16' on older GPUs."
+                    )
+        else:
+            raise ValueError(
+                f"config.amp_dtype must be 'fp16' or 'bf16', got {amp_dtype_name!r}"
+            )
+        # GradScaler is only needed for fp16 (bf16 has the same exponent range as fp32 →
+        # gradient underflow does not occur; using a scaler would be a no-op).
+        self.scaler = (
+            GradScaler('cuda')
+            if (self.use_amp and self.amp_dtype is torch.float16)
+            else None
+        )
+        # AMP visibility — print once at init so default-flip (2026-05-27: fp16 -> bf16) is observable.
+        print(
+            f"  AMP: use_amp={self.use_amp}, dtype={amp_dtype_name}, "
+            f"scaler={'enabled' if self.scaler is not None else 'none'}"
+        )
 
         # Discriminator (Adversarial Realism)
         self.use_discriminator = config.use_discriminator
@@ -433,6 +461,15 @@ class Trainer:
         t_forward_acc = 0.0
         t_backward_acc = 0.0
 
+        # Gradient health stats. clip_grad_norm_ already runs every batch and returns the
+        # pre-clip norm; we just capture its return value (no extra grad traversal).
+        # On NaN/Inf the optimizer.step() is skipped — important under bf16 which has no
+        # GradScaler safety net (fp16 path's GradScaler.step does its own NaN check).
+        _grad_norm_sum = 0.0
+        _grad_norm_max = 0.0
+        _grad_norm_finite_n = 0
+        _grad_nonfinite_n = 0
+
         iterator = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{self.config.num_epochs}',
                         disable=not self.verbose, leave=False)
 
@@ -469,7 +506,7 @@ class Trainer:
                 _mr_min = getattr(self.config, 'masking_ratio_min', -1.0)
                 _mr_max = getattr(self.config, 'masking_ratio_max', -1.0)
                 _mr = random.uniform(_mr_min, _mr_max) if (_mr_min >= 0 and _mr_max >= 0) else None
-            with autocast('cuda', enabled=self.use_amp):
+            with autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
                 teacher_output, student_output, mask = self.model(sequences, masking_ratio=_mr, point_labels=point_labels)
 
                 if do_profile:
@@ -504,7 +541,7 @@ class Trainer:
 
                 # D training: real vs fake on ALL masked patches
                 self.d_optimizer.zero_grad()
-                with autocast('cuda', enabled=self.use_amp):
+                with autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
                     d_loss, d_real_acc, d_fake_acc = compute_discriminator_loss(
                         self.discriminator, real_patches, fake_patches)
                 if self.scaler is not None:
@@ -522,7 +559,7 @@ class Trainer:
                 lambda_adv_val = 0.0
                 if anomaly_patch_mask.any():
                     anomaly_fake = fake_patches[anomaly_patch_mask]
-                    with autocast('cuda', enabled=self.use_amp):
+                    with autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
                         adv_loss = compute_student_adversarial_loss(
                             self.discriminator, anomaly_fake)
 
@@ -778,16 +815,32 @@ class Trainer:
                     torch.cuda.synchronize()
                     t_bp_backward = time.time()
                 self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.scaler.step(self.optimizer)
+                _gnorm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.scaler.step(self.optimizer)  # GradScaler.step internally skips on NaN/Inf
                 self.scaler.update()
             else:
                 loss.backward()
                 if do_profile:
                     torch.cuda.synchronize()
                     t_bp_backward = time.time()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
+                _gnorm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                # No GradScaler (bf16/fp32) → we must guard step() ourselves.
+                if torch.isfinite(_gnorm):
+                    self.optimizer.step()
+                else:
+                    _grad_nonfinite_n += 1
+                    print(
+                        f"  [WARN] NaN/Inf grad_norm at epoch {epoch+1} batch {batch_idx}: "
+                        f"{_gnorm.item():.3e} — optimizer.step skipped"
+                    )
+
+            # Track grad health (no extra CUDA work; clip_grad_norm_ already computed norm)
+            _g = _gnorm.item()
+            if _g == _g and _g != float('inf') and _g != float('-inf'):  # fast finite check
+                _grad_norm_sum += _g
+                _grad_norm_finite_n += 1
+                if _g > _grad_norm_max:
+                    _grad_norm_max = _g
 
             if do_profile:
                 torch.cuda.synchronize()
@@ -850,6 +903,19 @@ class Trainer:
             'backward_approx': t_backward_acc,
             'n_batches': len(self.train_loader),
         }
+
+        # Gradient health summary (one log line per epoch + epoch_losses keys)
+        epoch_losses['grad_norm_mean'] = (
+            _grad_norm_sum / _grad_norm_finite_n if _grad_norm_finite_n > 0 else 0.0
+        )
+        epoch_losses['grad_norm_max'] = _grad_norm_max
+        epoch_losses['grad_nonfinite_batches'] = _grad_nonfinite_n
+        if _grad_nonfinite_n > 0:
+            print(
+                f"  [CRITICAL] epoch {epoch+1}: {_grad_nonfinite_n} batch(es) had NaN/Inf gradients "
+                f"(steps skipped). grad_norm mean(finite)={epoch_losses['grad_norm_mean']:.3e} "
+                f"max(finite)={_grad_norm_max:.3e}. Investigate before continuing."
+            )
 
         # Attach batch profiling if measured
         if batch_profiles:
