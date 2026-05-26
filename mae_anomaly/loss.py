@@ -58,6 +58,13 @@ class SelfDistillationLoss(nn.Module):
         self.grl_balanced_sampling = getattr(config, 'grl_balanced_sampling', False)
         self.grl_use_focal = getattr(config, 'grl_use_focal', True)
 
+        # SCAD
+        self.use_scad = getattr(config, 'use_scad', False)
+        self.scad_form = getattr(config, 'scad_form', 'A')
+        self.scad_temperature = getattr(config, 'scad_temperature', 0.1)
+        self.scad_margin = getattr(config, 'scad_margin', 0.3)
+        self.scad_patch_label_mode = getattr(config, 'scad_patch_label_mode', 'patch')
+
     def _compute_anomaly_loss(
         self,
         discrepancy: torch.Tensor,
@@ -325,9 +332,8 @@ class SelfDistillationLoss(nn.Module):
                     _grl_results = None
 
                 # SCAD: compute on student projection embedding (replaces GRL when use_scad=True)
-                if scad_z is not None and getattr(self.config, 'use_scad', False):
-                    _scad_label_mode = getattr(self.config, 'scad_patch_label_mode', 'patch')
-                    if _scad_label_mode == 'window':
+                if scad_z is not None and self.use_scad:
+                    if self.scad_patch_label_mode == 'window':
                         # Window-level: all patches in anomaly window get target=1
                         _scad_patch_labels = has_anomaly_sample.unsqueeze(1).expand_as(patch_has_anomaly).float()
                     else:
@@ -338,9 +344,9 @@ class SelfDistillationLoss(nn.Module):
                         z=scad_z,
                         patch_has_anomaly=_scad_patch_labels,
                         patch_has_masked=patch_has_masked.float(),
-                        form=getattr(self.config, 'scad_form', 'A'),
-                        temperature=getattr(self.config, 'scad_temperature', 0.1),
-                        margin=getattr(self.config, 'scad_margin', 0.3),
+                        form=self.scad_form,
+                        temperature=self.scad_temperature,
+                        margin=self.scad_margin,
                     )
                     _scad_results = {
                         'scad_loss_tensor': _scad_loss_tensor,

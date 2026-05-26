@@ -926,22 +926,40 @@ class SlidingWindowTimeSeriesGenerator:
 def _minmax_per_feature(
     signals: np.ndarray,
     train_end: int,
+    clip: bool = True,
+    feature_range: Tuple[float, float] = (0.0, 1.0),
+    clamp_min: Optional[float] = None,
+    clamp_max: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-feature min-max normalization to [0, 1] fitted on train portion only.
+    """Per-feature min-max normalization fitted on train portion only.
 
     Computes min and max from signals[:train_end] (train split),
-    then applies (x - min) / (max - min) to the entire signals array.
-    Test values outside [0, 1] are clipped.
+    transforms to [0, 1], then optionally rescales to ``feature_range``.
+
+    Two clipping mechanisms:
+    1. ``clip`` (default True): tight-clip the ENTIRE signal to ``feature_range``.
+       Train+test both end up inside [feature_range[0], feature_range[1]].
+    2. ``clamp_min`` / ``clamp_max`` (optional): NPSR-style test-only clamp applied
+       AFTER the feature_range rescaling. When both provided, signals[train_end:]
+       is clipped to [clamp_min, clamp_max]. Train portion is left untouched.
+
+    Typical setups:
+      - 271 default:   feature_range=(0, 1), clip=True, clamp=None
+      - NPSR-style:    feature_range=(-1, 1), clip=False, clamp_min=-4, clamp_max=4
 
     Args:
         signals: (total_length, num_features) array (raw, unnormalized)
         train_end: index separating train / test
+        clip: if True (default), clip whole output to ``feature_range``; if False,
+              allow out-of-range values (paper-faithful sklearn MinMaxScaler default).
+        feature_range: (min, max) target range after rescaling. Default (0, 1).
+        clamp_min, clamp_max: optional test-only clamp range (NPSR-style).
+                              Applied only when both are not None.
 
     Returns:
         (normalized_signals, scaler_min, scaler_range)
-        - normalized_signals: min-max scaled float32 array clipped to [0, 1]
-        - scaler_min: (num_features,) per-feature min from train
-        - scaler_range: (num_features,) per-feature (max - min) from train
+        scaler_min / scaler_range are the raw train stats (pre-feature_range rescale),
+        so denormalize logic can rely on the original (x - min) / range convention.
     """
     signals = signals.copy()
     train_signals = signals[:train_end]
@@ -953,8 +971,22 @@ def _minmax_per_feature(
     # Protect against constant features (range ≈ 0)
     scaler_range[scaler_range < 1e-8] = 1.0
 
+    # Step 1: scale to [0, 1] using train stats
     signals = (signals - scaler_min) / scaler_range
-    signals = np.clip(signals, 0.0, 1.0)
+
+    # Step 2: optional rescale to feature_range
+    tgt_min, tgt_max = feature_range
+    if tgt_min != 0.0 or tgt_max != 1.0:
+        signals = signals * (tgt_max - tgt_min) + tgt_min
+
+    # Step 3: optional tight-clip to feature_range
+    if clip:
+        signals = np.clip(signals, tgt_min, tgt_max)
+
+    # Step 4: optional NPSR-style test-only clamp
+    if clamp_min is not None and clamp_max is not None:
+        signals[train_end:] = np.clip(signals[train_end:], clamp_min, clamp_max)
+
     return signals.astype(np.float32), scaler_min.astype(np.float32), scaler_range.astype(np.float32)
 
 
@@ -984,6 +1016,9 @@ class SlidingWindowDataset(Dataset):
         seed: Optional[int] = None,
         run_boundaries: Optional[List[int]] = None,  # Positions where independent runs end (windows must not cross)
         normalize_mode: str = 'zscore',  # 'zscore' or 'minmax'
+        minmax_range: str = '0_1',  # '0_1' (default tight clip) | 'neg1_1' (NPSR-style)
+        minmax_clamp_min: Optional[float] = None,  # test-only clamp lower (used when minmax_range='neg1_1')
+        minmax_clamp_max: Optional[float] = None,  # test-only clamp upper (used when minmax_range='neg1_1')
     ):
         self.window_size = window_size
         self.mask_last_n = mask_last_n
@@ -999,8 +1034,22 @@ class SlidingWindowDataset(Dataset):
         train_end = int(total_length * train_ratio)
 
         if normalize_mode == 'minmax':
+            # Decode minmax_range option
+            if minmax_range == 'neg1_1':
+                # NPSR-style: scale to [-1, 1], no tight clip, test-only clamp via minmax_clamp_min/max
+                feature_range = (-1.0, 1.0)
+                tight_clip = False
+                cm_min, cm_max = minmax_clamp_min, minmax_clamp_max
+            else:  # '0_1' default — preserves prior behavior exactly
+                feature_range = (0.0, 1.0)
+                tight_clip = True
+                cm_min, cm_max = None, None
             signals, self.scaler_min, self.scaler_range = _minmax_per_feature(
-                signals, train_end
+                signals, train_end,
+                clip=tight_clip,
+                feature_range=feature_range,
+                clamp_min=cm_min,
+                clamp_max=cm_max,
             )
             # Store dummy mean/std for interface compatibility
             self.scaler_mean = self.scaler_min

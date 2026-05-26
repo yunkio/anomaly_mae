@@ -568,14 +568,14 @@ def compute_pa_k_roc_prc_from_mean_scores(
     sorted_idx = np.argsort(fprs)
     roc_auc = float(np.trapz(tprs[sorted_idx], fprs[sorted_idx]))
 
-    # PRC AUC
-    prc_sorted_idx = np.argsort(tprs)
-    recalls_sorted = tprs[prc_sorted_idx]
-    precisions_sorted = precisions[prc_sorted_idx]
-    if len(recalls_sorted) == 0 or recalls_sorted[0] > 0:
-        recalls_sorted = np.concatenate([[0.0], recalls_sorted])
-        precisions_sorted = np.concatenate([[1.0], precisions_sorted])
-    prc_auc = float(np.trapz(precisions_sorted, recalls_sorted))
+    # PRC AUC — step-AP (sklearn-style average_precision_score)
+    # Sort by threshold descending = recall ascending; prepend (rec=0, prec=1) endpoint;
+    # AP = Σ (R_n − R_{n−1}) · P_n. trapz on PR curves is biased (overestimates).
+    th_order = np.argsort(-thresholds)
+    rec_step = np.concatenate([[0.0], tprs[th_order]])
+    prec_step = np.concatenate([[1.0], precisions[th_order]])
+    prc_auc = float(np.sum(np.diff(rec_step) * prec_step[1:]))
+    prc_auc = max(0.0, min(1.0, prc_auc))
 
     return {'roc_auc': roc_auc, 'prc_auc': prc_auc}
 
@@ -646,156 +646,188 @@ def compute_pa_k_auc(
         Dict with pak_auc_{prc_auc, roc_auc, f1, f1_t, precision, recall}
         and pak_auc_{f1_raw, f1_t_raw, precision_raw, recall_raw}
     """
+    # ===========================================================================
+    # Vectorized implementation (~30x faster than the original loop-based code).
+    # Verified bit-identical to the previous (fixed) loop-based version within
+    # 1e-6 abs tolerance on synthetic + SMD + WaDi + SWaT/excl22 (see
+    # temp/verify_vectorize_v3.py). Peak memory per call ≈ T × N bool array.
+    # ===========================================================================
+    import gc as _gc
     total_length = len(point_labels)
     if eval_mask is None:
         eval_mask = np.ones(total_length, dtype=bool)
 
-    k_values = np.arange(0, 101)  # 0, 1, 2, ..., 100
+    k_values = np.arange(0, 101)
     n_k = len(k_values)
+    k_ratios = k_values.astype(np.float64) / 100.0
 
-    # Arrays for per-K metric values: raw (fixed threshold) and best (sweep)
-    prc_aucs = np.zeros(n_k)
-    roc_aucs = np.zeros(n_k)
-    # raw = fixed threshold (legacy behavior)
+    # Regions (small)
+    region_starts = np.array([r.start for r in anomaly_regions], dtype=np.int64)
+    region_ends = np.array([min(r.end, total_length) for r in anomaly_regions], dtype=np.int64)
+    valid = region_ends > region_starts
+    v_starts = region_starts[valid]
+    v_ends = region_ends[valid]
+    v_lengths = (v_ends - v_starts).astype(np.float64)
+    n_regions = int(len(v_starts))
+
+    masked_labels = point_labels.copy().astype(np.int64)
+    masked_labels[~eval_mask] = 0
+    n_positive = int(masked_labels.sum())
+    normal_eval_mask = eval_mask & (point_labels == 0)
+    n_negative = int(normal_eval_mask.sum())
+    has_both_classes = n_positive > 0 and n_negative > 0
+
+    scores_range = point_scores[eval_mask]
+    thresh_arr = np.linspace(scores_range.min() - 0.01, scores_range.max() + 0.01, n_thresholds)
+
+    # (T, N) bool — largest array. e.g. SWaT (200×224K) = 45 MB.
+    preds_raw_TN = (point_scores[None, :] > thresh_arr[:, None])
+
+    # Per-region pred count via direct slice sum (no big cumsum buffer)
+    if n_regions > 0:
+        region_preds_TR = np.empty((n_thresholds, n_regions), dtype=np.int64)
+        for _ri in range(n_regions):
+            region_preds_TR[:, _ri] = preds_raw_TN[:, v_starts[_ri]:v_ends[_ri]].sum(axis=1)
+        dr_TR = region_preds_TR.astype(np.float64) / v_lengths[None, :]
+        del region_preds_TR
+    else:
+        dr_TR = np.zeros((n_thresholds, 0), dtype=np.float64)
+
+    label_in_eval = ((point_labels == 1) & eval_mask)
+    normal_in_eval = ((point_labels == 0) & eval_mask)
+    if n_regions > 0:
+        region_label_R = np.empty(n_regions, dtype=np.int64)
+        region_normal_R = np.empty(n_regions, dtype=np.int64)
+        for _ri in range(n_regions):
+            region_label_R[_ri] = int(label_in_eval[v_starts[_ri]:v_ends[_ri]].sum())
+            region_normal_R[_ri] = int(normal_in_eval[v_starts[_ri]:v_ends[_ri]].sum())
+    else:
+        region_label_R = np.zeros(0, dtype=np.int64)
+        region_normal_R = np.zeros(0, dtype=np.int64)
+
+    region_mask = np.zeros(total_length, dtype=bool)
+    for _ri in range(n_regions):
+        region_mask[v_starts[_ri]:v_ends[_ri]] = True
+    outside_label = (~region_mask) & label_in_eval
+    outside_normal = (~region_mask) & normal_in_eval
+    del region_mask, label_in_eval, normal_in_eval
+
+    TP_outside_T = (preds_raw_TN & outside_label[None, :]).sum(axis=1).astype(np.int64)
+    FP_outside_T = (preds_raw_TN & outside_normal[None, :]).sum(axis=1).astype(np.int64)
+
+    if n_regions > 0:
+        detected_TKR = (dr_TR[:, None, :] >= k_ratios[None, :, None])
+        det_int = detected_TKR.astype(np.int64)
+        TP_inside_TK = det_int @ region_label_R
+        FP_inside_TK = det_int @ region_normal_R
+        del det_int
+    else:
+        detected_TKR = np.zeros((n_thresholds, n_k, 0), dtype=bool)
+        TP_inside_TK = np.zeros((n_thresholds, n_k), dtype=np.int64)
+        FP_inside_TK = np.zeros((n_thresholds, n_k), dtype=np.int64)
+
+    TP_TK = TP_outside_T[:, None] + TP_inside_TK
+    FP_TK = FP_outside_T[:, None] + FP_inside_TK
+    del TP_inside_TK, FP_inside_TK
+
+    TPR_TK = TP_TK.astype(np.float64) / max(n_positive, 1)
+    FPR_TK = FP_TK.astype(np.float64) / max(n_negative, 1)
+    denom_pr = (TP_TK + FP_TK).astype(np.float64)
+    PREC_TK = np.where(denom_pr > 0, TP_TK / np.maximum(denom_pr, 1.0), 1.0)
+    REC_TK = TPR_TK
+    denom_f1 = PREC_TK + REC_TK
+    F1_TK = np.where(denom_f1 > 0, 2.0 * PREC_TK * REC_TK / np.maximum(denom_f1, 1e-12), 0.0)
+    del denom_pr, denom_f1
+
+    # ---- RAW mode (fixed threshold from input) ----
+    base_preds = (point_scores > threshold).astype(np.int64)
+    if n_regions > 0:
+        base_region_preds_R = np.empty(n_regions, dtype=np.int64)
+        for _ri in range(n_regions):
+            base_region_preds_R[_ri] = int(base_preds[v_starts[_ri]:v_ends[_ri]].sum())
+        base_dr_R = base_region_preds_R.astype(np.float64) / v_lengths
+        base_detected_KR = (base_dr_R[None, :] >= k_ratios[:, None])
+        base_TP_K_inside = base_detected_KR.astype(np.int64) @ region_label_R
+        base_FP_K_inside = base_detected_KR.astype(np.int64) @ region_normal_R
+    else:
+        base_detected_KR = np.zeros((n_k, 0), dtype=bool)
+        base_TP_K_inside = np.zeros(n_k, dtype=np.int64)
+        base_FP_K_inside = np.zeros(n_k, dtype=np.int64)
+    base_TP_outside = int((base_preds * outside_label).sum())
+    base_FP_outside = int((base_preds * outside_normal).sum())
+    del outside_label, outside_normal
+
     f1s_raw = np.zeros(n_k)
     f1_ts_raw = np.zeros(n_k)
     precisions_raw = np.zeros(n_k)
     recalls_raw = np.zeros(n_k)
-    # best = per-K re-optimized threshold (tadpak best_f1_w_pa)
+    for ki in range(n_k):
+        tp = float(base_TP_outside + base_TP_K_inside[ki])
+        fp = float(base_FP_outside + base_FP_K_inside[ki])
+        fn = float(max(n_positive - tp, 0))
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        precisions_raw[ki] = prec
+        recalls_raw[ki] = rec
+        f1s_raw[ki] = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+        adjusted = base_preds.astype(np.float64).copy()
+        if n_regions > 0:
+            for _ri in range(n_regions):
+                adjusted[v_starts[_ri]:v_ends[_ri]] = 1.0 if base_detected_KR[ki, _ri] else 0.0
+        adjusted[~eval_mask] = 0
+        prec_t, rec_t = ts_precision_and_recall(masked_labels, adjusted.astype(int), alpha=0)
+        f1_ts_raw[ki] = 2 * prec_t * rec_t / (prec_t + rec_t) if (prec_t + rec_t) > 0 else 0.0
+        del adjusted
+
+    # ---- BEST mode (per-K threshold sweep) ----
+    prc_aucs = np.zeros(n_k)
+    roc_aucs = np.zeros(n_k)
     f1s_best = np.zeros(n_k)
     f1_ts_best = np.zeros(n_k)
     precisions_best = np.zeros(n_k)
     recalls_best = np.zeros(n_k)
 
-    # Pre-extract region boundaries for reuse
-    region_starts = np.array([r.start for r in anomaly_regions])
-    region_ends = np.array([min(r.end, total_length) for r in anomaly_regions])
-    valid = region_ends > region_starts
-    v_starts = region_starts[valid]
-    v_ends = region_ends[valid]
-    v_lengths = (v_ends - v_starts).astype(float)
-    n_regions = len(v_starts)
-
-    # Precompute masked labels
-    masked_labels = point_labels.copy()
-    masked_labels[~eval_mask] = 0
-    n_positive = int(masked_labels.sum())
-    n_negative = int((eval_mask & (point_labels == 0)).sum())
-    normal_eval_mask = eval_mask & (point_labels == 0)
-
-    has_both_classes = n_positive > 0 and n_negative > 0
-
-    # Precompute base predictions at fixed (pre-PA) threshold — for raw metrics
-    base_preds = (point_scores > threshold).astype(float)
-    base_cumsum = np.concatenate([[0], np.cumsum(base_preds)])
-
-    # Precompute threshold array for sweep (ROC/PRC/F1)
-    scores_range = point_scores[eval_mask]
-    thresh_arr = np.linspace(
-        scores_range.min() - 0.01, scores_range.max() + 0.01, n_thresholds
-    )
-
-    # Precompute cumsum for each sweep threshold — avoids recomputing per K
-    # sweep_cumsums[ti] = cumsum of (point_scores > thresh_arr[ti])
-    sweep_preds_all = np.array([(point_scores > th).astype(float) for th in thresh_arr])
-    sweep_cumsums = np.array([np.concatenate([[0], np.cumsum(sp)]) for sp in sweep_preds_all])
-
-    for ki, k in enumerate(k_values):
-        k_ratio = k / 100.0
-
-        # --- Raw: F1, Precision, Recall, F1_T at fixed threshold ---
-        adjusted = base_preds.copy()
-        if n_regions > 0:
-            region_sums = base_cumsum[v_ends] - base_cumsum[v_starts]
-            detection_ratios = region_sums / v_lengths
-            for ri in range(n_regions):
-                adjusted[v_starts[ri]:v_ends[ri]] = 1.0 if detection_ratios[ri] >= k_ratio else 0.0
-
-        adjusted[~eval_mask] = 0
-        tp = float((adjusted * masked_labels).sum())
-        fp = float((adjusted * normal_eval_mask).sum())
-        fn = float(n_positive - tp)
-
-        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1s_raw[ki] = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
-        precisions_raw[ki] = prec
-        recalls_raw[ki] = rec
-
-        # F1_T on PA%K-adjusted predictions (raw)
-        prec_t, rec_t = ts_precision_and_recall(masked_labels, adjusted.astype(int), alpha=0)
-        f1_ts_raw[ki] = 2 * prec_t * rec_t / (prec_t + rec_t) if (prec_t + rec_t) > 0 else 0.0
-
-        # --- Threshold sweep: ROC-AUC, PRC-AUC, and best F1 ---
-        if not has_both_classes:
-            roc_aucs[ki] = 0.5
-            prc_aucs[ki] = 0.0
-            f1s_best[ki] = f1s_raw[ki]
-            f1_ts_best[ki] = f1_ts_raw[ki]
-            precisions_best[ki] = precisions_raw[ki]
-            recalls_best[ki] = recalls_raw[ki]
-            continue
-
-        tprs = np.zeros(n_thresholds)
-        fprs = np.zeros(n_thresholds)
-        precs_sweep = np.zeros(n_thresholds)
-        # For best F1 per-K re-optimization
-        sweep_f1s = np.zeros(n_thresholds)
-
-        for ti in range(n_thresholds):
-            preds = sweep_preds_all[ti].copy()
+    if not has_both_classes:
+        prc_aucs[:] = 0.0
+        roc_aucs[:] = 0.5
+        f1s_best[:] = f1s_raw
+        f1_ts_best[:] = f1_ts_raw
+        precisions_best[:] = precisions_raw
+        recalls_best[:] = recalls_raw
+    else:
+        best_ti_K = np.argmax(F1_TK, axis=0)
+        f1s_best = F1_TK[best_ti_K, np.arange(n_k)]
+        precisions_best = PREC_TK[best_ti_K, np.arange(n_k)]
+        recalls_best = REC_TK[best_ti_K, np.arange(n_k)]
+        for ki in range(n_k):
+            ti = int(best_ti_K[ki])
+            best_preds_ki = preds_raw_TN[ti].astype(np.float64).copy()
             if n_regions > 0:
-                rs = sweep_cumsums[ti][v_ends] - sweep_cumsums[ti][v_starts]
-                dr = rs / v_lengths
-                for ri in range(n_regions):
-                    preds[v_starts[ri]:v_ends[ri]] = 1.0 if dr[ri] >= k_ratio else 0.0
-            preds[~eval_mask] = 0
-            tp_s = float((preds * masked_labels).sum())
-            fp_s = float((preds * normal_eval_mask).sum())
-            fn_s = float(n_positive - tp_s)
-            tprs[ti] = tp_s / n_positive
-            fprs[ti] = fp_s / n_negative
-            precs_sweep[ti] = tp_s / (tp_s + fp_s) if (tp_s + fp_s) > 0 else 1.0
-            # F1 after PA%K adjustment at this threshold
-            p_s = tp_s / (tp_s + fp_s) if (tp_s + fp_s) > 0 else 0.0
-            r_s = tp_s / (tp_s + fn_s) if (tp_s + fn_s) > 0 else 0.0
-            sweep_f1s[ti] = 2 * p_s * r_s / (p_s + r_s) if (p_s + r_s) > 0 else 0.0
+                for _ri in range(n_regions):
+                    best_preds_ki[v_starts[_ri]:v_ends[_ri]] = 1.0 if detected_TKR[ti, ki, _ri] else 0.0
+            best_preds_ki[~eval_mask] = 0
+            prec_t_b, rec_t_b = ts_precision_and_recall(masked_labels, best_preds_ki.astype(int), alpha=0)
+            f1_ts_best[ki] = 2 * prec_t_b * rec_t_b / (prec_t_b + rec_t_b) if (prec_t_b + rec_t_b) > 0 else 0.0
+            del best_preds_ki
 
-        # Best F1 across all thresholds at this K (best_f1_w_pa)
-        best_ti = int(np.argmax(sweep_f1s))
-        f1s_best[ki] = sweep_f1s[best_ti]
-        # Precision/Recall at the best-F1 threshold
-        best_tp = tprs[best_ti] * n_positive
-        best_fp = fprs[best_ti] * n_negative
-        best_fn = n_positive - best_tp
-        precisions_best[ki] = best_tp / (best_tp + best_fp) if (best_tp + best_fp) > 0 else 0.0
-        recalls_best[ki] = best_tp / (best_tp + best_fn) if (best_tp + best_fn) > 0 else 0.0
+        # PRC AUC via step-AP per K, ROC AUC via trapz per K
+        th_order = np.argsort(-thresh_arr)
+        for ki in range(n_k):
+            rec_step = np.concatenate([[0.0], REC_TK[th_order, ki]])
+            prec_step = np.concatenate([[1.0], PREC_TK[th_order, ki]])
+            ap = float(np.sum(np.diff(rec_step) * prec_step[1:]))
+            prc_aucs[ki] = max(0.0, min(1.0, ap))
+            si = np.argsort(FPR_TK[:, ki])
+            roc_aucs[ki] = float(np.trapz(TPR_TK[si, ki], FPR_TK[si, ki]))
 
-        # F1_T at best-F1 threshold (re-apply PA%K at best threshold)
-        best_preds = sweep_preds_all[best_ti].copy()
-        if n_regions > 0:
-            rs = sweep_cumsums[best_ti][v_ends] - sweep_cumsums[best_ti][v_starts]
-            dr = rs / v_lengths
-            for ri in range(n_regions):
-                best_preds[v_starts[ri]:v_ends[ri]] = 1.0 if dr[ri] >= k_ratio else 0.0
-        best_preds[~eval_mask] = 0
-        prec_t_b, rec_t_b = ts_precision_and_recall(masked_labels, best_preds.astype(int), alpha=0)
-        f1_ts_best[ki] = 2 * prec_t_b * rec_t_b / (prec_t_b + rec_t_b) if (prec_t_b + rec_t_b) > 0 else 0.0
+    # Free large arrays explicitly before building return dict
+    del preds_raw_TN, F1_TK, PREC_TK, REC_TK, FPR_TK, TPR_TK, TP_TK, FP_TK
+    del dr_TR, detected_TKR, masked_labels, normal_eval_mask
+    _gc.collect()
 
-        # ROC AUC
-        si = np.argsort(fprs)
-        roc_aucs[ki] = float(np.trapz(tprs[si], fprs[si]))
-
-        # PRC AUC
-        pi = np.argsort(tprs)
-        rec_s = tprs[pi]
-        prec_s = precs_sweep[pi]
-        if len(rec_s) == 0 or rec_s[0] > 0:
-            rec_s = np.concatenate([[0.0], rec_s])
-            prec_s = np.concatenate([[1.0], prec_s])
-        prc_aucs[ki] = float(np.trapz(prec_s, rec_s))
-
-    # Integrate over K with trapezoidal rule, normalized by K range (100)
+    # Integrate over K with trapezoidal rule, normalized by K range (100).
+    # Also expose per-K arrays so callers (e.g., bulk-recompute scripts) can
+    # extract per-K metrics without re-running this whole function 21x.
     return {
         'pak_auc_prc_auc': float(np.trapz(prc_aucs, k_values) / 100.0),
         'pak_auc_roc_auc': float(np.trapz(roc_aucs, k_values) / 100.0),
@@ -809,6 +841,13 @@ def compute_pa_k_auc(
         'pak_auc_f1_t_raw': float(np.trapz(f1_ts_raw, k_values) / 100.0),
         'pak_auc_precision_raw': float(np.trapz(precisions_raw, k_values) / 100.0),
         'pak_auc_recall_raw': float(np.trapz(recalls_raw, k_values) / 100.0),
+        # Per-K arrays (indexed 0..100). Exposed for cheap downstream extraction.
+        # Returned as Python lists so the dict stays JSON-serializable when
+        # downstream callers dump epoch_metrics.json (avoids numpy serialize fail).
+        '_per_k_prc_auc': prc_aucs.tolist(),
+        '_per_k_roc_auc': roc_aucs.tolist(),
+        '_per_k_f1': f1s_best.tolist(),
+        '_per_k_values': k_values.tolist(),
     }
 
 
@@ -997,6 +1036,7 @@ class Evaluator:
         labels: np.ndarray,
         sample_types: np.ndarray,
         anomaly_types: np.ndarray,
+        fm_patches: Optional[np.ndarray] = None,
     ):
         """Populate the evaluator cache with pre-computed patch scores.
 
@@ -1010,11 +1050,16 @@ class Evaluator:
             labels: (n_windows,) window-level binary labels
             sample_types: (n_windows,) window-level sample type indicators
             anomaly_types: (n_windows,) window-level anomaly type indicators
+            fm_patches: optional (n_windows, num_patches) feature-matching distance scores.
+                Must be supplied when use_feature_matching=True so adaptive scoring
+                in evaluate() includes FM contribution (mirrors npz save path).
         """
         self._cache['raw_scores'] = self._build_cache_dict(
             recon_patches, disc_patches, student_recon_patches,
             labels, sample_types, anomaly_types,
         )
+        if fm_patches is not None:
+            self.fm_patches = fm_patches
 
     def _get_cached_scores(self):
         """Get cached raw scores, computing if needed
@@ -1202,6 +1247,7 @@ class Evaluator:
                 # Process patches in batches for memory efficiency
                 # Memory per forward: batch_size * patch_batch_size * seq_len * features * 4 bytes
                 # Reduce patch_batch_size for d_model>256 to prevent GPU OOM on large test sets (SWaT/WaDi)
+                _use_complementary = getattr(self.config, 'eval_complementary_masking', False)
                 patch_batch_size = min(num_patches, 2 if self.config.d_model > 256 else 10)
                 batch_recon_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
                 batch_disc_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
@@ -1218,88 +1264,150 @@ class Evaluator:
                     teacher_err_ts = torch.zeros(batch_size, seq_length, device=self.config.device)
                     student_err_ts = torch.zeros(batch_size, seq_length, device=self.config.device)
 
-                for batch_start in range(0, num_patches, patch_batch_size):
-                    batch_end = min(batch_start + patch_batch_size, num_patches)
-                    current_batch_patches = batch_end - batch_start
+                if _use_complementary:
+                    # --- Complementary masking: K groups, no batch expansion ---
+                    _K = getattr(self.config, 'eval_complementary_k', 7)
+                    _perm = torch.randperm(num_patches)
+                    _sizes = [num_patches // _K + (1 if i < num_patches % _K else 0) for i in range(_K)]
+                    _groups = torch.split(_perm, _sizes)
 
-                    # Expand only for current patch batch
-                    expanded = sequences.unsqueeze(1).expand(-1, current_batch_patches, -1, -1)
-                    expanded = expanded.reshape(batch_size * current_batch_patches, seq_length, num_features)
+                    for group in _groups:
+                        group_patches = group.tolist()
 
-                    # Create masks for current patch batch
-                    masks = torch.ones(batch_size * current_batch_patches, seq_length, device=self.config.device)
-                    for i, patch_idx in enumerate(range(batch_start, batch_end)):
-                        start_pos = patch_idx * patch_size
-                        end_pos = start_pos + patch_size
-                        masks[i::current_batch_patches, start_pos:end_pos] = 0
+                        # Create mask: 1=visible, 0=masked (for all group patches)
+                        masks = torch.ones(batch_size, seq_length, device=self.config.device)
+                        for patch_idx in group_patches:
+                            start_pos = patch_idx * patch_size
+                            end_pos = start_pos + patch_size
+                            masks[:, start_pos:end_pos] = 0
 
-                    # Forward pass for current batch
-                    teacher_output, student_output, _ = self.model(expanded, masking_ratio=0.0, mask=masks)
+                        # Single forward pass (no batch expansion needed)
+                        teacher_output, student_output, _ = self.model(sequences, masking_ratio=0.0, mask=masks)
 
-                    # FM distance per patch (if feature matching enabled)
-                    _fm_per_patch = None
-                    if batch_fm_patches is not None:
-                        _t_hid = getattr(self.model, '_teacher_hidden', None)
-                        _s_hid = getattr(self.model, '_student_hidden', None)
-                        if _t_hid is not None and _s_hid is not None:
-                            import torch.nn.functional as _F
-                            _fm_metric = getattr(self.config, 'fm_distance_metric', 'cosine')
-                            if _fm_metric == 'l2':
-                                _fm_dist = ((_t_hid - _s_hid) ** 2).mean(dim=-1).transpose(0, 1)  # (B', num_patches)
-                            else:  # cosine
-                                _cos = _F.cosine_similarity(_t_hid, _s_hid, dim=-1)  # (num_patches, B')
-                                _fm_dist = (1 - _cos).transpose(0, 1)  # (B', num_patches)
-                            _fm_dist = _fm_dist.view(batch_size, current_batch_patches, num_patches)
-                            _fm_per_patch = _fm_dist  # (B, cbp, num_patches)
+                        # FM distance (if enabled)
+                        _fm_per_patch_comp = None
+                        if batch_fm_patches is not None:
+                            _t_hid = getattr(self.model, '_teacher_hidden', None)
+                            _s_hid = getattr(self.model, '_student_hidden', None)
+                            if _t_hid is not None and _s_hid is not None:
+                                import torch.nn.functional as _F
+                                _fm_metric = getattr(self.config, 'fm_distance_metric', 'cosine')
+                                if _fm_metric == 'l2':
+                                    _fm_per_patch_comp = ((_t_hid - _s_hid) ** 2).mean(dim=-1).transpose(0, 1)
+                                else:
+                                    _cos = _F.cosine_similarity(_t_hid, _s_hid, dim=-1)
+                                    _fm_per_patch_comp = (1 - _cos).transpose(0, 1)
 
-                    # Compute errors — keep full (B', L, F) for per-feature stats before reducing
-                    _recon_full = (teacher_output - expanded) ** 2         # (B', L, F)
-                    _student_full = (student_output - expanded) ** 2       # (B', L, F)
-                    _disc_full = (teacher_output - student_output) ** 2    # (B', L, F)
-                    recon_error = _recon_full.mean(dim=2)                  # (B', L) — feature-averaged
-                    student_recon_error = _student_full.mean(dim=2)
-                    discrepancy = _disc_full.mean(dim=2)
+                        # Compute errors
+                        _recon_full = (teacher_output - sequences) ** 2
+                        _student_full = (student_output - sequences) ** 2
+                        _disc_full = (teacher_output - student_output) ** 2
+                        recon_error = _recon_full.mean(dim=2)
+                        student_recon_error = _student_full.mean(dim=2)
+                        discrepancy = _disc_full.mean(dim=2)
 
-                    # Reshape to (B, current_batch_patches, S)
-                    recon_error = recon_error.view(batch_size, current_batch_patches, seq_length)
-                    student_recon_error = student_recon_error.view(batch_size, current_batch_patches, seq_length)
-                    discrepancy = discrepancy.view(batch_size, current_batch_patches, seq_length)
+                        # Extract scores for each masked patch in this group
+                        for patch_idx in group_patches:
+                            start_pos = patch_idx * patch_size
+                            end_pos = start_pos + patch_size
+                            batch_recon_patches[:, patch_idx] = recon_error[:, start_pos:end_pos].mean(dim=1)
+                            batch_student_recon_patches[:, patch_idx] = student_recon_error[:, start_pos:end_pos].mean(dim=1)
+                            batch_disc_patches[:, patch_idx] = discrepancy[:, start_pos:end_pos].mean(dim=1)
+                            batch_disc_per_feature[:, patch_idx, :] = _disc_full[:, start_pos:end_pos, :].mean(dim=1)
+                            if _fm_per_patch_comp is not None:
+                                batch_fm_patches[:, patch_idx] = _fm_per_patch_comp[:, patch_idx]
 
-                    # Per-feature discrepancy: reshape for per-patch extraction
-                    _disc_full_4d = _disc_full.view(batch_size, current_batch_patches, seq_length, num_features)
+                            if collect_detail:
+                                teacher_recon_ts[:, start_pos:end_pos] = teacher_output[:, start_pos:end_pos, 0]
+                                student_recon_ts[:, start_pos:end_pos] = student_output[:, start_pos:end_pos, 0]
+                                disc_ts[:, start_pos:end_pos] = discrepancy[:, start_pos:end_pos]
+                                teacher_err_ts[:, start_pos:end_pos] = recon_error[:, start_pos:end_pos]
+                                student_err_ts[:, start_pos:end_pos] = student_recon_error[:, start_pos:end_pos]
 
-                    # Detail: reshape outputs for feature-0 extraction before del
-                    if collect_detail:
-                        t_out = teacher_output.view(batch_size, current_batch_patches, seq_length, num_features)
-                        s_out = student_output.view(batch_size, current_batch_patches, seq_length, num_features)
+                        del _recon_full, _student_full, _disc_full, teacher_output, student_output
+                        del recon_error, student_recon_error, discrepancy, masks
 
-                    # Extract scores for each patch's masked region
-                    for i, patch_idx in enumerate(range(batch_start, batch_end)):
-                        start_pos = patch_idx * patch_size
-                        end_pos = start_pos + patch_size
-                        batch_recon_patches[:, patch_idx] = recon_error[:, i, start_pos:end_pos].mean(dim=1)
-                        batch_student_recon_patches[:, patch_idx] = student_recon_error[:, i, start_pos:end_pos].mean(dim=1)
-                        batch_disc_patches[:, patch_idx] = discrepancy[:, i, start_pos:end_pos].mean(dim=1)
-                        # Per-feature disc for this patch: mean over timesteps, keep features
-                        batch_disc_per_feature[:, patch_idx, :] = _disc_full_4d[:, i, start_pos:end_pos, :].mean(dim=1)
-                        # FM distance for this patch (already per-patch from hidden states)
-                        if _fm_per_patch is not None:
-                            batch_fm_patches[:, patch_idx] = _fm_per_patch[:, i, patch_idx]
+                else:
+                    # --- Leave-one-out masking (default) ---
+                    for batch_start in range(0, num_patches, patch_batch_size):
+                        batch_end = min(batch_start + patch_batch_size, num_patches)
+                        current_batch_patches = batch_end - batch_start
 
-                        # Detail: assemble per-timestep reconstructions (feature 0 only)
+                        # Expand only for current patch batch
+                        expanded = sequences.unsqueeze(1).expand(-1, current_batch_patches, -1, -1)
+                        expanded = expanded.reshape(batch_size * current_batch_patches, seq_length, num_features)
+
+                        # Create masks for current patch batch
+                        masks = torch.ones(batch_size * current_batch_patches, seq_length, device=self.config.device)
+                        for i, patch_idx in enumerate(range(batch_start, batch_end)):
+                            start_pos = patch_idx * patch_size
+                            end_pos = start_pos + patch_size
+                            masks[i::current_batch_patches, start_pos:end_pos] = 0
+
+                        # Forward pass for current batch
+                        teacher_output, student_output, _ = self.model(expanded, masking_ratio=0.0, mask=masks)
+
+                        # FM distance per patch (if feature matching enabled)
+                        _fm_per_patch = None
+                        if batch_fm_patches is not None:
+                            _t_hid = getattr(self.model, '_teacher_hidden', None)
+                            _s_hid = getattr(self.model, '_student_hidden', None)
+                            if _t_hid is not None and _s_hid is not None:
+                                import torch.nn.functional as _F
+                                _fm_metric = getattr(self.config, 'fm_distance_metric', 'cosine')
+                                if _fm_metric == 'l2':
+                                    _fm_dist = ((_t_hid - _s_hid) ** 2).mean(dim=-1).transpose(0, 1)
+                                else:  # cosine
+                                    _cos = _F.cosine_similarity(_t_hid, _s_hid, dim=-1)
+                                    _fm_dist = (1 - _cos).transpose(0, 1)
+                                _fm_dist = _fm_dist.view(batch_size, current_batch_patches, num_patches)
+                                _fm_per_patch = _fm_dist
+
+                        # Compute errors — keep full (B', L, F) for per-feature stats before reducing
+                        _recon_full = (teacher_output - expanded) ** 2
+                        _student_full = (student_output - expanded) ** 2
+                        _disc_full = (teacher_output - student_output) ** 2
+                        recon_error = _recon_full.mean(dim=2)
+                        student_recon_error = _student_full.mean(dim=2)
+                        discrepancy = _disc_full.mean(dim=2)
+
+                        # Reshape to (B, current_batch_patches, S)
+                        recon_error = recon_error.view(batch_size, current_batch_patches, seq_length)
+                        student_recon_error = student_recon_error.view(batch_size, current_batch_patches, seq_length)
+                        discrepancy = discrepancy.view(batch_size, current_batch_patches, seq_length)
+
+                        # Per-feature discrepancy: reshape for per-patch extraction
+                        _disc_full_4d = _disc_full.view(batch_size, current_batch_patches, seq_length, num_features)
+
+                        # Detail: reshape outputs for feature-0 extraction before del
                         if collect_detail:
-                            teacher_recon_ts[:, start_pos:end_pos] = t_out[:, i, start_pos:end_pos, 0]
-                            student_recon_ts[:, start_pos:end_pos] = s_out[:, i, start_pos:end_pos, 0]
-                            disc_ts[:, start_pos:end_pos] = discrepancy[:, i, start_pos:end_pos]
-                            teacher_err_ts[:, start_pos:end_pos] = recon_error[:, i, start_pos:end_pos]
-                            student_err_ts[:, start_pos:end_pos] = student_recon_error[:, i, start_pos:end_pos]
+                            t_out = teacher_output.view(batch_size, current_batch_patches, seq_length, num_features)
+                            s_out = student_output.view(batch_size, current_batch_patches, seq_length, num_features)
 
-                    # Clear intermediate tensors
-                    del _recon_full, _student_full, _disc_full, _disc_full_4d
-                    if collect_detail:
-                        del expanded, masks, teacher_output, student_output, recon_error, student_recon_error, discrepancy, t_out, s_out
-                    else:
-                        del expanded, masks, teacher_output, student_output, recon_error, student_recon_error, discrepancy
+                        # Extract scores for each patch's masked region
+                        for i, patch_idx in enumerate(range(batch_start, batch_end)):
+                            start_pos = patch_idx * patch_size
+                            end_pos = start_pos + patch_size
+                            batch_recon_patches[:, patch_idx] = recon_error[:, i, start_pos:end_pos].mean(dim=1)
+                            batch_student_recon_patches[:, patch_idx] = student_recon_error[:, i, start_pos:end_pos].mean(dim=1)
+                            batch_disc_patches[:, patch_idx] = discrepancy[:, i, start_pos:end_pos].mean(dim=1)
+                            batch_disc_per_feature[:, patch_idx, :] = _disc_full_4d[:, i, start_pos:end_pos, :].mean(dim=1)
+                            if _fm_per_patch is not None:
+                                batch_fm_patches[:, patch_idx] = _fm_per_patch[:, i, patch_idx]
+
+                            if collect_detail:
+                                teacher_recon_ts[:, start_pos:end_pos] = t_out[:, i, start_pos:end_pos, 0]
+                                student_recon_ts[:, start_pos:end_pos] = s_out[:, i, start_pos:end_pos, 0]
+                                disc_ts[:, start_pos:end_pos] = discrepancy[:, i, start_pos:end_pos]
+                                teacher_err_ts[:, start_pos:end_pos] = recon_error[:, i, start_pos:end_pos]
+                                student_err_ts[:, start_pos:end_pos] = student_recon_error[:, i, start_pos:end_pos]
+
+                        # Clear intermediate tensors
+                        del _recon_full, _student_full, _disc_full, _disc_full_4d
+                        if collect_detail:
+                            del expanded, masks, teacher_output, student_output, recon_error, student_recon_error, discrepancy, t_out, s_out
+                        else:
+                            del expanded, masks, teacher_output, student_output, recon_error, student_recon_error, discrepancy
 
                 all_recon_patches.append(batch_recon_patches.cpu().numpy())
                 all_disc_patches.append(batch_disc_patches.cpu().numpy())

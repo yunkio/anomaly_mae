@@ -25,7 +25,13 @@ class Config:
     sliding_window_train_ratio: float = 0.8  # Train ratio (220K/275K = 0.8, test = 55K)
     normalize_mode: str = 'zscore'  # Normalization mode for input signals
     # - 'zscore': Per-feature z-score standardization (mean=0, std=1) — default
-    # - 'minmax': Per-feature min-max scaling to [0, 1] with clip
+    # - 'minmax': Per-feature min-max scaling (target range controlled by minmax_range)
+    minmax_range: str = '0_1'  # Target output range when normalize_mode='minmax'
+    # - '0_1' (default): scale train to [0, 1], tight-clip test to [0, 1]
+    # - 'neg1_1' (NPSR-style): scale train to [-1, 1], test gets test-only clamp via
+    #   minmax_clamp_min/max (default ±4) — preserves test outlier info.
+    minmax_clamp_min: float = -4.0  # Test-only clamp lower bound (used only when minmax_range='neg1_1')
+    minmax_clamp_max: float = 4.0   # Test-only clamp upper bound (used only when minmax_range='neg1_1')
     anomaly_interval_scale: float = 0.75  # Scale factor for anomaly intervals (2x frequency, ~13% anomaly)
 
     # Model parameters

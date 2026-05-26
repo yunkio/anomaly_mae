@@ -26,6 +26,9 @@ class NoisyLabelSlidingWindowDataset(SlidingWindowDataset):
         seed: int = 42,
         run_boundaries: list = None,
         normalize_mode: str = 'zscore',
+        minmax_range: str = '0_1',
+        minmax_clamp_min: float = None,
+        minmax_clamp_max: float = None,
     ):
         """Initialize noisy label dataset.
 
@@ -59,6 +62,9 @@ class NoisyLabelSlidingWindowDataset(SlidingWindowDataset):
             seed=seed,
             run_boundaries=run_boundaries,
             normalize_mode=normalize_mode,
+            minmax_range=minmax_range,
+            minmax_clamp_min=minmax_clamp_min,
+            minmax_clamp_max=minmax_clamp_max,
         )
 
     def __getitem__(self, idx):
