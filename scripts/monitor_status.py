@@ -296,9 +296,11 @@ if best_eval:
     flag = " ★ (current best)" if best_eval is evals[-1] and best_eval['best'] else ""
     out.append(
         f"  Best pak_auc_f1 (ep {best_eval['epoch']:>3}):"
-        f"  prc={_fmt(best_eval['prc'])} f1={_fmt(best_eval.get('f1'))} pak_auc_f1={_fmt(best_eval['pak_f1'])}"
-        f"  aff_f1={_fmt(best_eval.get('aff_f1'))} r_f1={_fmt(best_eval.get('r_f1'))}"
-        f"  vus_pr={_fmt(best_eval.get('vus_pr'))} vus_roc={_fmt(best_eval.get('vus_roc'))}{flag}"
+        f"  [point] prc={_fmt(best_eval['prc'])} f1={_fmt(best_eval.get('f1'))} f1_t={_fmt(best_eval['f1_t'])}"
+        f"  [PA%K] pak_auc_f1={_fmt(best_eval['pak_f1'])} pak_auc_prc={_fmt(best_eval['pak_prc'])}"
+        f"  [range] aff_f1={_fmt(best_eval.get('aff_f1'))} r_f1={_fmt(best_eval.get('r_f1'))}"
+        f"  [VUS] vus_pr={_fmt(best_eval.get('vus_pr'))} vus_roc={_fmt(best_eval.get('vus_roc'))}"
+        f"  [diag] disc_snr={_fmt(best_eval['d_snr'])}{flag}"
     )
 if not evals:
     out.append(f"  (no eval logged yet — eval interval = 5)")

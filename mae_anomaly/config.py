@@ -23,9 +23,9 @@ class Config:
     sliding_window_test_stride: int = 21  # Stride for test window extraction
     epoch_offset: bool = True  # Non-replacement random train window offset each epoch (cycles through [0, stride))
     sliding_window_train_ratio: float = 0.8  # Train ratio (220K/275K = 0.8, test = 55K)
-    normalize_mode: str = 'zscore'  # Normalization mode for input signals
-    # - 'zscore': Per-feature z-score standardization (mean=0, std=1) — default
-    # - 'minmax': Per-feature min-max scaling (target range controlled by minmax_range)
+    normalize_mode: str = 'minmax'  # Normalization mode for input signals (exp271 canonical default 2026-05-27)
+    # - 'minmax': Per-feature min-max scaling (target range controlled by minmax_range) — default (exp271)
+    # - 'zscore': Per-feature z-score standardization (mean=0, std=1)
     minmax_range: str = '0_1'  # Target output range when normalize_mode='minmax'
     # - '0_1' (default): scale train to [0, 1], tight-clip test to [0, 1]
     # - 'neg1_1' (NPSR-style): scale train to [-1, 1], test gets test-only clamp via
@@ -120,14 +120,14 @@ class Config:
     grl_disable_anomaly_loss: bool = True  # Disable anomaly_loss when GRL is active
     # - True: anomaly_loss=0 when use_grl=True (default, current behavior)
     # - False: anomaly_loss + GRL simultaneous (adversarial equilibrium)
-    use_grl: bool = False  # Enable GRL for anomaly-aware student training
-    # - False: No GRL (default, existing behavior unchanged)
-    # - True: GRL classifier on student hidden → anomaly_loss disabled, GRL handles disc generation
+    use_grl: bool = True  # Enable GRL for anomaly-aware student training (exp271 canonical default 2026-05-27)
+    # - True: GRL classifier on student hidden → anomaly_loss disabled, GRL handles disc generation — default (exp271)
+    # - False: No GRL
     grl_cls_hidden: int = 0  # Classifier hidden dim (0 = auto: d_model // 2)
-    grl_loss_weight: float = 1.0  # GRL loss weight multiplier applied to adaptive lambda
-    grl_target_mode: str = 'patch'  # GRL classifier target granularity
-    # - 'patch': Target = patch_has_anomaly (current, per-patch label)
-    # - 'window': Target = has_anomaly_in_window (window-level label, all patches same)
+    grl_loss_weight: float = 0.2  # GRL loss weight multiplier applied to adaptive lambda (exp271 canonical default 2026-05-27)
+    grl_target_mode: str = 'window'  # GRL classifier target granularity (exp271 canonical default 2026-05-27)
+    # - 'window': Target = has_anomaly_in_window (window-level label, all patches same) — default (exp271)
+    # - 'patch': Target = patch_has_anomaly (per-patch label)
     grl_pos_weight: float = 19.0  # GRL classifier pos_weight for class imbalance
     # - >0: Fixed value (default 19.0 ≈ 95%/5% normal/anomaly ratio)
     # - Automatically set from actual dataset anomaly ratio by run_base_experiments.py
@@ -144,9 +144,9 @@ class Config:
     grl_use_focal: bool = True  # Use focal loss for GRL classifier
     # - True: Focal loss (default, existing behavior) — down-weights easy examples
     # - False: Standard BCE loss — removes focal+pos_weight non-standard interaction
-    grl_cls_lr_ratio: float = 1.0  # GRL classifier LR as fraction of main LR
-    # - 1.0: Same LR as main model (default, existing behavior)
-    # - <1.0: Slower classifier convergence to prevent collapse (e.g., 0.1)
+    grl_cls_lr_ratio: float = 0.1  # GRL classifier LR as fraction of main LR (exp271 canonical default 2026-05-27)
+    # - 0.1: Slower classifier convergence to prevent collapse — default (exp271)
+    # - 1.0: Same LR as main model
     #   Only applies to classifier mode (grl_mode='classifier')
     grl_cls_arch: str = 'default'  # GRL classifier architecture
     # - 'default': 1-layer MLP (LayerNorm → d_model//2 → GELU → Dropout(0.1) → 1)
@@ -161,14 +161,14 @@ class Config:
     wdgrl_critic_lr: float = 1e-4  # Critic optimizer learning rate (WDGRL only)
 
     # Feature Matching Loss (independent of GRL)
-    use_feature_matching: bool = False  # Enable feature matching loss
+    use_feature_matching: bool = True  # Enable feature matching loss (exp271 canonical default 2026-05-27)
     # cosine(teacher_hidden, student_hidden) on masked normal patches
-    fm_adaptive_lambda: bool = False  # Adaptive λ for FM-OD gradient balancing
-    # - False: FM weight = fm_loss_weight (fixed, default 1:1)
-    # - True: FM weight = adaptive_lambda * fm_loss_weight (gradient-balanced)
-    fm_distance_metric: str = 'cosine'  # Distance metric for feature matching
-    # - 'cosine': 1 - cosine_similarity (default, direction-only)
-    # - 'l2': L2 distance (magnitude + direction)
+    fm_adaptive_lambda: bool = True  # Adaptive λ for FM-OD gradient balancing (exp271 canonical default 2026-05-27)
+    # - True: FM weight = adaptive_lambda * fm_loss_weight (gradient-balanced) — default (exp271)
+    # - False: FM weight = fm_loss_weight (fixed, 1:1)
+    fm_distance_metric: str = 'l2'  # Distance metric for feature matching (exp271 canonical default 2026-05-27)
+    # - 'l2': L2 distance (magnitude + direction) — default (exp271)
+    # - 'cosine': 1 - cosine_similarity (direction-only)
     use_output_discrepancy: bool = True  # Enable output discrepancy loss (normal_loss + anomaly_loss)
     # - True: OD loss active (default, existing behavior)
     # - False: OD loss zeroed, only FM loss contributes to discrepancy_loss
