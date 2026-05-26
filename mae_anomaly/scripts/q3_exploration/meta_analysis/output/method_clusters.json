@@ -1,0 +1,442 @@
+{
+  "method_clusters_K10": {
+    "A1_peak_run": 1,
+    "A2_multi_sigma_agree": 6,
+    "A3_kde_fwhm": 6,
+    "A4_smoothed_peak": 6,
+    "B1_E9_NLM_T2": 1,
+    "B2_conditional_cap": 1,
+    "B3_3method_ensemble": 1,
+    "B4_unsup_A3_NLM": 6,
+    "B5_Z5_E9_routing": 1,
+    "E9_adapt_single": 1,
+    "F2_geom_rd": 4,
+    "F2_harmonic": 7,
+    "F2_iqr_weighted": 1,
+    "F2_max_channel": 7,
+    "F2_r_sigmoid_d": 4,
+    "F2_sqrt_rdf": 1,
+    "F2_teacher_student_diff": 1,
+    "F5_b1_e9_nlm": 1,
+    "F5_b2_conditional": 1,
+    "F5_baseline_gauss10": 8,
+    "F5_e9_adapt": 1,
+    "F5_gauss100": 6,
+    "F5_gauss30": 6,
+    "F5_gauss5": 1,
+    "F5_z5_pyramid": 6,
+    "P12_blend_type_pak": 1,
+    "P12_discrete_type_pak": 1,
+    "P12_ref_pak_div5_T15": 1,
+    "P13_ref_pak_div5_T15": 1,
+    "P13_v1_per_region_pak": 1,
+    "P13_v2_multi_sigma_pak": 1,
+    "P13_v3_self_consistency_pak": 3,
+    "P14_ref_pak": 1,
+    "P14_v1_gradient_pak": 1,
+    "P14_v2_local_thr_pak": 1,
+    "P14_v3_dilate3_pak": 1,
+    "P14_v3_dilate5_pak": 1,
+    "P16_div5_T1.5_thr85_hybrid": 1,
+    "P16_div5_T1.5_thr85_pot_alone": 3,
+    "P16_div5_T1.5_thr85_pot_nlm": 3,
+    "P16_div5_T1.5_thr90_hybrid": 1,
+    "P16_div5_T1.5_thr90_pot_alone": 3,
+    "P16_div5_T1.5_thr90_pot_nlm": 3,
+    "P16_div5_T1.5_thr92.5_hybrid": 1,
+    "P16_div5_T1.5_thr92.5_pot_alone": 3,
+    "P16_div5_T1.5_thr92.5_pot_nlm": 3,
+    "P16_div5_T1.5_thr95_hybrid": 1,
+    "P16_div5_T1.5_thr95_pot_alone": 3,
+    "P16_div5_T1.5_thr95_pot_nlm": 3,
+    "P16_div5_T1.5_thr97.5_hybrid": 1,
+    "P16_div5_T1.5_thr97.5_pot_alone": 3,
+    "P16_div5_T1.5_thr97.5_pot_nlm": 3,
+    "P16_div5_T1.5_thr99_hybrid": 1,
+    "P16_div5_T1.5_thr99_pot_alone": 3,
+    "P16_div5_T1.5_thr99_pot_nlm": 3,
+    "P16_gauss10_thr85_hybrid": 2,
+    "P16_gauss10_thr85_pot_alone": 3,
+    "P16_gauss10_thr85_pot_nlm": 3,
+    "P16_gauss10_thr90_hybrid": 2,
+    "P16_gauss10_thr90_pot_alone": 3,
+    "P16_gauss10_thr90_pot_nlm": 3,
+    "P16_gauss10_thr92.5_hybrid": 2,
+    "P16_gauss10_thr92.5_pot_alone": 3,
+    "P16_gauss10_thr92.5_pot_nlm": 3,
+    "P16_gauss10_thr95_hybrid": 2,
+    "P16_gauss10_thr95_pot_alone": 3,
+    "P16_gauss10_thr95_pot_nlm": 3,
+    "P16_gauss10_thr97.5_hybrid": 2,
+    "P16_gauss10_thr97.5_pot_alone": 3,
+    "P16_gauss10_thr97.5_pot_nlm": 3,
+    "P16_gauss10_thr99_hybrid": 7,
+    "P16_gauss10_thr99_pot_alone": 3,
+    "P16_gauss10_thr99_pot_nlm": 3,
+    "P17_gmm2_on_baseline": 1,
+    "P17_gmm2_on_e9": 1,
+    "P17_gmm2_on_ref": 1,
+    "P17_gmm2_ref_smoothed_nlm": 1,
+    "P17_gmm2_train_fit": 1,
+    "P17_gmm3_on_e9": 4,
+    "P17_gmm_ensemble": 1,
+    "P17_hybrid_ref_plus_gmm": 1,
+    "P18_ar10_alone": 1,
+    "P18_ar10_nlm": 1,
+    "P18_ar20_alone": 1,
+    "P18_ar20_nlm": 1,
+    "P18_ar3_alone": 1,
+    "P18_ar3_nlm": 1,
+    "P18_ar5_alone": 1,
+    "P18_ar5_nlm": 1,
+    "P18_conf50_alone": 1,
+    "P18_conf70_alone": 1,
+    "P18_conf80_alone": 1,
+    "P18_conf90_alone": 1,
+    "P18_hmm_state": 1,
+    "P18_hmm_state_smoothed": 1,
+    "P18_persistence": 1,
+    "P18_ref_plus_ar10": 1,
+    "P18_ref_plus_ar20": 1,
+    "P18_ref_plus_ar3": 1,
+    "P18_ref_plus_ar5": 1,
+    "P18_ref_plus_conf50": 1,
+    "P18_ref_plus_conf70": 1,
+    "P18_ref_plus_conf80": 1,
+    "P18_ref_plus_conf90": 1,
+    "P18_ref_plus_hmm": 1,
+    "P18_ref_plus_persistence": 1,
+    "P18_spectral_subtract": 1,
+    "P18_super_ensemble": 1,
+    "P2_div1.5_T0.5": 1,
+    "P2_div1.5_T1.0": 1,
+    "P2_div1.5_T1.5": 1,
+    "P2_div1.5_T2.0": 1,
+    "P2_div1.5_T2.5": 1,
+    "P2_div1.5_T3.0": 1,
+    "P2_div1.5_T5.0": 1,
+    "P2_div1.5_noNLM": 1,
+    "P2_div2.0_T0.5": 1,
+    "P2_div2.0_T1.0": 1,
+    "P2_div2.0_T1.5": 1,
+    "P2_div2.0_T2.0": 1,
+    "P2_div2.0_T2.5": 1,
+    "P2_div2.0_T3.0": 1,
+    "P2_div2.0_T5.0": 1,
+    "P2_div2.0_noNLM": 1,
+    "P2_div2.5_T0.5": 1,
+    "P2_div2.5_T1.0": 1,
+    "P2_div2.5_T1.5": 1,
+    "P2_div2.5_T2.0": 1,
+    "P2_div2.5_T2.5": 1,
+    "P2_div2.5_T3.0": 1,
+    "P2_div2.5_T5.0": 1,
+    "P2_div2.5_noNLM": 1,
+    "P2_div3.0_T0.5": 1,
+    "P2_div3.0_T1.0": 1,
+    "P2_div3.0_T1.5": 1,
+    "P2_div3.0_T2.0": 1,
+    "P2_div3.0_T2.5": 1,
+    "P2_div3.0_T3.0": 1,
+    "P2_div3.0_T5.0": 1,
+    "P2_div3.0_noNLM": 1,
+    "P2_div3.5_T0.5": 1,
+    "P2_div3.5_T1.0": 1,
+    "P2_div3.5_T1.5": 1,
+    "P2_div3.5_T2.0": 1,
+    "P2_div3.5_T2.5": 1,
+    "P2_div3.5_T3.0": 1,
+    "P2_div3.5_T5.0": 1,
+    "P2_div3.5_noNLM": 1,
+    "P2_div4.0_T0.5": 1,
+    "P2_div4.0_T1.0": 1,
+    "P2_div4.0_T1.5": 1,
+    "P2_div4.0_T2.0": 1,
+    "P2_div4.0_T2.5": 1,
+    "P2_div4.0_T3.0": 1,
+    "P2_div4.0_T5.0": 1,
+    "P2_div4.0_noNLM": 1,
+    "P2_div4.5_T0.5": 1,
+    "P2_div4.5_T1.0": 1,
+    "P2_div4.5_T1.5": 1,
+    "P2_div4.5_T2.0": 1,
+    "P2_div4.5_T2.5": 1,
+    "P2_div4.5_T3.0": 1,
+    "P2_div4.5_T5.0": 1,
+    "P2_div4.5_noNLM": 1,
+    "P2_div5.0_T0.5": 1,
+    "P2_div5.0_T1.0": 1,
+    "P2_div5.0_T1.5": 1,
+    "P2_div5.0_T2.0": 1,
+    "P2_div5.0_T2.5": 1,
+    "P2_div5.0_T3.0": 1,
+    "P2_div5.0_T5.0": 1,
+    "P2_div5.0_noNLM": 1,
+    "P2_div5.5_T0.5": 1,
+    "P2_div5.5_T1.0": 1,
+    "P2_div5.5_T1.5": 1,
+    "P2_div5.5_T2.0": 1,
+    "P2_div5.5_T2.5": 1,
+    "P2_div5.5_T3.0": 1,
+    "P2_div5.5_T5.0": 1,
+    "P2_div5.5_noNLM": 1,
+    "P2_div6.0_T0.5": 1,
+    "P2_div6.0_T1.0": 1,
+    "P2_div6.0_T1.5": 1,
+    "P2_div6.0_T2.0": 1,
+    "P2_div6.0_T2.5": 1,
+    "P2_div6.0_T3.0": 1,
+    "P2_div6.0_T5.0": 1,
+    "P2_div6.0_noNLM": 1,
+    "P2_div7.0_T0.5": 1,
+    "P2_div7.0_T1.0": 1,
+    "P2_div7.0_T1.5": 1,
+    "P2_div7.0_T2.0": 1,
+    "P2_div7.0_T2.5": 1,
+    "P2_div7.0_T3.0": 1,
+    "P2_div7.0_T5.0": 1,
+    "P2_div7.0_noNLM": 1,
+    "P2_div8.0_T0.5": 1,
+    "P2_div8.0_T1.0": 1,
+    "P2_div8.0_T1.5": 1,
+    "P2_div8.0_T2.0": 1,
+    "P2_div8.0_T2.5": 1,
+    "P2_div8.0_T3.0": 1,
+    "P2_div8.0_T5.0": 1,
+    "P2_div8.0_noNLM": 1,
+    "P4_baseline_gauss10_auc": 9,
+    "P4_baseline_gauss10_bestF1": 10,
+    "P4_div3.0_T2.0_auc": 1,
+    "P4_div3.0_T2.0_bestF1": 1,
+    "P4_div5.0_T1.5_auc": 1,
+    "P4_div5.0_T1.5_bestF1": 1,
+    "P4_div5.0_T2.0_auc": 1,
+    "P4_div5.0_T2.0_bestF1": 1,
+    "P4_e9_div3_noNLM_auc": 1,
+    "P4_e9_div3_noNLM_bestF1": 1,
+    "P4_e9_div5_noNLM_auc": 1,
+    "P4_e9_div5_noNLM_bestF1": 1,
+    "P6_e1_mean_pak": 1,
+    "P6_e2_weighted_pak": 1,
+    "P6_e3_max_pak": 1,
+    "P6_e4_median_pak": 1,
+    "P6_e5_trim_pak": 1,
+    "P6_e6_small_mean_pak": 1,
+    "P6_e7_close_pak": 1,
+    "P6_stride_1": 1,
+    "P6_stride_14": 1,
+    "P6_stride_21": 1,
+    "P6_stride_42": 1,
+    "P6_stride_63": 1,
+    "P6_stride_7": 1,
+    "P9_autocorr_e_half": 5,
+    "P9_autocorr_e_third": 5,
+    "P9_change_point": 6,
+    "P9_ens_geom_mean": 1,
+    "P9_ens_max_conf": 1,
+    "P9_ens_median": 1,
+    "P9_ens_wmean": 1,
+    "P9_kde": 1,
+    "P9_peak_run_p85": 1,
+    "P9_peak_run_p90": 1,
+    "P9_peak_run_p95": 1,
+    "P9_peak_width": 3,
+    "P9_wavelet": 6
+  },
+  "cluster_representatives_K10": {
+    "1": {
+      "representative": "P12_blend_type_pak",
+      "representative_delta": 0.024028449192817634,
+      "size": 191,
+      "top5_members": [
+        {
+          "name": "P12_blend_type_pak",
+          "delta": 0.024028449192817634
+        },
+        {
+          "name": "P6_e6_small_mean_pak",
+          "delta": 0.023038941335329022
+        },
+        {
+          "name": "P6_e2_weighted_pak",
+          "delta": 0.022955557535139077
+        },
+        {
+          "name": "P6_stride_1",
+          "delta": 0.022897871729671136
+        },
+        {
+          "name": "P6_e3_max_pak",
+          "delta": 0.02254091620504727
+        }
+      ]
+    },
+    "2": {
+      "representative": "P16_gauss10_thr90_hybrid",
+      "representative_delta": 0.005167782727405275,
+      "size": 5,
+      "top5_members": [
+        {
+          "name": "P16_gauss10_thr90_hybrid",
+          "delta": 0.005167782727405275
+        },
+        {
+          "name": "P16_gauss10_thr85_hybrid",
+          "delta": 0.005008357506119728
+        },
+        {
+          "name": "P16_gauss10_thr92.5_hybrid",
+          "delta": 0.003818235821732584
+        },
+        {
+          "name": "P16_gauss10_thr95_hybrid",
+          "delta": 0.000938132978827082
+        },
+        {
+          "name": "P16_gauss10_thr97.5_hybrid",
+          "delta": -0.001632821309209777
+        }
+      ]
+    },
+    "3": {
+      "representative": "P16_gauss10_thr85_pot_alone",
+      "representative_delta": -0.005503264539634585,
+      "size": 26,
+      "top5_members": [
+        {
+          "name": "P16_gauss10_thr85_pot_alone",
+          "delta": -0.005503264539634585
+        },
+        {
+          "name": "P16_gauss10_thr85_pot_nlm",
+          "delta": -0.005766056577979531
+        },
+        {
+          "name": "P13_v3_self_consistency_pak",
+          "delta": -0.007186934491469033
+        },
+        {
+          "name": "P9_peak_width",
+          "delta": -0.007558623783460115
+        },
+        {
+          "name": "P16_div5_T1.5_thr85_pot_alone",
+          "delta": -0.008708891147360733
+        }
+      ]
+    },
+    "4": {
+      "representative": "F2_geom_rd",
+      "representative_delta": -0.01739318826746503,
+      "size": 3,
+      "top5_members": [
+        {
+          "name": "F2_geom_rd",
+          "delta": -0.01739318826746503
+        },
+        {
+          "name": "F2_r_sigmoid_d",
+          "delta": -0.034702122893272784
+        },
+        {
+          "name": "P17_gmm3_on_e9",
+          "delta": -0.08913827061869808
+        }
+      ]
+    },
+    "5": {
+      "representative": "P9_autocorr_e_third",
+      "representative_delta": 0.003225683115813684,
+      "size": 2,
+      "top5_members": [
+        {
+          "name": "P9_autocorr_e_third",
+          "delta": 0.003225683115813684
+        },
+        {
+          "name": "P9_autocorr_e_half",
+          "delta": 0.00125847790122669
+        }
+      ]
+    },
+    "6": {
+      "representative": "B4_unsup_A3_NLM",
+      "representative_delta": 0.009101059123436724,
+      "size": 9,
+      "top5_members": [
+        {
+          "name": "B4_unsup_A3_NLM",
+          "delta": 0.009101059123436724
+        },
+        {
+          "name": "A3_kde_fwhm",
+          "delta": 0.0020598623275729423
+        },
+        {
+          "name": "F5_gauss30",
+          "delta": -0.0009549282196420412
+        },
+        {
+          "name": "F5_z5_pyramid",
+          "delta": -0.0015834018400996423
+        },
+        {
+          "name": "A2_multi_sigma_agree",
+          "delta": -0.003609450113967503
+        }
+      ]
+    },
+    "7": {
+      "representative": "P16_gauss10_thr99_hybrid",
+      "representative_delta": -0.008295713088894029,
+      "size": 3,
+      "top5_members": [
+        {
+          "name": "P16_gauss10_thr99_hybrid",
+          "delta": -0.008295713088894029
+        },
+        {
+          "name": "F2_max_channel",
+          "delta": -0.029032849581148296
+        },
+        {
+          "name": "F2_harmonic",
+          "delta": -0.08944231756320502
+        }
+      ]
+    },
+    "8": {
+      "representative": "F5_baseline_gauss10",
+      "representative_delta": 0.0,
+      "size": 1,
+      "top5_members": [
+        {
+          "name": "F5_baseline_gauss10",
+          "delta": 0.0
+        }
+      ]
+    },
+    "9": {
+      "representative": "P4_baseline_gauss10_auc",
+      "representative_delta": 0.0,
+      "size": 1,
+      "top5_members": [
+        {
+          "name": "P4_baseline_gauss10_auc",
+          "delta": 0.0
+        }
+      ]
+    },
+    "10": {
+      "representative": "P4_baseline_gauss10_bestF1",
+      "representative_delta": 0.0,
+      "size": 1,
+      "top5_members": [
+        {
+          "name": "P4_baseline_gauss10_bestF1",
+          "delta": 0.0
+        }
+      ]
+    }
+  }
+}

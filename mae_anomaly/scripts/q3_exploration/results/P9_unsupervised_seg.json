@@ -1,0 +1,3423 @@
+{
+  "swat_excl22": {
+    "alias": "swat_excl22",
+    "true_median_seg": 444.0,
+    "baseline_pak": 0.5997649826376682,
+    "ref_pak_supervised": 0.6244945167800339,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 154.5,
+        "confidence": 0.3,
+        "pak": 0.6418574011543022,
+        "delta_baseline": 0.042092418516634034
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 10.0,
+        "confidence": 1.0,
+        "pak": 0.5679664317354205,
+        "delta_baseline": -0.0317985509022477
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 3.0,
+        "confidence": 1.0,
+        "pak": 0.5649884655737777,
+        "delta_baseline": -0.03477651706389051
+      },
+      "peak_width": {
+        "estimated_median_seg": 32048.95655869269,
+        "confidence": 0.05,
+        "pak": 0.17995064520750342,
+        "delta_baseline": -0.4198143374301648
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.6170897451103273,
+        "delta_baseline": 0.017324762472659128
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.6170897451103273,
+        "delta_baseline": 0.017324762472659128
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.6290687233025224,
+        "delta_baseline": 0.029303740664854194
+      },
+      "kde": {
+        "estimated_median_seg": 13.98479026865239,
+        "confidence": 0.9203041946269522,
+        "pak": 0.5706497998943448,
+        "delta_baseline": -0.029115182743323365
+      },
+      "change_point": {
+        "estimated_median_seg": 59.0,
+        "confidence": 1.0,
+        "pak": 0.6085714499796793,
+        "delta_baseline": 0.00880646734201107
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 32.578597886434736,
+        "confidence": 0.855076048656738,
+        "pak": 0.5872890954193881,
+        "delta_baseline": -0.01247588721828008
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 97.02945769167634,
+        "confidence": 0.855076048656738,
+        "pak": 0.633396454350896,
+        "delta_baseline": 0.03363147171322778
+      },
+      "ens_median": {
+        "estimated_median_seg": 36.492395134326195,
+        "confidence": 0.855076048656738,
+        "pak": 0.5912061935202175,
+        "delta_baseline": -0.008558789117450671
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.855076048656738,
+        "pak": 0.5679664317354205,
+        "delta_baseline": -0.0317985509022477
+      }
+    }
+  },
+  "psm": {
+    "alias": "psm",
+    "true_median_seg": 38.0,
+    "baseline_pak": 0.8416467230191593,
+    "ref_pak_supervised": 0.8494316642838861,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 13.0,
+        "confidence": 1.0,
+        "pak": 0.8458833665837214,
+        "delta_baseline": 0.004236643564562104
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 12.0,
+        "confidence": 1.0,
+        "pak": 0.8459774269777511,
+        "delta_baseline": 0.004330703958591808
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 9.0,
+        "confidence": 1.0,
+        "pak": 0.8457404267025395,
+        "delta_baseline": 0.004093703683380134
+      },
+      "peak_width": {
+        "estimated_median_seg": 63.890766103002534,
+        "confidence": 0.85,
+        "pak": 0.8516382969104105,
+        "delta_baseline": 0.00999157389125116
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8416467230191593,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8416467230191593,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.8458743027082847,
+        "delta_baseline": 0.004227579689125349
+      },
+      "kde": {
+        "estimated_median_seg": 11.198603142369677,
+        "confidence": 0.9760279371526065,
+        "pak": 0.8459917588134777,
+        "delta_baseline": 0.00434503579431833
+      },
+      "change_point": {
+        "estimated_median_seg": 31.0,
+        "confidence": 1.0,
+        "pak": 0.8492040074294275,
+        "delta_baseline": 0.00755728441026815
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 21.90793470257941,
+        "confidence": 0.9565069842881516,
+        "pak": 0.8475011852151249,
+        "delta_baseline": 0.005854462195965526
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 28.28973088788837,
+        "confidence": 0.9565069842881516,
+        "pak": 0.8484735988483382,
+        "delta_baseline": 0.006826875829178847
+      },
+      "ens_median": {
+        "estimated_median_seg": 21.5,
+        "confidence": 0.9565069842881516,
+        "pak": 0.8474992803085971,
+        "delta_baseline": 0.0058525572894377875
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 12.0,
+        "confidence": 0.9565069842881516,
+        "pak": 0.8459774269777511,
+        "delta_baseline": 0.004330703958591808
+      }
+    }
+  },
+  "wadi_A1": {
+    "alias": "wadi_A1",
+    "true_median_seg": 577.0,
+    "baseline_pak": 0.8601270180363184,
+    "ref_pak_supervised": 0.8980149203965201,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 17.0,
+        "confidence": 1.0,
+        "pak": 0.8026934184149407,
+        "delta_baseline": -0.05743359962137773
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 14.0,
+        "confidence": 1.0,
+        "pak": 0.7955954365185586,
+        "delta_baseline": -0.06453158151775984
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 10.5,
+        "confidence": 1.0,
+        "pak": 0.7877381669276263,
+        "delta_baseline": -0.07238885110869209
+      },
+      "peak_width": {
+        "estimated_median_seg": 18.638453249353915,
+        "confidence": 1.0,
+        "pak": 0.8064545419296061,
+        "delta_baseline": -0.05367247610671233
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8601270180363184,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8601270180363184,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.9095823944519583,
+        "delta_baseline": 0.04945537641563991
+      },
+      "kde": {
+        "estimated_median_seg": 13.206412781715786,
+        "confidence": 0.9358717443656843,
+        "pak": 0.7938262698797061,
+        "delta_baseline": -0.06630074815661235
+      },
+      "change_point": {
+        "estimated_median_seg": 49.0,
+        "confidence": 1.0,
+        "pak": 0.8645447992027222,
+        "delta_baseline": 0.004417781166403789
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 20.413233727301762,
+        "confidence": 0.9839679360914211,
+        "pak": 0.810668992916295,
+        "delta_baseline": -0.0494580251200234
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 23.882374203568084,
+        "confidence": 0.9839679360914211,
+        "pak": 0.8197562100381921,
+        "delta_baseline": -0.04037080799812631
+      },
+      "ens_median": {
+        "estimated_median_seg": 16.319226624676958,
+        "confidence": 0.9839679360914211,
+        "pak": 0.8010687032643008,
+        "delta_baseline": -0.05905831477201762
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 14.0,
+        "confidence": 0.9839679360914211,
+        "pak": 0.7955954365185586,
+        "delta_baseline": -0.06453158151775984
+      }
+    }
+  },
+  "wadi_A2": {
+    "alias": "wadi_A2",
+    "true_median_seg": 577.0,
+    "baseline_pak": 0.8773349033284346,
+    "ref_pak_supervised": 0.8696563955455895,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 15.0,
+        "confidence": 1.0,
+        "pak": 0.8323122173967082,
+        "delta_baseline": -0.045022685931726314
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 13.0,
+        "confidence": 1.0,
+        "pak": 0.8285205777829268,
+        "delta_baseline": -0.0488143255455078
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 9.0,
+        "confidence": 1.0,
+        "pak": 0.8229135409511887,
+        "delta_baseline": -0.05442136237724582
+      },
+      "peak_width": {
+        "estimated_median_seg": 18.07381520049239,
+        "confidence": 1.0,
+        "pak": 0.8381400156977201,
+        "delta_baseline": -0.03919488763071444
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8773349033284346,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.8746884880173095,
+        "delta_baseline": -0.002646415311125083
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.8812605437127756,
+        "delta_baseline": 0.003925640384341067
+      },
+      "kde": {
+        "estimated_median_seg": 13.341386932041798,
+        "confidence": 0.933172261359164,
+        "pak": 0.8291875492383395,
+        "delta_baseline": -0.048147354090095074
+      },
+      "change_point": {
+        "estimated_median_seg": 56.0,
+        "confidence": 1.0,
+        "pak": 0.8808095874560842,
+        "delta_baseline": 0.0034746841276496188
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 20.618356590704792,
+        "confidence": 0.983293065339791,
+        "pak": 0.843645720410768,
+        "delta_baseline": -0.03368918291766654
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 25.30365333633814,
+        "confidence": 0.983293065339791,
+        "pak": 0.8536982899635609,
+        "delta_baseline": -0.02363661336487366
+      },
+      "ens_median": {
+        "estimated_median_seg": 15.707601066267095,
+        "confidence": 0.983293065339791,
+        "pak": 0.8334251555936403,
+        "delta_baseline": -0.04390974773479428
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 13.0,
+        "confidence": 0.983293065339791,
+        "pak": 0.8285205777829268,
+        "delta_baseline": -0.0488143255455078
+      }
+    }
+  },
+  "simulation": {
+    "alias": "simulation",
+    "true_median_seg": 57.0,
+    "baseline_pak": 0.533563110604001,
+    "ref_pak_supervised": 0.537409252357735,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.5375819613450198,
+        "delta_baseline": 0.00401885074101882
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 17.0,
+        "confidence": 1.0,
+        "pak": 0.5377958789081597,
+        "delta_baseline": 0.004232768304158752
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 17.0,
+        "confidence": 1.0,
+        "pak": 0.5377958789081597,
+        "delta_baseline": 0.004232768304158752
+      },
+      "peak_width": {
+        "estimated_median_seg": 33.29825618842733,
+        "confidence": 1.0,
+        "pak": 0.5378804223321827,
+        "delta_baseline": 0.0043173117281817275
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.533563110604001,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.533563110604001,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.48354973786364736,
+        "delta_baseline": -0.05001337274035361
+      },
+      "kde": {
+        "estimated_median_seg": 14.46275701759597,
+        "confidence": 0.9107448596480806,
+        "pak": 0.5378136043315188,
+        "delta_baseline": 0.004250493727517846
+      },
+      "change_point": {
+        "estimated_median_seg": 43.0,
+        "confidence": 1.0,
+        "pak": 0.5362313940265474,
+        "delta_baseline": 0.002668283422546436
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 24.649865078301104,
+        "confidence": 0.9776862149120201,
+        "pak": 0.5379605863214271,
+        "delta_baseline": 0.0043974757174261025
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 27.225027870553305,
+        "confidence": 0.9776862149120201,
+        "pak": 0.5378623171769837,
+        "delta_baseline": 0.004299206572982772
+      },
+      "ens_median": {
+        "estimated_median_seg": 25.149128094213665,
+        "confidence": 0.9776862149120201,
+        "pak": 0.537767463658643,
+        "delta_baseline": 0.004204353054642063
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 17.0,
+        "confidence": 0.9776862149120201,
+        "pak": 0.5377958789081597,
+        "delta_baseline": 0.004232768304158752
+      }
+    }
+  },
+  "smd_machine-1-1": {
+    "alias": "smd_machine-1-1",
+    "true_median_seg": 433.0,
+    "baseline_pak": 0.916644308352049,
+    "ref_pak_supervised": 0.9676830766862093,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 20.0,
+        "confidence": 1.0,
+        "pak": 0.9150958033493448,
+        "delta_baseline": -0.0015485050027042035
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 19.0,
+        "confidence": 1.0,
+        "pak": 0.9150303413016931,
+        "delta_baseline": -0.00161396705035588
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 17.0,
+        "confidence": 1.0,
+        "pak": 0.9148816035131604,
+        "delta_baseline": -0.001762704838888629
+      },
+      "peak_width": {
+        "estimated_median_seg": 26.19301890897077,
+        "confidence": 0.45,
+        "pak": 0.9161368161872528,
+        "delta_baseline": -0.000507492164796175
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.916644308352049,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.916644308352049,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.9669385882479411,
+        "delta_baseline": 0.05029427989589208
+      },
+      "kde": {
+        "estimated_median_seg": 11.797101409268853,
+        "confidence": 0.9640579718146229,
+        "pak": 0.914282899037695,
+        "delta_baseline": -0.002361409314354024
+      },
+      "change_point": {
+        "estimated_median_seg": 47.0,
+        "confidence": 1.0,
+        "pak": 0.9203936717846922,
+        "delta_baseline": 0.0037493634326432046
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 22.589085759592525,
+        "confidence": 0.8535144929536558,
+        "pak": 0.9155048897273099,
+        "delta_baseline": -0.001139418624739097
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 26.115534329828073,
+        "confidence": 0.8535144929536558,
+        "pak": 0.9161434819948774,
+        "delta_baseline": -0.0005008263571716354
+      },
+      "ens_median": {
+        "estimated_median_seg": 22.596509454485386,
+        "confidence": 0.8535144929536558,
+        "pak": 0.9154229934220344,
+        "delta_baseline": -0.0012213149300146497
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 19.0,
+        "confidence": 0.8535144929536558,
+        "pak": 0.9150303413016931,
+        "delta_baseline": -0.00161396705035588
+      }
+    }
+  },
+  "smd_machine-1-2": {
+    "alias": "smd_machine-1-2",
+    "true_median_seg": 48.0,
+    "baseline_pak": 0.5878637407019187,
+    "ref_pak_supervised": 0.5942082291593794,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 14.0,
+        "confidence": 1.0,
+        "pak": 0.6288879239367428,
+        "delta_baseline": 0.04102418323482404
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.6280592573455331,
+        "delta_baseline": 0.040195516643614426
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 11.5,
+        "confidence": 1.0,
+        "pak": 0.6277398334891446,
+        "delta_baseline": 0.039876092787225925
+      },
+      "peak_width": {
+        "estimated_median_seg": 24.282038220179857,
+        "confidence": 0.8,
+        "pak": 0.624739900311915,
+        "delta_baseline": 0.03687615960999624
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5878637407019187,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5878637407019187,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.2644032850257797,
+        "delta_baseline": -0.323460455676139
+      },
+      "kde": {
+        "estimated_median_seg": 13.589826802243575,
+        "confidence": 0.9282034639551285,
+        "pak": 0.6285043188752898,
+        "delta_baseline": 0.04064057817337108
+      },
+      "change_point": {
+        "estimated_median_seg": 60.0,
+        "confidence": 1.0,
+        "pak": 0.5703080320743777,
+        "delta_baseline": -0.017555708627540967
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 21.66024969744488,
+        "confidence": 0.9320508659887822,
+        "pak": 0.626457122304591,
+        "delta_baseline": 0.03859338160267234
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 27.637910828832588,
+        "confidence": 0.9320508659887822,
+        "pak": 0.6212085861044655,
+        "delta_baseline": 0.033344845402546786
+      },
+      "ens_median": {
+        "estimated_median_seg": 18.935932511211718,
+        "confidence": 0.9320508659887822,
+        "pak": 0.6285118880032013,
+        "delta_baseline": 0.04064814730128263
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 11.0,
+        "confidence": 0.9320508659887822,
+        "pak": 0.6280592573455331,
+        "delta_baseline": 0.040195516643614426
+      }
+    }
+  },
+  "smd_machine-1-3": {
+    "alias": "smd_machine-1-3",
+    "true_median_seg": 56.0,
+    "baseline_pak": 0.5376232365252407,
+    "ref_pak_supervised": 0.6153552082341242,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 16.0,
+        "confidence": 1.0,
+        "pak": 0.5672187630477449,
+        "delta_baseline": 0.02959552652250419
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 15.0,
+        "confidence": 1.0,
+        "pak": 0.5656591328733144,
+        "delta_baseline": 0.028035896348073686
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 12.0,
+        "confidence": 1.0,
+        "pak": 0.5648611872832034,
+        "delta_baseline": 0.02723795075796276
+      },
+      "peak_width": {
+        "estimated_median_seg": 20.13825777611453,
+        "confidence": 0.4,
+        "pak": 0.5767602998578486,
+        "delta_baseline": 0.03913706333260791
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5376232365252407,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5376232365252407,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 200.0,
+        "confidence": 0.2583978346735006,
+        "pak": 0.5103742089701372,
+        "delta_baseline": -0.0272490275551035
+      },
+      "kde": {
+        "estimated_median_seg": 11.202404805726033,
+        "confidence": 0.9759519038854794,
+        "pak": 0.564036779469953,
+        "delta_baseline": 0.02641354294471232
+      },
+      "change_point": {
+        "estimated_median_seg": 247.5,
+        "confidence": 1.0,
+        "pak": 0.476135789316237,
+        "delta_baseline": -0.061487447209003676
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 32.751609598250866,
+        "confidence": 0.8439879759713698,
+        "pak": 0.593053736610558,
+        "delta_baseline": 0.05543050008531736
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 83.38042703887963,
+        "confidence": 0.8439879759713698,
+        "pak": 0.6182680880252412,
+        "delta_baseline": 0.08064485150000056
+      },
+      "ens_median": {
+        "estimated_median_seg": 17.569128888057264,
+        "confidence": 0.8439879759713698,
+        "pak": 0.5713945306204825,
+        "delta_baseline": 0.03377129409524182
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 15.0,
+        "confidence": 0.8439879759713698,
+        "pak": 0.5656591328733144,
+        "delta_baseline": 0.028035896348073686
+      }
+    }
+  },
+  "smd_machine-1-4": {
+    "alias": "smd_machine-1-4",
+    "true_median_seg": 40.0,
+    "baseline_pak": 0.5540341845311915,
+    "ref_pak_supervised": 0.5805708668518268,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 14.5,
+        "confidence": 1.0,
+        "pak": 0.575078859120552,
+        "delta_baseline": 0.021044674589360546
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 13.0,
+        "confidence": 1.0,
+        "pak": 0.5711275648532016,
+        "delta_baseline": 0.017093380322010132
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.5695385376405533,
+        "delta_baseline": 0.015504353109361824
+      },
+      "peak_width": {
+        "estimated_median_seg": 18.758495922828843,
+        "confidence": 0.3,
+        "pak": 0.578015303358036,
+        "delta_baseline": 0.023981118826844505
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5540341845311915,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5540341845311915,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 200.0,
+        "confidence": 0.19888169580238468,
+        "pak": 0.4013949293724415,
+        "delta_baseline": -0.15263925515875
+      },
+      "kde": {
+        "estimated_median_seg": 11.20240480607309,
+        "confidence": 0.9759519038785383,
+        "pak": 0.568940817305482,
+        "delta_baseline": 0.014906632774290496
+      },
+      "change_point": {
+        "estimated_median_seg": 134.0,
+        "confidence": 1.0,
+        "pak": 0.4833275058595372,
+        "delta_baseline": -0.07070667867165426
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 26.214700716589366,
+        "confidence": 0.8189879759696346,
+        "pak": 0.5801159458492271,
+        "delta_baseline": 0.026081761318035634
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 49.92764297965043,
+        "confidence": 0.8189879759696346,
+        "pak": 0.5790855700375669,
+        "delta_baseline": 0.025051385506375423
+      },
+      "ens_median": {
+        "estimated_median_seg": 15.879247961414421,
+        "confidence": 0.8189879759696346,
+        "pak": 0.5764828289082327,
+        "delta_baseline": 0.022448644377041194
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 13.0,
+        "confidence": 0.8189879759696346,
+        "pak": 0.5711275648532016,
+        "delta_baseline": 0.017093380322010132
+      }
+    }
+  },
+  "smd_machine-1-5": {
+    "alias": "smd_machine-1-5",
+    "true_median_seg": 11.0,
+    "baseline_pak": 0.7083974526111158,
+    "ref_pak_supervised": 0.7808473509517992,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.7808473509517992,
+        "delta_baseline": 0.0724498983406835
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 12.0,
+        "confidence": 1.0,
+        "pak": 0.7826810620120028,
+        "delta_baseline": 0.07428360940088707
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 14.0,
+        "confidence": 0.95,
+        "pak": 0.7923552687962236,
+        "delta_baseline": 0.08395781618510789
+      },
+      "peak_width": {
+        "estimated_median_seg": 31.808818478381056,
+        "confidence": 0.5,
+        "pak": 0.7894778830466251,
+        "delta_baseline": 0.08108043043550939
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7083974526111158,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7083974526111158,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.5099308300395258,
+        "delta_baseline": -0.19846662257158998
+      },
+      "kde": {
+        "estimated_median_seg": 12.342725220266438,
+        "confidence": 0.9531454955946713,
+        "pak": 0.7822873924651862,
+        "delta_baseline": 0.07388993985407044
+      },
+      "change_point": {
+        "estimated_median_seg": 85.0,
+        "confidence": 1.0,
+        "pak": 0.5656858108108108,
+        "delta_baseline": -0.14271164180030493
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 24.55159472054273,
+        "confidence": 0.8632863738986678,
+        "pak": 0.791861217961549,
+        "delta_baseline": 0.0834637653504332
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 36.10297404071033,
+        "confidence": 0.8632863738986678,
+        "pak": 0.7897627741470044,
+        "delta_baseline": 0.0813653215358886
+      },
+      "ens_median": {
+        "estimated_median_seg": 22.075771849323747,
+        "confidence": 0.8632863738986678,
+        "pak": 0.7840067318322147,
+        "delta_baseline": 0.07560927922109895
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 12.0,
+        "confidence": 0.8632863738986678,
+        "pak": 0.7826810620120028,
+        "delta_baseline": 0.07428360940088707
+      }
+    }
+  },
+  "smd_machine-1-6": {
+    "alias": "smd_machine-1-6",
+    "true_median_seg": 4.0,
+    "baseline_pak": 0.9907878764426395,
+    "ref_pak_supervised": 0.9915695192638557,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 22.0,
+        "confidence": 1.0,
+        "pak": 0.9910246803534618,
+        "delta_baseline": 0.0002368039108222586
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 19.0,
+        "confidence": 1.0,
+        "pak": 0.9911302407424343,
+        "delta_baseline": 0.0003423642997947285
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 17.0,
+        "confidence": 1.0,
+        "pak": 0.9912682537066797,
+        "delta_baseline": 0.0004803772640401549
+      },
+      "peak_width": {
+        "estimated_median_seg": 371.3113427573144,
+        "confidence": 0.05,
+        "pak": 0.9895720334734796,
+        "delta_baseline": -0.001215842969159997
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.9895529472007735,
+        "delta_baseline": -0.0012349292418660784
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.9895529472007735,
+        "delta_baseline": -0.0012349292418660784
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.9895674461264474,
+        "delta_baseline": -0.0012204303161921226
+      },
+      "kde": {
+        "estimated_median_seg": 15.110220382631896,
+        "confidence": 0.8977955923473621,
+        "pak": 0.9913532043305512,
+        "delta_baseline": 0.0005653278879116375
+      },
+      "change_point": {
+        "estimated_median_seg": 28.0,
+        "confidence": 1.0,
+        "pak": 0.9910183276271333,
+        "delta_baseline": 0.00023045118449371849
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 32.43553593772508,
+        "confidence": 0.8494488980868405,
+        "pak": 0.9909749547400364,
+        "delta_baseline": 0.00018707829739683657
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 91.40216967683162,
+        "confidence": 0.8494488980868405,
+        "pak": 0.9897956292532105,
+        "delta_baseline": -0.0009922471894290297
+      },
+      "ens_median": {
+        "estimated_median_seg": 23.5,
+        "confidence": 0.8494488980868405,
+        "pak": 0.9910025380191597,
+        "delta_baseline": 0.00021466157652016982
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 19.0,
+        "confidence": 0.8494488980868405,
+        "pak": 0.9911302407424343,
+        "delta_baseline": 0.0003423642997947285
+      }
+    }
+  },
+  "smd_machine-1-7": {
+    "alias": "smd_machine-1-7",
+    "true_median_seg": 26.0,
+    "baseline_pak": 0.7655433805154214,
+    "ref_pak_supervised": 0.7620950425733374,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 11.5,
+        "confidence": 1.0,
+        "pak": 0.7565791294697943,
+        "delta_baseline": -0.008964251045627036
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 12.0,
+        "confidence": 1.0,
+        "pak": 0.756881076743745,
+        "delta_baseline": -0.008662303771676316
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.7567549107414443,
+        "delta_baseline": -0.00878846977397707
+      },
+      "peak_width": {
+        "estimated_median_seg": 18.56837862020008,
+        "confidence": 0.4,
+        "pak": 0.7604240034778527,
+        "delta_baseline": -0.0051193770375687064
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7655433805154214,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7655433805154214,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 0.5634931798680576,
+        "pak": 0.3827314814814814,
+        "delta_baseline": -0.38281189903394
+      },
+      "kde": {
+        "estimated_median_seg": 11.194317927291468,
+        "confidence": 0.9761136414541707,
+        "pak": 0.7564237814359038,
+        "delta_baseline": -0.009119599079517537
+      },
+      "change_point": {
+        "estimated_median_seg": 161.0,
+        "confidence": 1.0,
+        "pak": 0.5978388780666,
+        "delta_baseline": -0.1677045024488214
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 26.725387502757453,
+        "confidence": 0.8440284103635427,
+        "pak": 0.7635212454291317,
+        "delta_baseline": -0.002022135086289678
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 56.67886161594473,
+        "confidence": 0.8440284103635427,
+        "pak": 0.7620919127524879,
+        "delta_baseline": -0.00345146776293348
+      },
+      "ens_median": {
+        "estimated_median_seg": 15.28418931010004,
+        "confidence": 0.8440284103635427,
+        "pak": 0.7589377218052255,
+        "delta_baseline": -0.006605658710195916
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 12.0,
+        "confidence": 0.8440284103635427,
+        "pak": 0.756881076743745,
+        "delta_baseline": -0.008662303771676316
+      }
+    }
+  },
+  "smd_machine-1-8": {
+    "alias": "smd_machine-1-8",
+    "true_median_seg": 10.0,
+    "baseline_pak": 0.5459557556956521,
+    "ref_pak_supervised": 0.5482510796949471,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 41.0,
+        "confidence": 1.0,
+        "pak": 0.5439682729642297,
+        "delta_baseline": -0.001987482731422463
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 44.0,
+        "confidence": 0.95,
+        "pak": 0.5431707333159155,
+        "delta_baseline": -0.002785022379736657
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 33.5,
+        "confidence": 0.4,
+        "pak": 0.5451693943844308,
+        "delta_baseline": -0.0007863613112213397
+      },
+      "peak_width": {
+        "estimated_median_seg": 68.24097815456844,
+        "confidence": 0.45,
+        "pak": 0.5230371312382459,
+        "delta_baseline": -0.022918624457406223
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5459557556956521,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5459557556956521,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.46082113063739455,
+        "delta_baseline": -0.08513462505825758
+      },
+      "kde": {
+        "estimated_median_seg": 13.688783160212994,
+        "confidence": 0.9262243367957401,
+        "pak": 0.5500087697332396,
+        "delta_baseline": 0.00405301403758751
+      },
+      "change_point": {
+        "estimated_median_seg": 44.0,
+        "confidence": 1.0,
+        "pak": 0.5431707333159155,
+        "delta_baseline": -0.002785022379736657
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 33.73132422151277,
+        "confidence": 0.831556084198935,
+        "pak": 0.5451693943844308,
+        "delta_baseline": -0.0007863613112213397
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 38.83902923941538,
+        "confidence": 0.831556084198935,
+        "pak": 0.5454762468267021,
+        "delta_baseline": -0.0004795088689499849
+      },
+      "ens_median": {
+        "estimated_median_seg": 44.0,
+        "confidence": 0.831556084198935,
+        "pak": 0.5431707333159155,
+        "delta_baseline": -0.002785022379736657
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 44.0,
+        "confidence": 0.831556084198935,
+        "pak": 0.5431707333159155,
+        "delta_baseline": -0.002785022379736657
+      }
+    }
+  },
+  "smd_machine-2-1": {
+    "alias": "smd_machine-2-1",
+    "true_median_seg": 21.0,
+    "baseline_pak": 0.6342941820163684,
+    "ref_pak_supervised": 0.6398610765185206,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.6408838432303031,
+        "delta_baseline": 0.006589661213934672
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 13.0,
+        "confidence": 1.0,
+        "pak": 0.6414872064168397,
+        "delta_baseline": 0.007193024400471204
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 9.0,
+        "confidence": 0.9,
+        "pak": 0.6413875847406401,
+        "delta_baseline": 0.0070934027242716136
+      },
+      "peak_width": {
+        "estimated_median_seg": 29.58324086076709,
+        "confidence": 0.2,
+        "pak": 0.6375566481651582,
+        "delta_baseline": 0.0032624661487897777
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.6342941820163684,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.6342941820163684,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.6321395309997618,
+        "delta_baseline": -0.0021546510166066124
+      },
+      "kde": {
+        "estimated_median_seg": 12.505009995838424,
+        "confidence": 0.9498998000832315,
+        "pak": 0.6414121050665937,
+        "delta_baseline": 0.007117923050225294
+      },
+      "change_point": {
+        "estimated_median_seg": 136.0,
+        "confidence": 1.0,
+        "pak": 0.6393821152656125,
+        "delta_baseline": 0.005087933249244059
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 28.52492347703283,
+        "confidence": 0.7874749500208078,
+        "pak": 0.6375530864769923,
+        "delta_baseline": 0.0032589044606238238
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 52.95252714477834,
+        "confidence": 0.7874749500208078,
+        "pak": 0.6346525784796554,
+        "delta_baseline": 0.0003583964632869474
+      },
+      "ens_median": {
+        "estimated_median_seg": 21.291620430383546,
+        "confidence": 0.7874749500208078,
+        "pak": 0.6399114187925428,
+        "delta_baseline": 0.005617236776174317
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 13.0,
+        "confidence": 0.7874749500208078,
+        "pak": 0.6414872064168397,
+        "delta_baseline": 0.007193024400471204
+      }
+    }
+  },
+  "smd_machine-2-2": {
+    "alias": "smd_machine-2-2",
+    "true_median_seg": 15.0,
+    "baseline_pak": 0.6563199484002213,
+    "ref_pak_supervised": 0.6672989453007457,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 51.0,
+        "confidence": 1.0,
+        "pak": 0.6636792026152969,
+        "delta_baseline": 0.00735925421507555
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 27.0,
+        "confidence": 1.0,
+        "pak": 0.6661294278519679,
+        "delta_baseline": 0.009809479451746594
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 28.0,
+        "confidence": 0.9,
+        "pak": 0.6659756848282182,
+        "delta_baseline": 0.009655736427996886
+      },
+      "peak_width": {
+        "estimated_median_seg": 32.175270303599575,
+        "confidence": 0.4,
+        "pak": 0.6654467950738,
+        "delta_baseline": 0.009126846673578659
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.6563199484002213,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.6563199484002213,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.6335459611389671,
+        "delta_baseline": -0.022773987261254236
+      },
+      "kde": {
+        "estimated_median_seg": 12.505010005687673,
+        "confidence": 0.9498997998862465,
+        "pak": 0.6672991607295462,
+        "delta_baseline": 0.010979212329324861
+      },
+      "change_point": {
+        "estimated_median_seg": 127.5,
+        "confidence": 1.0,
+        "pak": 0.6571274123166592,
+        "delta_baseline": 0.0008074639164378228
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 35.23000944814526,
+        "confidence": 0.8374749499715616,
+        "pak": 0.6649998599352152,
+        "delta_baseline": 0.008679911534993812
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 53.50864961080474,
+        "confidence": 0.8374749499715616,
+        "pak": 0.6631187107153383,
+        "delta_baseline": 0.006798762315117002
+      },
+      "ens_median": {
+        "estimated_median_seg": 29.587635151799788,
+        "confidence": 0.8374749499715616,
+        "pak": 0.6657359352091149,
+        "delta_baseline": 0.00941598680889355
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 27.0,
+        "confidence": 0.8374749499715616,
+        "pak": 0.6661294278519679,
+        "delta_baseline": 0.009809479451746594
+      }
+    }
+  },
+  "smd_machine-2-3": {
+    "alias": "smd_machine-2-3",
+    "true_median_seg": 26.0,
+    "baseline_pak": 0.8270303771963414,
+    "ref_pak_supervised": 0.8735595053163157,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 12.0,
+        "confidence": 1.0,
+        "pak": 0.8737892044793318,
+        "delta_baseline": 0.04675882728299041
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.8739941184041962,
+        "delta_baseline": 0.04696374120785474
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 9.0,
+        "confidence": 0.75,
+        "pak": 0.871897765305321,
+        "delta_baseline": 0.04486738810897961
+      },
+      "peak_width": {
+        "estimated_median_seg": 21.732443838443942,
+        "confidence": 0.35,
+        "pak": 0.8755688533461786,
+        "delta_baseline": 0.048538476149837195
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8270303771963414,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8270303771963414,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 0.8053108401868748,
+        "pak": 0.4909179781720252,
+        "delta_baseline": -0.3361123990243162
+      },
+      "kde": {
+        "estimated_median_seg": 11.202404801760615,
+        "confidence": 0.9759519039647877,
+        "pak": 0.8738907276953881,
+        "delta_baseline": 0.04686035049904669
+      },
+      "change_point": {
+        "estimated_median_seg": 272.0,
+        "confidence": 1.0,
+        "pak": 0.5674061430320375,
+        "delta_baseline": -0.2596242341643039
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 31.168492718553978,
+        "confidence": 0.831487975991197,
+        "pak": 0.8667376875455328,
+        "delta_baseline": 0.039707310349191394
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 90.66257490953494,
+        "confidence": 0.831487975991197,
+        "pak": 0.7708661395347919,
+        "delta_baseline": -0.05616423766154954
+      },
+      "ens_median": {
+        "estimated_median_seg": 16.46742432010228,
+        "confidence": 0.831487975991197,
+        "pak": 0.8753617156226504,
+        "delta_baseline": 0.04833133842630899
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 11.0,
+        "confidence": 0.831487975991197,
+        "pak": 0.8739941184041962,
+        "delta_baseline": 0.04696374120785474
+      }
+    }
+  },
+  "smd_machine-2-4": {
+    "alias": "smd_machine-2-4",
+    "true_median_seg": 29.0,
+    "baseline_pak": 0.7305627017460726,
+    "ref_pak_supervised": 0.7290651326232627,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 36.0,
+        "confidence": 0.95,
+        "pak": 0.7300746287089731,
+        "delta_baseline": -0.00048807303709952343
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 16.0,
+        "confidence": 0.95,
+        "pak": 0.7273359037099048,
+        "delta_baseline": -0.003226798036167877
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 107.0,
+        "confidence": 0.25,
+        "pak": 0.7347132076984246,
+        "delta_baseline": 0.004150505952352002
+      },
+      "peak_width": {
+        "estimated_median_seg": 50.83586999749923,
+        "confidence": 0.3,
+        "pak": 0.7310904742748774,
+        "delta_baseline": 0.0005277725288047597
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7305627017460726,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7305627017460726,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.7293535900582216,
+        "delta_baseline": -0.0012091116878509833
+      },
+      "kde": {
+        "estimated_median_seg": 13.841882806093903,
+        "confidence": 0.9231623438781219,
+        "pak": 0.7271242053490566,
+        "delta_baseline": -0.0034384963970159887
+      },
+      "change_point": {
+        "estimated_median_seg": 91.5,
+        "confidence": 1.0,
+        "pak": 0.7336276358118822,
+        "delta_baseline": 0.0030649340658095436
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 29.644002599366356,
+        "confidence": 0.7932905859695305,
+        "pak": 0.7291209771618508,
+        "delta_baseline": -0.0014417245842218707
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 42.458926261411754,
+        "confidence": 0.7932905859695305,
+        "pak": 0.7306416698389281,
+        "delta_baseline": 7.896809285545814e-05
+      },
+      "ens_median": {
+        "estimated_median_seg": 33.417934998749615,
+        "confidence": 0.7932905859695305,
+        "pak": 0.7298338581476562,
+        "delta_baseline": -0.0007288435984164066
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 91.5,
+        "confidence": 0.7932905859695305,
+        "pak": 0.7336276358118822,
+        "delta_baseline": 0.0030649340658095436
+      }
+    }
+  },
+  "smd_machine-2-5": {
+    "alias": "smd_machine-2-5",
+    "true_median_seg": 16.0,
+    "baseline_pak": 0.7847028254261701,
+    "ref_pak_supervised": 0.7967735237686661,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 23.5,
+        "confidence": 1.0,
+        "pak": 0.7961060452486326,
+        "delta_baseline": 0.011403219822462507
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 14.0,
+        "confidence": 1.0,
+        "pak": 0.7976304099978294,
+        "delta_baseline": 0.012927584571659323
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 296.5,
+        "confidence": 0.1,
+        "pak": 0.7500878538072463,
+        "delta_baseline": -0.034614971618923795
+      },
+      "peak_width": {
+        "estimated_median_seg": 28.688363186282004,
+        "confidence": 0.8,
+        "pak": 0.7952728524929035,
+        "delta_baseline": 0.010570027066733378
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7847028254261701,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7847028254261701,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.7328991183645256,
+        "delta_baseline": -0.0518037070616445
+      },
+      "kde": {
+        "estimated_median_seg": 12.47777699465116,
+        "confidence": 0.9504444601069768,
+        "pak": 0.7981689302035134,
+        "delta_baseline": 0.013466104777343335
+      },
+      "change_point": {
+        "estimated_median_seg": 62.0,
+        "confidence": 1.0,
+        "pak": 0.781255908590881,
+        "delta_baseline": -0.003446916835289082
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 23.56339494351193,
+        "confidence": 0.9376111150267442,
+        "pak": 0.7961079564641657,
+        "delta_baseline": 0.011405131037995564
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 29.54586469596229,
+        "confidence": 0.9376111150267442,
+        "pak": 0.7953423729414929,
+        "delta_baseline": 0.010639547515322811
+      },
+      "ens_median": {
+        "estimated_median_seg": 21.344181593141002,
+        "confidence": 0.9376111150267442,
+        "pak": 0.7961317453219638,
+        "delta_baseline": 0.011428919895793754
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 14.0,
+        "confidence": 0.9376111150267442,
+        "pak": 0.7976304099978294,
+        "delta_baseline": 0.012927584571659323
+      }
+    }
+  },
+  "smd_machine-2-6": {
+    "alias": "smd_machine-2-6",
+    "true_median_seg": 60.0,
+    "baseline_pak": 0.6351679366890255,
+    "ref_pak_supervised": 0.6481490718009414,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 14.0,
+        "confidence": 1.0,
+        "pak": 0.6147693369824926,
+        "delta_baseline": -0.020398599706532905
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 16.0,
+        "confidence": 1.0,
+        "pak": 0.6194116257820655,
+        "delta_baseline": -0.015756310906959947
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 10.0,
+        "confidence": 1.0,
+        "pak": 0.6081883896689333,
+        "delta_baseline": -0.0269795470200922
+      },
+      "peak_width": {
+        "estimated_median_seg": 258.2554683576352,
+        "confidence": 0.15,
+        "pak": 0.6238245165169087,
+        "delta_baseline": -0.011343420172116758
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.6351679366890255,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.6351679366890255,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.5826178465713323,
+        "delta_baseline": -0.05255009011769318
+      },
+      "kde": {
+        "estimated_median_seg": 12.004007997337883,
+        "confidence": 0.9599198400532424,
+        "pak": 0.6108169131090156,
+        "delta_baseline": -0.024351023580009845
+      },
+      "change_point": {
+        "estimated_median_seg": 65.0,
+        "confidence": 1.0,
+        "pak": 0.6468610607245711,
+        "delta_baseline": 0.011693124035545566
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 26.27973536201295,
+        "confidence": 0.7774799600133105,
+        "pak": 0.6402001618479685,
+        "delta_baseline": 0.005032225158942971
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 42.2072633512639,
+        "confidence": 0.7774799600133105,
+        "pak": 0.6479657888236582,
+        "delta_baseline": 0.012797852134632692
+      },
+      "ens_median": {
+        "estimated_median_seg": 40.5,
+        "confidence": 0.7774799600133105,
+        "pak": 0.6469125994396088,
+        "delta_baseline": 0.011744662750583279
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 16.0,
+        "confidence": 0.7774799600133105,
+        "pak": 0.6194116257820655,
+        "delta_baseline": -0.015756310906959947
+      }
+    }
+  },
+  "smd_machine-2-7": {
+    "alias": "smd_machine-2-7",
+    "true_median_seg": 4.0,
+    "baseline_pak": 0.8770280994311085,
+    "ref_pak_supervised": 0.8651075913988994,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 17.0,
+        "confidence": 1.0,
+        "pak": 0.8664714118078158,
+        "delta_baseline": -0.010556687623292649
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 31.0,
+        "confidence": 1.0,
+        "pak": 0.8711883501043597,
+        "delta_baseline": -0.0058397493267488
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 20.5,
+        "confidence": 0.6,
+        "pak": 0.8671009506026093,
+        "delta_baseline": -0.00992714882849921
+      },
+      "peak_width": {
+        "estimated_median_seg": 36.19695694584152,
+        "confidence": 0.4,
+        "pak": 0.8730174185885103,
+        "delta_baseline": -0.004010680842598147
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8770280994311085,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8770280994311085,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.881098898042096,
+        "delta_baseline": 0.004070798610987469
+      },
+      "kde": {
+        "estimated_median_seg": 12.14953820399283,
+        "confidence": 0.9570092359201434,
+        "pak": 0.8657219691054401,
+        "delta_baseline": -0.011306130325668406
+      },
+      "change_point": {
+        "estimated_median_seg": 51.0,
+        "confidence": 1.0,
+        "pak": 0.8771283483858231,
+        "delta_baseline": 0.00010024895471461015
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 28.04250543420504,
+        "confidence": 0.8392523089800359,
+        "pak": 0.8697241435886578,
+        "delta_baseline": -0.007303955842450693
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 32.203069891790435,
+        "confidence": 0.8392523089800359,
+        "pak": 0.8714509016424039,
+        "delta_baseline": -0.00557719778870458
+      },
+      "ens_median": {
+        "estimated_median_seg": 33.59847847292076,
+        "confidence": 0.8392523089800359,
+        "pak": 0.8721900926380135,
+        "delta_baseline": -0.004838006793094984
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 31.0,
+        "confidence": 0.8392523089800359,
+        "pak": 0.8711883501043597,
+        "delta_baseline": -0.0058397493267488
+      }
+    }
+  },
+  "smd_machine-2-8": {
+    "alias": "smd_machine-2-8",
+    "true_median_seg": 161.0,
+    "baseline_pak": 0.9999535603715171,
+    "ref_pak_supervised": 0.9996158521744172,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 12.0,
+        "confidence": 1.0,
+        "pak": 0.9988620573947393,
+        "delta_baseline": -0.0010915029767777362
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 19.0,
+        "confidence": 0.4,
+        "pak": 0.9998330885860467,
+        "delta_baseline": -0.0001204717854703663
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 18.5,
+        "confidence": 0.6,
+        "pak": 0.999803875082513,
+        "delta_baseline": -0.00014968528900405342
+      },
+      "peak_width": {
+        "estimated_median_seg": 48.35348796237031,
+        "confidence": 0.1,
+        "pak": 0.9999535603715171,
+        "delta_baseline": 0.0
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.9999535603715171,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.9999535603715171,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.9987586228524945,
+        "delta_baseline": -0.0011949375190225542
+      },
+      "kde": {
+        "estimated_median_seg": 13.605126791735946,
+        "confidence": 0.9278974641652811,
+        "pak": 0.9989733488733488,
+        "delta_baseline": -0.000980211498168293
+      },
+      "change_point": {
+        "estimated_median_seg": 113.0,
+        "confidence": 1.0,
+        "pak": 0.9994319872233184,
+        "delta_baseline": -0.000521573148198673
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 36.22053063281767,
+        "confidence": 0.6069743660413203,
+        "pak": 1.0,
+        "delta_baseline": 4.6439628482941586e-05
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 56.863814672421206,
+        "confidence": 0.6069743660413203,
+        "pak": 0.9998454879027635,
+        "delta_baseline": -0.00010807246875355059
+      },
+      "ens_median": {
+        "estimated_median_seg": 33.676743981185155,
+        "confidence": 0.6069743660413203,
+        "pak": 1.0,
+        "delta_baseline": 4.6439628482941586e-05
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 113.0,
+        "confidence": 0.6069743660413203,
+        "pak": 0.9994319872233184,
+        "delta_baseline": -0.000521573148198673
+      }
+    }
+  },
+  "smd_machine-2-9": {
+    "alias": "smd_machine-2-9",
+    "true_median_seg": 192.5,
+    "baseline_pak": 0.8001982710191377,
+    "ref_pak_supervised": 0.8684956486295918,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 18.0,
+        "confidence": 1.0,
+        "pak": 0.7514964052290121,
+        "delta_baseline": -0.04870186579012559
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 15.0,
+        "confidence": 1.0,
+        "pak": 0.7452000818645291,
+        "delta_baseline": -0.05499818915460852
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 14.0,
+        "confidence": 1.0,
+        "pak": 0.742834967976193,
+        "delta_baseline": -0.05736330304294468
+      },
+      "peak_width": {
+        "estimated_median_seg": 17.457914776780854,
+        "confidence": 1.0,
+        "pak": 0.750169024191688,
+        "delta_baseline": -0.05002924682744969
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8001982710191377,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8001982710191377,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.8475824839260375,
+        "delta_baseline": 0.04738421290689987
+      },
+      "kde": {
+        "estimated_median_seg": 12.703917602465701,
+        "confidence": 0.945921647950686,
+        "pak": 0.7401794484765355,
+        "delta_baseline": -0.06001882254260216
+      },
+      "change_point": {
+        "estimated_median_seg": 25.0,
+        "confidence": 1.0,
+        "pak": 0.7648642889942114,
+        "delta_baseline": -0.035333982024926214
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 17.049743974462096,
+        "confidence": 0.9864804119876716,
+        "pak": 0.7492662670399433,
+        "delta_baseline": -0.050932003979194396
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 17.60674226433682,
+        "confidence": 0.9864804119876716,
+        "pak": 0.7507126397871295,
+        "delta_baseline": -0.04948563123200811
+      },
+      "ens_median": {
+        "estimated_median_seg": 16.228957388390427,
+        "confidence": 0.9864804119876716,
+        "pak": 0.747374679487879,
+        "delta_baseline": -0.05282359153125871
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 15.0,
+        "confidence": 0.9864804119876716,
+        "pak": 0.7452000818645291,
+        "delta_baseline": -0.05499818915460852
+      }
+    }
+  },
+  "smd_machine-3-1": {
+    "alias": "smd_machine-3-1",
+    "true_median_seg": 125.0,
+    "baseline_pak": 0.9789040312163588,
+    "ref_pak_supervised": 0.9897715722371662,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 12.0,
+        "confidence": 1.0,
+        "pak": 0.9676183862839188,
+        "delta_baseline": -0.011285644932439998
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.9673978325427102,
+        "delta_baseline": -0.01150619867364866
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 11.5,
+        "confidence": 1.0,
+        "pak": 0.9676398616697038,
+        "delta_baseline": -0.01126416954665499
+      },
+      "peak_width": {
+        "estimated_median_seg": 99.12915285139115,
+        "confidence": 0.4,
+        "pak": 0.9896700618277195,
+        "delta_baseline": 0.010766030611360722
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.9789040312163588,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.9789040312163588,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 200.0,
+        "confidence": 1.0,
+        "pak": 0.990153673321497,
+        "delta_baseline": 0.011249642105138125
+      },
+      "kde": {
+        "estimated_median_seg": 12.805611196729833,
+        "confidence": 0.9438877760654033,
+        "pak": 0.9679564997495332,
+        "delta_baseline": -0.010947531466825589
+      },
+      "change_point": {
+        "estimated_median_seg": 72.0,
+        "confidence": 1.0,
+        "pak": 0.9889492186417204,
+        "delta_baseline": 0.010045187425361535
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 26.19687916855833,
+        "confidence": 0.8359719440163508,
+        "pak": 0.9722854368170026,
+        "delta_baseline": -0.006618594399356192
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 40.29403198833927,
+        "confidence": 0.8359719440163508,
+        "pak": 0.9768290852471315,
+        "delta_baseline": -0.0020749459692273042
+      },
+      "ens_median": {
+        "estimated_median_seg": 42.402805598364914,
+        "confidence": 0.8359719440163508,
+        "pak": 0.9768536593349572,
+        "delta_baseline": -0.002050371881401669
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 11.0,
+        "confidence": 0.8359719440163508,
+        "pak": 0.9673978325427102,
+        "delta_baseline": -0.01150619867364866
+      }
+    }
+  },
+  "smd_machine-3-10": {
+    "alias": "smd_machine-3-10",
+    "true_median_seg": 101.0,
+    "baseline_pak": 0.9696718477959518,
+    "ref_pak_supervised": 0.9662249737313984,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 25.0,
+        "confidence": 0.95,
+        "pak": 0.9708526581780145,
+        "delta_baseline": 0.0011808103820626359
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 42.0,
+        "confidence": 0.45,
+        "pak": 0.9705245505114746,
+        "delta_baseline": 0.0008527027155227351
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 71.5,
+        "confidence": 0.3,
+        "pak": 0.9688395348986422,
+        "delta_baseline": -0.0008323128973096727
+      },
+      "peak_width": {
+        "estimated_median_seg": 96.41390229311219,
+        "confidence": 0.15,
+        "pak": 0.9666962749508834,
+        "delta_baseline": -0.0029755728450684416
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.9696718477959518,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.9696718477959518,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.9235138777952951,
+        "delta_baseline": -0.04615797000065669
+      },
+      "kde": {
+        "estimated_median_seg": 13.896972254079913,
+        "confidence": 0.9220605549184018,
+        "pak": 0.9694861044835648,
+        "delta_baseline": -0.00018574331238707664
+      },
+      "change_point": {
+        "estimated_median_seg": 95.0,
+        "confidence": 1.0,
+        "pak": 0.9666507211320209,
+        "delta_baseline": -0.003021126663930951
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 40.70571500470374,
+        "confidence": 0.6305151387296004,
+        "pak": 0.9704792549562313,
+        "delta_baseline": 0.0008074071602794941
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 55.976425711482165,
+        "confidence": 0.6305151387296004,
+        "pak": 0.9698720552428955,
+        "delta_baseline": 0.00020020744694371206
+      },
+      "ens_median": {
+        "estimated_median_seg": 68.5,
+        "confidence": 0.6305151387296004,
+        "pak": 0.9688763329445251,
+        "delta_baseline": -0.0007955148514267041
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 95.0,
+        "confidence": 0.6305151387296004,
+        "pak": 0.9666507211320209,
+        "delta_baseline": -0.003021126663930951
+      }
+    }
+  },
+  "smd_machine-3-11": {
+    "alias": "smd_machine-3-11",
+    "true_median_seg": 66.0,
+    "baseline_pak": 0.8316904741853384,
+    "ref_pak_supervised": 0.8467299580638458,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 14.0,
+        "confidence": 1.0,
+        "pak": 0.8009107312540111,
+        "delta_baseline": -0.030779742931327236
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 13.0,
+        "confidence": 1.0,
+        "pak": 0.7997978779007844,
+        "delta_baseline": -0.03189259628455399
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 10.0,
+        "confidence": 1.0,
+        "pak": 0.7974402478258216,
+        "delta_baseline": -0.0342502263595168
+      },
+      "peak_width": {
+        "estimated_median_seg": 44.36022862367827,
+        "confidence": 0.1,
+        "pak": 0.8270386827611556,
+        "delta_baseline": -0.004651791424182816
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8316904741853384,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8316904741853384,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.8677545871151634,
+        "delta_baseline": 0.03606411292982503
+      },
+      "kde": {
+        "estimated_median_seg": 11.803607201687022,
+        "confidence": 0.9639278559662595,
+        "pak": 0.7988686428384321,
+        "delta_baseline": -0.032821831346906305
+      },
+      "change_point": {
+        "estimated_median_seg": 42.0,
+        "confidence": 1.0,
+        "pak": 0.825698248494764,
+        "delta_baseline": -0.005992225690574338
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 19.247595707592787,
+        "confidence": 0.7659819639915649,
+        "pak": 0.8068117236577715,
+        "delta_baseline": -0.02487875052756683
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 23.112113592056364,
+        "confidence": 0.7659819639915649,
+        "pak": 0.8113686095516031,
+        "delta_baseline": -0.02032186463373531
+      },
+      "ens_median": {
+        "estimated_median_seg": 27.5,
+        "confidence": 0.7659819639915649,
+        "pak": 0.8148064909774034,
+        "delta_baseline": -0.01688398320793494
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 13.0,
+        "confidence": 0.7659819639915649,
+        "pak": 0.7997978779007844,
+        "delta_baseline": -0.03189259628455399
+      }
+    }
+  },
+  "smd_machine-3-2": {
+    "alias": "smd_machine-3-2",
+    "true_median_seg": 5.5,
+    "baseline_pak": 0.08167270677151561,
+    "ref_pak_supervised": 0.11464823878746042,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 12.0,
+        "confidence": 1.0,
+        "pak": 0.11215393309144654,
+        "delta_baseline": 0.03048122631993093
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.11262860458557374,
+        "delta_baseline": 0.030955897814058123
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 8.0,
+        "confidence": 1.0,
+        "pak": 0.114070209513311,
+        "delta_baseline": 0.032397502741795384
+      },
+      "peak_width": {
+        "estimated_median_seg": 16.235489475278712,
+        "confidence": 0.85,
+        "pak": 0.10969739876576544,
+        "delta_baseline": 0.028024691994249826
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.08167270677151561,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.08167270677151561,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.07995675862603667,
+        "delta_baseline": -0.0017159481454789433
+      },
+      "kde": {
+        "estimated_median_seg": 13.776437299651235,
+        "confidence": 0.9244712540069753,
+        "pak": 0.11116183843609305,
+        "delta_baseline": 0.029489131664577437
+      },
+      "change_point": {
+        "estimated_median_seg": 31.5,
+        "confidence": 1.0,
+        "pak": 0.09605221106880495,
+        "delta_baseline": 0.014379504297289333
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 16.7672718758658,
+        "confidence": 0.9436178135017439,
+        "pak": 0.10933573158731855,
+        "delta_baseline": 0.027663024815802933
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 18.290266814684387,
+        "confidence": 0.9436178135017439,
+        "pak": 0.10823579669947338,
+        "delta_baseline": 0.026563089927957764
+      },
+      "ens_median": {
+        "estimated_median_seg": 15.005963387464973,
+        "confidence": 0.9436178135017439,
+        "pak": 0.11038089070743755,
+        "delta_baseline": 0.028708183935921935
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 11.0,
+        "confidence": 0.9436178135017439,
+        "pak": 0.11262860458557374,
+        "delta_baseline": 0.030955897814058123
+      }
+    }
+  },
+  "smd_machine-3-3": {
+    "alias": "smd_machine-3-3",
+    "true_median_seg": 4.5,
+    "baseline_pak": 0.776193464828918,
+    "ref_pak_supervised": 0.6933727057345906,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 14.0,
+        "confidence": 1.0,
+        "pak": 0.7054830335796747,
+        "delta_baseline": -0.07071043124924337
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 17.0,
+        "confidence": 1.0,
+        "pak": 0.7117125323571278,
+        "delta_baseline": -0.06448093247179021
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 18.0,
+        "confidence": 1.0,
+        "pak": 0.7135031006549394,
+        "delta_baseline": -0.06269036417397866
+      },
+      "peak_width": {
+        "estimated_median_seg": 14.44030829444091,
+        "confidence": 1.0,
+        "pak": 0.7069148161015043,
+        "delta_baseline": -0.06927864872741374
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.776193464828918,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.776193464828918,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.8985472142409867,
+        "delta_baseline": 0.12235374941206867
+      },
+      "kde": {
+        "estimated_median_seg": 13.707414716191714,
+        "confidence": 0.9258517056761657,
+        "pak": 0.7052399867770417,
+        "delta_baseline": -0.07095347805187635
+      },
+      "change_point": {
+        "estimated_median_seg": 10.0,
+        "confidence": 1.0,
+        "pak": 0.6990975805519565,
+        "delta_baseline": -0.07709588427696157
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 13.540878041789263,
+        "confidence": 0.9814629264190414,
+        "pak": 0.7052777871245067,
+        "delta_baseline": -0.07091567770441132
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 13.788432586888637,
+        "confidence": 0.9814629264190414,
+        "pak": 0.7052738474574198,
+        "delta_baseline": -0.07091961737149821
+      },
+      "ens_median": {
+        "estimated_median_seg": 14.073861505316312,
+        "confidence": 0.9814629264190414,
+        "pak": 0.7056933326842065,
+        "delta_baseline": -0.07050013214471151
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 17.0,
+        "confidence": 0.9814629264190414,
+        "pak": 0.7117125323571278,
+        "delta_baseline": -0.06448093247179021
+      }
+    }
+  },
+  "smd_machine-3-4": {
+    "alias": "smd_machine-3-4",
+    "true_median_seg": 41.0,
+    "baseline_pak": 0.8280671492293896,
+    "ref_pak_supervised": 0.816581047089792,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 14.0,
+        "confidence": 1.0,
+        "pak": 0.6924879956684936,
+        "delta_baseline": -0.135579153560896
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 13.0,
+        "confidence": 1.0,
+        "pak": 0.6870644403407854,
+        "delta_baseline": -0.14100270888860422
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 10.0,
+        "confidence": 1.0,
+        "pak": 0.668380196599993,
+        "delta_baseline": -0.15968695262939658
+      },
+      "peak_width": {
+        "estimated_median_seg": 28.388106764704844,
+        "confidence": 0.1,
+        "pak": 0.7739139797580179,
+        "delta_baseline": -0.05415316947137172
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8280671492293896,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8280671492293896,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.6503685087169486,
+        "delta_baseline": -0.177698640512441
+      },
+      "kde": {
+        "estimated_median_seg": 15.109695111518882,
+        "confidence": 0.8978060977696224,
+        "pak": 0.7025945776576173,
+        "delta_baseline": -0.12547257157177227
+      },
+      "change_point": {
+        "estimated_median_seg": 74.0,
+        "confidence": 1.0,
+        "pak": 0.8632718681288462,
+        "delta_baseline": 0.03520471889945653
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 24.932472400866438,
+        "confidence": 0.7494515244424056,
+        "pak": 0.7613559182006894,
+        "delta_baseline": -0.06671123102870025
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 34.49335404313348,
+        "confidence": 0.7494515244424056,
+        "pak": 0.7956419746717788,
+        "delta_baseline": -0.03242517455761085
+      },
+      "ens_median": {
+        "estimated_median_seg": 21.748900938111863,
+        "confidence": 0.7494515244424056,
+        "pak": 0.7503199993297478,
+        "delta_baseline": -0.07774714989964182
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 13.0,
+        "confidence": 0.7494515244424056,
+        "pak": 0.6870644403407854,
+        "delta_baseline": -0.14100270888860422
+      }
+    }
+  },
+  "smd_machine-3-5": {
+    "alias": "smd_machine-3-5",
+    "true_median_seg": 3.0,
+    "baseline_pak": 0.6602603357708776,
+    "ref_pak_supervised": 0.6499938491019673,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 11.5,
+        "confidence": 1.0,
+        "pak": 0.6521947591664347,
+        "delta_baseline": -0.008065576604442959
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 13.0,
+        "confidence": 1.0,
+        "pak": 0.6524694317080814,
+        "delta_baseline": -0.007790904062796256
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 8.0,
+        "confidence": 1.0,
+        "pak": 0.6509170398079582,
+        "delta_baseline": -0.009343295962919385
+      },
+      "peak_width": {
+        "estimated_median_seg": 55.11225154735121,
+        "confidence": 0.15,
+        "pak": 0.663394190177899,
+        "delta_baseline": 0.003133854407021408
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.6602603357708776,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.6915616759847086,
+        "delta_baseline": 0.03130134021383102
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.6914102522350166,
+        "delta_baseline": 0.031149916464139005
+      },
+      "kde": {
+        "estimated_median_seg": 14.50901801726004,
+        "confidence": 0.9098196396547992,
+        "pak": 0.6532673090834432,
+        "delta_baseline": -0.0069930266874344005
+      },
+      "change_point": {
+        "estimated_median_seg": 50.0,
+        "confidence": 1.0,
+        "pak": 0.6606388826251312,
+        "delta_baseline": 0.0003785468542535364
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 22.391004801923046,
+        "confidence": 0.7649549099136997,
+        "pak": 0.6548023885622583,
+        "delta_baseline": -0.0054579472086193626
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 27.605361499621132,
+        "confidence": 0.7649549099136997,
+        "pak": 0.6555278778167609,
+        "delta_baseline": -0.004732457954116698
+      },
+      "ens_median": {
+        "estimated_median_seg": 32.25450900863002,
+        "confidence": 0.7649549099136997,
+        "pak": 0.6534362568155365,
+        "delta_baseline": -0.006824078955341095
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 13.0,
+        "confidence": 0.7649549099136997,
+        "pak": 0.6524694317080814,
+        "delta_baseline": -0.007790904062796256
+      }
+    }
+  },
+  "smd_machine-3-6": {
+    "alias": "smd_machine-3-6",
+    "true_median_seg": 132.5,
+    "baseline_pak": 0.7015433040213327,
+    "ref_pak_supervised": 0.7085100317126236,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 15.0,
+        "confidence": 1.0,
+        "pak": 0.6962865896090308,
+        "delta_baseline": -0.0052567144123019105
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 18.0,
+        "confidence": 1.0,
+        "pak": 0.6974725723808878,
+        "delta_baseline": -0.004070731640444913
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 14.5,
+        "confidence": 1.0,
+        "pak": 0.6954620611927035,
+        "delta_baseline": -0.0060812428286292075
+      },
+      "peak_width": {
+        "estimated_median_seg": 32.12346969089731,
+        "confidence": 0.4,
+        "pak": 0.7035484736511932,
+        "delta_baseline": 0.002005169629860526
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7015433040213327,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7015433040213327,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.6550487880992669,
+        "delta_baseline": -0.04649451592206577
+      },
+      "kde": {
+        "estimated_median_seg": 13.30267820089081,
+        "confidence": 0.9339464359821839,
+        "pak": 0.695131700886124,
+        "delta_baseline": -0.006411603135208721
+      },
+      "change_point": {
+        "estimated_median_seg": 173.0,
+        "confidence": 1.0,
+        "pak": 0.7117265064047296,
+        "delta_baseline": 0.010183202383396872
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 34.94942709098321,
+        "confidence": 0.8334866089955459,
+        "pak": 0.7041889816154524,
+        "delta_baseline": 0.002645677594119711
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 64.87008142570366,
+        "confidence": 0.8334866089955459,
+        "pak": 0.706424357000267,
+        "delta_baseline": 0.004881052978934264
+      },
+      "ens_median": {
+        "estimated_median_seg": 25.061734845448655,
+        "confidence": 0.8334866089955459,
+        "pak": 0.7011014376832311,
+        "delta_baseline": -0.00044186633810161524
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 18.0,
+        "confidence": 0.8334866089955459,
+        "pak": 0.6974725723808878,
+        "delta_baseline": -0.004070731640444913
+      }
+    }
+  },
+  "smd_machine-3-7": {
+    "alias": "smd_machine-3-7",
+    "true_median_seg": 18.0,
+    "baseline_pak": 0.635955578413231,
+    "ref_pak_supervised": 0.6822199098328252,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.6794905996143175,
+        "delta_baseline": 0.04353502120108643
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 13.5,
+        "confidence": 1.0,
+        "pak": 0.6788100943956664,
+        "delta_baseline": 0.04285451598243539
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 12.0,
+        "confidence": 1.0,
+        "pak": 0.6799582879912626,
+        "delta_baseline": 0.04400270957803154
+      },
+      "peak_width": {
+        "estimated_median_seg": 32.54054910038667,
+        "confidence": 0.05,
+        "pak": 0.6927270370204998,
+        "delta_baseline": 0.05677145860726873
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.635955578413231,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.635955578413231,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 0.5497156681058528,
+        "pak": 0.9361046850397139,
+        "delta_baseline": 0.30014910662648286
+      },
+      "kde": {
+        "estimated_median_seg": 11.603206407534369,
+        "confidence": 0.9679358718493126,
+        "pak": 0.6801041231885107,
+        "delta_baseline": 0.04414854477527963
+      },
+      "change_point": {
+        "estimated_median_seg": 131.0,
+        "confidence": 1.0,
+        "pak": 0.7995414262736646,
+        "delta_baseline": 0.16358584786043362
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 27.632621366597444,
+        "confidence": 0.9893119572831042,
+        "pak": 0.6904977898866753,
+        "delta_baseline": 0.05454221147344429
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 52.47120100788723,
+        "confidence": 0.9893119572831042,
+        "pak": 0.7073255622985017,
+        "delta_baseline": 0.07136998388527072
+      },
+      "ens_median": {
+        "estimated_median_seg": 13.5,
+        "confidence": 0.9893119572831042,
+        "pak": 0.6788100943956664,
+        "delta_baseline": 0.04285451598243539
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 13.5,
+        "confidence": 0.9893119572831042,
+        "pak": 0.6788100943956664,
+        "delta_baseline": 0.04285451598243539
+      }
+    }
+  },
+  "smd_machine-3-8": {
+    "alias": "smd_machine-3-8",
+    "true_median_seg": 178.0,
+    "baseline_pak": 0.7194681794453843,
+    "ref_pak_supervised": 0.7486442032597881,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 13.0,
+        "confidence": 1.0,
+        "pak": 0.7022735226763518,
+        "delta_baseline": -0.017194656769032535
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 13.0,
+        "confidence": 1.0,
+        "pak": 0.7022735226763518,
+        "delta_baseline": -0.017194656769032535
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 19.5,
+        "confidence": 1.0,
+        "pak": 0.7057834229761493,
+        "delta_baseline": -0.01368475646923506
+      },
+      "peak_width": {
+        "estimated_median_seg": 94.34871523414444,
+        "confidence": 0.2,
+        "pak": 0.7395635989002467,
+        "delta_baseline": 0.020095419454862373
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7194681794453843,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7194681794453843,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 200.0,
+        "confidence": 1.0,
+        "pak": 0.7469640605640342,
+        "delta_baseline": 0.027495881118649868
+      },
+      "kde": {
+        "estimated_median_seg": 14.74645450252316,
+        "confidence": 0.9050709099495368,
+        "pak": 0.7033802917014681,
+        "delta_baseline": -0.01608788774391623
+      },
+      "change_point": {
+        "estimated_median_seg": 28.0,
+        "confidence": 1.0,
+        "pak": 0.7096965888669137,
+        "delta_baseline": -0.009771590578470657
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 19.618133052099356,
+        "confidence": 0.7762677274873842,
+        "pak": 0.7057862447960913,
+        "delta_baseline": -0.013681934649293015
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 23.57960000441564,
+        "confidence": 0.7762677274873842,
+        "pak": 0.7077575453797726,
+        "delta_baseline": -0.01171063406561168
+      },
+      "ens_median": {
+        "estimated_median_seg": 21.373227251261582,
+        "confidence": 0.7762677274873842,
+        "pak": 0.7064006391897935,
+        "delta_baseline": -0.01306754025559087
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 13.0,
+        "confidence": 0.7762677274873842,
+        "pak": 0.7022735226763518,
+        "delta_baseline": -0.017194656769032535
+      }
+    }
+  },
+  "smd_machine-3-9": {
+    "alias": "smd_machine-3-9",
+    "true_median_seg": 101.0,
+    "baseline_pak": 1.0,
+    "ref_pak_supervised": 0.9999509803921569,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 8.0,
+        "confidence": 1.0,
+        "pak": 0.9999268292682928,
+        "delta_baseline": -7.317073170720612e-05
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 7.0,
+        "confidence": 1.0,
+        "pak": 0.9999268292682928,
+        "delta_baseline": -7.317073170720612e-05
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 7.0,
+        "confidence": 1.0,
+        "pak": 0.9999268292682928,
+        "delta_baseline": -7.317073170720612e-05
+      },
+      "peak_width": {
+        "estimated_median_seg": 15.502545612674112,
+        "confidence": 0.25,
+        "pak": 1.0,
+        "delta_baseline": 0.0
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 1.0,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 1.0,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.9937142857142857,
+        "delta_baseline": -0.006285714285714339
+      },
+      "kde": {
+        "estimated_median_seg": 15.110220396082914,
+        "confidence": 0.8977955920783417,
+        "pak": 1.0,
+        "delta_baseline": 0.0
+      },
+      "change_point": {
+        "estimated_median_seg": 54.0,
+        "confidence": 1.0,
+        "pak": 1.0,
+        "delta_baseline": 0.0
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 17.770989256720974,
+        "confidence": 0.7869488980195855,
+        "pak": 1.0,
+        "delta_baseline": 0.0
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 24.919510614827683,
+        "confidence": 0.7869488980195855,
+        "pak": 1.0,
+        "delta_baseline": 0.0
+      },
+      "ens_median": {
+        "estimated_median_seg": 15.306383004378514,
+        "confidence": 0.7869488980195855,
+        "pak": 1.0,
+        "delta_baseline": 0.0
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 7.0,
+        "confidence": 0.7869488980195855,
+        "pak": 0.9999268292682928,
+        "delta_baseline": -7.317073170720612e-05
+      }
+    }
+  },
+  "exathlon_app1": {
+    "alias": "exathlon_app1",
+    "true_median_seg": 625.0,
+    "baseline_pak": 0.47166335420901484,
+    "ref_pak_supervised": 0.5351695107168761,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 9.0,
+        "confidence": 1.0,
+        "pak": 0.4652486303242506,
+        "delta_baseline": -0.006414723884764217
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 16.0,
+        "confidence": 1.0,
+        "pak": 0.46820193304823127,
+        "delta_baseline": -0.003461421160783573
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 5.0,
+        "confidence": 1.0,
+        "pak": 0.4635733889942502,
+        "delta_baseline": -0.008089965214764627
+      },
+      "peak_width": {
+        "estimated_median_seg": 12.875414054615248,
+        "confidence": 1.0,
+        "pak": 0.46718705216680206,
+        "delta_baseline": -0.004476302042212776
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.47166335420901484,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.5197294326752017,
+        "delta_baseline": 0.04806607846618682
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.5041372976242483,
+        "delta_baseline": 0.032473943415233464
+      },
+      "kde": {
+        "estimated_median_seg": 11.843835876385999,
+        "confidence": 0.96312328247228,
+        "pak": 0.4666806088619975,
+        "delta_baseline": -0.004982745347017314
+      },
+      "change_point": {
+        "estimated_median_seg": 42.0,
+        "confidence": 1.0,
+        "pak": 0.47413838751370835,
+        "delta_baseline": 0.002475033304693508
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 17.960681964948545,
+        "confidence": 0.9907808206180699,
+        "pak": 0.4685613982204098,
+        "delta_baseline": -0.0031019559886050208
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 20.762030922644815,
+        "confidence": 0.9907808206180699,
+        "pak": 0.46928886282600607,
+        "delta_baseline": -0.00237449138300877
+      },
+      "ens_median": {
+        "estimated_median_seg": 14.437707027307624,
+        "confidence": 0.9907808206180699,
+        "pak": 0.46770290332185654,
+        "delta_baseline": -0.0039604508871582955
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 16.0,
+        "confidence": 0.9907808206180699,
+        "pak": 0.46820193304823127,
+        "delta_baseline": -0.003461421160783573
+      }
+    }
+  },
+  "exathlon_app2": {
+    "alias": "exathlon_app2",
+    "true_median_seg": 491.0,
+    "baseline_pak": 0.9480310109533048,
+    "ref_pak_supervised": 0.9532124487341129,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 16.0,
+        "confidence": 1.0,
+        "pak": 0.9448974292483228,
+        "delta_baseline": -0.0031335817049820136
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 14.0,
+        "confidence": 1.0,
+        "pak": 0.9445324248632474,
+        "delta_baseline": -0.003498586090057376
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 7.0,
+        "confidence": 1.0,
+        "pak": 0.943535040616387,
+        "delta_baseline": -0.004495970336917732
+      },
+      "peak_width": {
+        "estimated_median_seg": 58.97207478619566,
+        "confidence": 0.1,
+        "pak": 0.9503346567060107,
+        "delta_baseline": 0.0023036457527059184
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.9530592328165062,
+        "delta_baseline": 0.005028221863201399
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.9530592328165062,
+        "delta_baseline": 0.005028221863201399
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.9538922723220368,
+        "delta_baseline": 0.005861261368731996
+      },
+      "kde": {
+        "estimated_median_seg": 12.504072682076902,
+        "confidence": 0.949918546358462,
+        "pak": 0.9442438174401846,
+        "delta_baseline": -0.0037871935131201795
+      },
+      "change_point": {
+        "estimated_median_seg": 26.0,
+        "confidence": 1.0,
+        "pak": 0.9465467740879062,
+        "delta_baseline": -0.0014842368653985583
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 27.863530069335752,
+        "confidence": 0.7099837092716924,
+        "pak": 0.9469331408585859,
+        "delta_baseline": -0.0010978700947188447
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 86.69918872928987,
+        "confidence": 0.7099837092716924,
+        "pak": 0.9521608221360712,
+        "delta_baseline": 0.004129811182766452
+      },
+      "ens_median": {
+        "estimated_median_seg": 26.0,
+        "confidence": 0.7099837092716924,
+        "pak": 0.9465467740879062,
+        "delta_baseline": -0.0014842368653985583
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 14.0,
+        "confidence": 0.7099837092716924,
+        "pak": 0.9445324248632474,
+        "delta_baseline": -0.003498586090057376
+      }
+    }
+  },
+  "exathlon_app4": {
+    "alias": "exathlon_app4",
+    "true_median_seg": 314.0,
+    "baseline_pak": 0.8536960225181024,
+    "ref_pak_supervised": 0.9618742282422866,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 7.0,
+        "confidence": 0.8,
+        "pak": 0.8225585612058477,
+        "delta_baseline": -0.0311374613122547
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 28.0,
+        "confidence": 0.45,
+        "pak": 0.8391977395400845,
+        "delta_baseline": -0.014498282978017918
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 9.0,
+        "confidence": 0.65,
+        "pak": 0.8236785772157015,
+        "delta_baseline": -0.030017445302400914
+      },
+      "peak_width": {
+        "estimated_median_seg": 85.2373714272062,
+        "confidence": 0.05,
+        "pak": 0.8807598230780791,
+        "delta_baseline": 0.027063800559976703
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8536960225181024,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.8536960225181024,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.9236250954416869,
+        "delta_baseline": 0.06992907292358452
+      },
+      "kde": {
+        "estimated_median_seg": 15.511021817224155,
+        "confidence": 0.8897795636555169,
+        "pak": 0.8286905526467515,
+        "delta_baseline": -0.025005469871350883
+      },
+      "change_point": {
+        "estimated_median_seg": 108.5,
+        "confidence": 1.0,
+        "pak": 0.9002524076278913,
+        "delta_baseline": 0.04655638510978888
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 39.90528914256223,
+        "confidence": 0.7799265212185057,
+        "pak": 0.8490098151333966,
+        "delta_baseline": -0.0046862073847058205
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 57.65559812550029,
+        "confidence": 0.7799265212185057,
+        "pak": 0.8613328570254272,
+        "delta_baseline": 0.0076368345073247745
+      },
+      "ens_median": {
+        "estimated_median_seg": 28.0,
+        "confidence": 0.7799265212185057,
+        "pak": 0.8391977395400845,
+        "delta_baseline": -0.014498282978017918
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 108.5,
+        "confidence": 0.7799265212185057,
+        "pak": 0.9002524076278913,
+        "delta_baseline": 0.04655638510978888
+      }
+    }
+  },
+  "exathlon_app5": {
+    "alias": "exathlon_app5",
+    "true_median_seg": 364.0,
+    "baseline_pak": 0.7787941816643644,
+    "ref_pak_supervised": 0.8334481914455047,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 10.0,
+        "confidence": 1.0,
+        "pak": 0.7513903545353435,
+        "delta_baseline": -0.027403827129020897
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 7.0,
+        "confidence": 1.0,
+        "pak": 0.7483185508146346,
+        "delta_baseline": -0.030475630849729818
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 254.0,
+        "confidence": 0.45,
+        "pak": 0.8376278445490172,
+        "delta_baseline": 0.05883366288465275
+      },
+      "peak_width": {
+        "estimated_median_seg": 118.24420361177181,
+        "confidence": 0.45,
+        "pak": 0.8126723557892866,
+        "delta_baseline": 0.03387817412492222
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7787941816643644,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.7787941816643644,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.8307731934297639,
+        "delta_baseline": 0.05197901176539943
+      },
+      "kde": {
+        "estimated_median_seg": 12.839845371670371,
+        "confidence": 0.9432030925665926,
+        "pak": 0.7535050269472212,
+        "delta_baseline": -0.025289154717143214
+      },
+      "change_point": {
+        "estimated_median_seg": 43.0,
+        "confidence": 1.0,
+        "pak": 0.7796295822924205,
+        "delta_baseline": 0.0008354006280560933
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 20.58178157360934,
+        "confidence": 0.8483007731416481,
+        "pak": 0.759159072817871,
+        "delta_baseline": -0.019635108846493443
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 33.985726861019145,
+        "confidence": 0.8483007731416481,
+        "pak": 0.7709641046282424,
+        "delta_baseline": -0.00783007703612204
+      },
+      "ens_median": {
+        "estimated_median_seg": 27.919922685835186,
+        "confidence": 0.8483007731416481,
+        "pak": 0.7655153984792858,
+        "delta_baseline": -0.01327878318507858
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 7.0,
+        "confidence": 0.8483007731416481,
+        "pak": 0.7483185508146346,
+        "delta_baseline": -0.030475630849729818
+      }
+    }
+  },
+  "exathlon_app6": {
+    "alias": "exathlon_app6",
+    "true_median_seg": 908.0,
+    "baseline_pak": 0.2583486055916404,
+    "ref_pak_supervised": 0.2894993863490858,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 8.0,
+        "confidence": 1.0,
+        "pak": 0.2632925453506055,
+        "delta_baseline": 0.004943939758965066
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 6.0,
+        "confidence": 1.0,
+        "pak": 0.2629581072318923,
+        "delta_baseline": 0.004609501640251867
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.85,
+        "pak": 0.263687221030673,
+        "delta_baseline": 0.005338615439032579
+      },
+      "peak_width": {
+        "estimated_median_seg": 21.51250989093205,
+        "confidence": 1.0,
+        "pak": 0.265430174923441,
+        "delta_baseline": 0.007081569331800597
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.2863111886454869,
+        "delta_baseline": 0.027962583053846468
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 500.0,
+        "confidence": 0.5,
+        "pak": 0.2863111886454869,
+        "delta_baseline": 0.027962583053846468
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.286612944339338,
+        "delta_baseline": 0.02826433874769757
+      },
+      "kde": {
+        "estimated_median_seg": 12.09971991191657,
+        "confidence": 0.9580056017616686,
+        "pak": 0.2638823235768353,
+        "delta_baseline": 0.005533717985194864
+      },
+      "change_point": {
+        "estimated_median_seg": 57.0,
+        "confidence": 1.0,
+        "pak": 0.2691698926006101,
+        "delta_baseline": 0.010821287008969671
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 25.27894207393973,
+        "confidence": 0.8916011203523336,
+        "pak": 0.26589997027580575,
+        "delta_baseline": 0.00755136468416534
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 77.6365353173907,
+        "confidence": 0.8916011203523336,
+        "pak": 0.27088483594734486,
+        "delta_baseline": 0.012536230355704447
+      },
+      "ens_median": {
+        "estimated_median_seg": 21.51250989093205,
+        "confidence": 0.8916011203523336,
+        "pak": 0.265430174923441,
+        "delta_baseline": 0.007081569331800597
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 6.0,
+        "confidence": 0.8916011203523336,
+        "pak": 0.2629581072318923,
+        "delta_baseline": 0.004609501640251867
+      }
+    }
+  },
+  "exathlon_app9": {
+    "alias": "exathlon_app9",
+    "true_median_seg": 499.0,
+    "baseline_pak": 0.5297598504307027,
+    "ref_pak_supervised": 0.6186525353147627,
+    "estimators": {
+      "peak_run_p85": {
+        "estimated_median_seg": 11.0,
+        "confidence": 1.0,
+        "pak": 0.5179962473153754,
+        "delta_baseline": -0.011763603115327315
+      },
+      "peak_run_p90": {
+        "estimated_median_seg": 10.0,
+        "confidence": 1.0,
+        "pak": 0.5172269365860921,
+        "delta_baseline": -0.012532913844610638
+      },
+      "peak_run_p95": {
+        "estimated_median_seg": 9.0,
+        "confidence": 1.0,
+        "pak": 0.5165170557942834,
+        "delta_baseline": -0.013242794636419308
+      },
+      "peak_width": {
+        "estimated_median_seg": 13.081092288535729,
+        "confidence": 1.0,
+        "pak": 0.5198023321585312,
+        "delta_baseline": -0.009957518272171506
+      },
+      "autocorr_e_half": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5297598504307027,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "autocorr_e_third": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.0,
+        "pak": 0.5297598504307027,
+        "delta_baseline": 0.0,
+        "error": "slice indices must be integers or None or have an __index__ method"
+      },
+      "wavelet": {
+        "estimated_median_seg": 400.0,
+        "confidence": 1.0,
+        "pak": 0.6169283957754383,
+        "delta_baseline": 0.08716854534473562
+      },
+      "kde": {
+        "estimated_median_seg": 11.96791844733201,
+        "confidence": 0.9606416310533598,
+        "pak": 0.5184699674837525,
+        "delta_baseline": -0.011289882946950214
+      },
+      "change_point": {
+        "estimated_median_seg": 27.0,
+        "confidence": 1.0,
+        "pak": 0.5337039625998277,
+        "delta_baseline": 0.003944112169124936
+      },
+      "ens_geom_mean": {
+        "estimated_median_seg": 14.364369329604648,
+        "confidence": 0.9901604077633399,
+        "pak": 0.5209686900894817,
+        "delta_baseline": -0.008791160341221071
+      },
+      "ens_wmean": {
+        "estimated_median_seg": 15.547474051500403,
+        "confidence": 0.9901604077633399,
+        "pak": 0.521264141287764,
+        "delta_baseline": -0.008495709142938734
+      },
+      "ens_median": {
+        "estimated_median_seg": 12.52450536793387,
+        "confidence": 0.9901604077633399,
+        "pak": 0.5190404103824234,
+        "delta_baseline": -0.010719440048279294
+      },
+      "ens_max_conf": {
+        "estimated_median_seg": 10.0,
+        "confidence": 0.9901604077633399,
+        "pak": 0.5172269365860921,
+        "delta_baseline": -0.012532913844610638
+      }
+    }
+  }
+}
