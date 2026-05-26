@@ -613,13 +613,57 @@ def _apply_pa_k_segment_adjustment(
     return adjusted
 
 
+def _compute_threshold_dependent(
+    s: np.ndarray, y: np.ndarray, pred: np.ndarray,
+) -> Dict[str, float]:
+    """Affiliation P/R/F1 + Range-based F1 at a given binarization (pred).
+
+    Used by compute_extra_metrics (at optimal F1 threshold) and
+    compute_ar_threshold_metric_set (at anomaly-ratio threshold).
+
+    Provenance:
+    - Affiliation: Huet et al. KDD 2022 (ahstat/affiliation-metrics-py).
+    - R-based F1: Tatbul et al. NeurIPS 2018, official wrapper TSB-AD
+      basic_metricor.metric_RF1 in fixed-threshold mode (preds=pred).
+    """
+    from affiliation.metrics import pr_from_events as _aff_pr
+    from affiliation.generics import convert_vector_to_events as _aff_v2e
+    from TSB_AD.evaluation.basic_metrics import basic_metricor as _rf1_grader_cls
+
+    out = {
+        'affiliation_precision': 0.0, 'affiliation_recall': 0.0,
+        'affiliation_f1': 0.0,
+        'r_based_f1': 0.0,
+    }
+    try:
+        evt_pred = _aff_v2e(pred.tolist())
+        evt_gt   = _aff_v2e(y.tolist())
+        if len(evt_pred) > 0 and len(evt_gt) > 0:
+            ar = _aff_pr(evt_pred, evt_gt, (0, len(s)))
+            p  = float(ar.get('precision', 0.0))
+            r_ = float(ar.get('recall', 0.0))
+            out['affiliation_precision'] = p
+            out['affiliation_recall']    = r_
+            out['affiliation_f1'] = (2.0 * p * r_ / (p + r_)) if (p + r_) > 0 else 0.0
+    except Exception as e:
+        print(f"  [Aff warn] {type(e).__name__}: {e}")
+
+    try:
+        rf1 = _rf1_grader_cls().metric_RF1(y, s, preds=pred)
+        out['r_based_f1'] = float(rf1)
+    except Exception as e:
+        print(f"  [RF1 warn] {type(e).__name__}: {e}")
+
+    return out
+
+
 def compute_extra_metrics(
     point_scores: np.ndarray,
     point_labels: np.ndarray,
     threshold: float,
     sliding_window: int = 100,
 ) -> Dict[str, float]:
-    """VUS-PR, VUS-ROC, Affiliation-F1, R-based F1 — non-PA%K TSAD metrics.
+    """VUS-PR, VUS-ROC (threshold-free) + Affiliation-F1, R-based F1 (at given threshold).
 
     VUS-PR / VUS-ROC: Paparrizos et al., "Volume Under the Surface", VLDB 2022.
         Official: https://github.com/TheDatumOrg/VUS (pip install vus)
@@ -628,10 +672,8 @@ def compute_extra_metrics(
         Official: https://github.com/ahstat/affiliation-metrics-py
     R-based F1: Tatbul, Lee, Zdonik, Alam, Gottschlich, "Precision and Recall
         for Time Series", NeurIPS 2018.
-        Official wrapper used: TSB-AD's `basic_metricor.metric_RF1`
-        (https://github.com/TheDatumOrg/TSB-AD), pip install TSB-AD.
-        Called with `preds=` (fixed-threshold mode) for per-epoch cost ~ms;
-        the sweep mode (preds=None) is 100x slower (~30s on full SWaT).
+        Official wrapper: TSB-AD's `basic_metricor.metric_RF1`
+        (https://github.com/TheDatumOrg/TSB-AD).
 
     Args:
         point_scores: 1-D anomaly score per timestep.
@@ -642,13 +684,9 @@ def compute_extra_metrics(
 
     Returns:
         dict with keys vus_roc, vus_pr, affiliation_precision, affiliation_recall,
-        affiliation_f1, r_based_f1. Returns zeros for degenerate input
-        (all-normal / all-anomaly / empty).
+        affiliation_f1, r_based_f1. Returns zeros for degenerate input.
     """
     from vus.metrics import get_metrics as _vus_get
-    from affiliation.metrics import pr_from_events as _aff_pr
-    from affiliation.generics import convert_vector_to_events as _aff_v2e
-    from TSB_AD.evaluation.basic_metrics import basic_metricor as _rf1_grader_cls
 
     out = {
         'vus_roc': 0.0, 'vus_pr': 0.0,
@@ -663,7 +701,7 @@ def compute_extra_metrics(
         return out
     n_pos = int(y.sum())
     if n_pos == 0 or n_pos == len(y):
-        return out  # degenerate: VUS / Affiliation / RF1 undefined
+        return out  # degenerate
 
     pred = (s >= float(threshold)).astype(int)
 
@@ -677,27 +715,73 @@ def compute_extra_metrics(
     except Exception as e:
         print(f"  [VUS warn] {type(e).__name__}: {e}")
 
-    # Affiliation — convert binary preds + GT to event intervals.
-    try:
-        evt_pred = _aff_v2e(pred.tolist())
-        evt_gt   = _aff_v2e(y.tolist())
-        if len(evt_pred) > 0 and len(evt_gt) > 0:
-            ar = _aff_pr(evt_pred, evt_gt, (0, len(s)))
-            p  = float(ar.get('precision', 0.0))
-            r_ = float(ar.get('recall', 0.0))
-            out['affiliation_precision'] = p
-            out['affiliation_recall']    = r_
-            out['affiliation_f1'] = (2.0 * p * r_ / (p + r_)) if (p + r_) > 0 else 0.0
-    except Exception as e:
-        print(f"  [Aff warn] {type(e).__name__}: {e}")
+    # Aff + R-F1 at given threshold
+    out.update(_compute_threshold_dependent(s, y, pred))
+    return out
 
-    # R-based F1 — Tatbul 2018 via TSB-AD's metric_RF1 at fixed threshold.
-    try:
-        rf1 = _rf1_grader_cls().metric_RF1(y, s, preds=pred)
-        out['r_based_f1'] = float(rf1)
-    except Exception as e:
-        print(f"  [RF1 warn] {type(e).__name__}: {e}")
 
+def compute_ar_threshold_metric_set(
+    point_scores: np.ndarray,
+    point_labels: np.ndarray,
+    weighted_precision: bool = True,
+) -> Dict[str, float]:
+    """Recompute threshold-dependent metrics at anomaly-ratio threshold.
+
+    AR threshold = (1 - anomaly_ratio)-th quantile of scores.
+    Use case: when test data anomaly ratio is known (~5%), pick top-5% scores
+    as positive predictions — independent of optimal-F1 threshold selection
+    (which leaks ground truth into threshold choice).
+
+    Saved keys (all suffixed `_ar`, plus anomaly_ratio + anomaly_ratio_threshold):
+        f1_ar, precision_ar, recall_ar          (sklearn point-strict)
+        f1_t_ar, precision_t_ar, recall_t_ar    (TS-window F1 via compute_f1_t_at_threshold)
+        affiliation_precision_ar, _recall_ar, _f1_ar
+        r_based_f1_ar
+    PA%K family, prc_auc, vus_*, disc_snr are NOT recomputed (threshold-free
+    or K-integrated → independent of single-threshold choice).
+    """
+    out = {
+        'anomaly_ratio': 0.0,
+        'anomaly_ratio_threshold': 0.0,
+        'f1_ar': 0.0, 'precision_ar': 0.0, 'recall_ar': 0.0,
+        'f1_t_ar': 0.0, 'precision_t_ar': 0.0, 'recall_t_ar': 0.0,
+        'affiliation_precision_ar': 0.0, 'affiliation_recall_ar': 0.0,
+        'affiliation_f1_ar': 0.0,
+        'r_based_f1_ar': 0.0,
+    }
+    s = np.asarray(point_scores, dtype=float).ravel()
+    y = np.asarray(point_labels, dtype=int).ravel()
+    if len(s) == 0 or len(s) != len(y):
+        return out
+    ar = float(y.mean())
+    out['anomaly_ratio'] = ar
+    if ar <= 0 or ar >= 1:
+        return out  # degenerate
+
+    ar_th = float(np.quantile(s, 1.0 - ar))
+    out['anomaly_ratio_threshold'] = ar_th
+
+    pred = (s > ar_th).astype(int)
+
+    # point-strict (sklearn)
+    out['f1_ar']        = float(f1_score(y, pred, zero_division=0))
+    out['precision_ar'] = float(precision_score(y, pred, zero_division=0))
+    out['recall_ar']    = float(recall_score(y, pred, zero_division=0))
+
+    # time-series F1 via existing helper
+    f1_t_ar, prec_t_ar, rec_t_ar = compute_f1_t_at_threshold(
+        y, s, ar_th, weighted_precision=weighted_precision
+    )
+    out['f1_t_ar']        = float(f1_t_ar)
+    out['precision_t_ar'] = float(prec_t_ar)
+    out['recall_t_ar']    = float(rec_t_ar)
+
+    # Aff + R-F1 at AR threshold
+    td = _compute_threshold_dependent(s, y, pred)
+    out['affiliation_precision_ar'] = td['affiliation_precision']
+    out['affiliation_recall_ar']    = td['affiliation_recall']
+    out['affiliation_f1_ar']        = td['affiliation_f1']
+    out['r_based_f1_ar']            = td['r_based_f1']
     return out
 
 
@@ -705,6 +789,12 @@ EXTRA_METRIC_KEYS = (
     'vus_roc', 'vus_pr',
     'affiliation_precision', 'affiliation_recall', 'affiliation_f1',
     'r_based_f1',
+    # Anomaly-ratio threshold variants (saved to epoch_metrics.json only).
+    'anomaly_ratio', 'anomaly_ratio_threshold',
+    'f1_ar', 'precision_ar', 'recall_ar',
+    'f1_t_ar', 'precision_t_ar', 'recall_t_ar',
+    'affiliation_precision_ar', 'affiliation_recall_ar', 'affiliation_f1_ar',
+    'r_based_f1_ar',
 )
 
 
@@ -1895,6 +1985,9 @@ class Evaluator:
 
         # === VUS-PR/ROC + Affiliation-F1 (official implementations) ===
         results.update(compute_extra_metrics(point_scores, pt_labels, threshold))
+        # Anomaly-ratio threshold variants (saved to epoch_metrics.json only;
+        # not printed per-epoch — recoverable via JSON post-hoc analysis).
+        results.update(compute_ar_threshold_metric_set(point_scores, pt_labels))
 
         # Disturbing normal performance (window-level, descriptive)
         # sample_type: 0=pure_normal, 1=disturbing_normal, 2=anomaly
@@ -2024,6 +2117,9 @@ class Evaluator:
 
         # === VUS-PR/ROC + Affiliation-F1 (official implementations) ===
         results.update(compute_extra_metrics(point_scores, pt_labels, threshold))
+        # Anomaly-ratio threshold variants (saved to epoch_metrics.json only;
+        # not printed per-epoch — recoverable via JSON post-hoc analysis).
+        results.update(compute_ar_threshold_metric_set(point_scores, pt_labels))
 
         return results
 
@@ -2116,5 +2212,7 @@ def compute_metrics_with_exclusion(point_scores, pt_labels, anomaly_regions, exc
 
     # === VUS-PR/ROC + Affiliation-F1 (official implementations) ===
     results.update(compute_extra_metrics(point_scores, pt_labels, threshold))
+    # Anomaly-ratio threshold variants (saved to epoch_metrics.json only).
+    results.update(compute_ar_threshold_metric_set(point_scores, pt_labels))
 
     return results
