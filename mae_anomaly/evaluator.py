@@ -14,7 +14,7 @@ import torch
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torch.amp import autocast
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple, List, Optional, Any
 from sklearn.metrics import (
     precision_score, recall_score, f1_score,
     roc_auc_score, roc_curve, average_precision_score,
@@ -796,6 +796,155 @@ EXTRA_METRIC_KEYS = (
     'affiliation_precision_ar', 'affiliation_recall_ar', 'affiliation_f1_ar',
     'r_based_f1_ar',
 )
+
+# K values used by all PA%K metric loops in this module.
+PA_K_VALUES = list(range(0, 101, 5))
+
+# All threshold-base scalar keys (roc/prc/F1/F1_T) — for zero-fill in degenerate case.
+_BASE_SCALAR_KEYS = (
+    'roc_auc', 'prc_auc', 'precision', 'recall', 'f1_score', 'optimal_threshold',
+    'f1_t', 'precision_t', 'recall_t',
+)
+
+# All PA%K-integrated keys (matching compute_pa_k_auc scalar output).
+PAK_AUC_KEYS = (
+    'pak_auc_prc_auc', 'pak_auc_roc_auc', 'pak_auc_f1',
+    'pak_auc_f1_t', 'pak_auc_precision', 'pak_auc_recall',
+    'pak_auc_f1_raw', 'pak_auc_f1_t_raw',
+    'pak_auc_precision_raw', 'pak_auc_recall_raw',
+)
+
+
+def _zero_metric_set() -> Dict[str, float]:
+    """All-zeros dict matching compute_full_metric_set output schema.
+
+    Used as fallback when input is degenerate (single-class labels, empty, etc.).
+    """
+    out = {k: 0.0 for k in _BASE_SCALAR_KEYS}
+    for k in PA_K_VALUES:
+        for sub in ('f1', 'precision', 'recall', 'roc_auc', 'prc_auc'):
+            out[f'pa_{k}_{sub}'] = 0.0
+    for k in PAK_AUC_KEYS:
+        out[k] = 0.0
+    for k in EXTRA_METRIC_KEYS:
+        out[k] = 0.0
+    return out
+
+
+def compute_full_metric_set(
+    point_scores: np.ndarray,
+    point_labels: np.ndarray,
+    anomaly_regions,
+    eval_mask: Optional[np.ndarray] = None,
+    n_thresholds: int = 200,
+    sliding_window: int = 100,
+) -> Dict[str, Any]:
+    """SINGLE SOURCE OF TRUTH for per-epoch metric computation.
+
+    Both pipelines call this:
+    - `mae_anomaly/evaluator.py` (MAE training, via Evaluator's eval methods)
+    - `comparison/baseline_common.py` (baseline training)
+
+    To add a new metric across both pipelines: edit ONLY this function.
+
+    Computes:
+        - Threshold-based core: roc_auc, prc_auc, precision, recall, f1_score,
+          optimal_threshold, f1_t, precision_t, recall_t. Computed on
+          `point_scores[eval_mask]` + `point_labels[eval_mask]`.
+        - Per-K PA%K (k=0..100 step 5): pa_{k}_{f1, precision, recall, roc_auc, prc_auc}
+        - PA%K AUC integrated: pak_auc_{f1, prc_auc, roc_auc, f1_t, precision, recall,
+          *_raw} + diagnostic `_per_k_*` arrays.
+        - VUS-PR, VUS-ROC (Paparrizos VLDB 2022, threshold-free).
+        - Affiliation P/R/F1 (Huet KDD 2022, at optimal threshold).
+        - R-based F1 (Tatbul NeurIPS 2018, at optimal threshold).
+        - Anomaly-ratio threshold variants (`_ar` suffix): same threshold-based
+          metrics recomputed at `(1 - anomaly_rate)`-quantile threshold.
+
+    Args:
+        point_scores: 1-D anomaly score per timestep (full array).
+        point_labels: 1-D binary ground truth (1=anomaly). Same length as point_scores.
+        anomaly_regions: list of region objects with `.start`, `.end` attributes
+            (already filtered if needed — e.g., SWaT excl22 removes Region 22).
+        eval_mask: optional boolean mask (True = include). If None, all True.
+            Threshold-based core metrics use `point_*[eval_mask]`; PA%K functions
+            accept eval_mask directly; VUS and AR use full `point_*` (mask not
+            respected by VUS algorithm, AR computed on full for ratio consistency).
+        n_thresholds: PA%K AUC threshold sweep count (default 200, matches MAE).
+        sliding_window: VUS buffer length (default 100).
+
+    Returns:
+        dict with ~133 scalar keys + 4 `_per_k_*` diagnostic lists. Underscore-
+        prefixed keys may be filtered by callers that want JSON-clean output.
+
+    Backwards compat: keys/values match prior MAE inline implementation
+    (3 sites in this module) byte-for-byte except all values are float-cast
+    for JSON safety. Verified via comparison against existing
+    epoch_metrics.json from exp271 SWaT.
+    """
+    if eval_mask is None:
+        eval_mask = np.ones(len(point_labels), dtype=bool)
+
+    # ---- Degenerate case detection ----
+    base_scores = point_scores[eval_mask]
+    base_labels = point_labels[eval_mask]
+    if len(base_labels) == 0 or len(np.unique(base_labels)) <= 1:
+        return _zero_metric_set()
+
+    # ---- Threshold-based core ----
+    roc_auc = roc_auc_score(base_labels, base_scores)
+    prc_auc = average_precision_score(base_labels, base_scores)
+    fpr, tpr, thresholds = roc_curve(base_labels, base_scores)
+    optimal_idx = find_f1_optimal_idx(fpr, tpr, base_labels)
+    threshold = thresholds[optimal_idx]
+    predictions = (base_scores > threshold).astype(int)
+
+    f1_t, precision_t, recall_t = compute_f1_t_at_threshold(
+        base_labels, base_scores, threshold
+    )
+
+    results: Dict[str, Any] = {
+        'roc_auc': float(roc_auc),
+        'prc_auc': float(prc_auc),
+        'precision': float(precision_score(base_labels, predictions, zero_division=0)),
+        'recall':    float(recall_score(base_labels, predictions, zero_division=0)),
+        'f1_score':  float(f1_score(base_labels, predictions, zero_division=0)),
+        'optimal_threshold': float(threshold),
+        'f1_t':        float(f1_t),
+        'precision_t': float(precision_t),
+        'recall_t':    float(recall_t),
+    }
+
+    # ---- Per-K PA%K (granular) ----
+    for k in PA_K_VALUES:
+        pa_metrics = compute_pa_k_metrics_from_mean_scores(
+            point_scores, point_labels, anomaly_regions, threshold, k, eval_mask
+        )
+        results[f'pa_{k}_f1']        = float(pa_metrics['f1'])
+        results[f'pa_{k}_precision'] = float(pa_metrics['precision'])
+        results[f'pa_{k}_recall']    = float(pa_metrics['recall'])
+        pa_roc_prc = compute_pa_k_roc_prc_from_mean_scores(
+            point_scores, point_labels, anomaly_regions, k, eval_mask
+        )
+        results[f'pa_{k}_roc_auc'] = float(pa_roc_prc['roc_auc'])
+        results[f'pa_{k}_prc_auc'] = float(pa_roc_prc['prc_auc'])
+
+    # ---- PA%K AUC integrated (+ _per_k_* diagnostic lists) ----
+    pak_auc = compute_pa_k_auc(
+        point_scores, point_labels, anomaly_regions, threshold, eval_mask, n_thresholds
+    )
+    results.update(pak_auc)
+
+    # ---- VUS-PR/ROC + Affiliation-F1 + R-based F1 (at optimal threshold) ----
+    # NOTE: VUS is threshold-free and operates on FULL point_scores/labels
+    # (sliding-window VUS algorithm doesn't naturally support arbitrary masks).
+    results.update(compute_extra_metrics(point_scores, point_labels, threshold, sliding_window))
+
+    # ---- Anomaly-ratio threshold variants ----
+    # NOTE: anomaly_ratio = full point_labels.mean(), preserving consistency
+    # across pipelines. If you need mask-aware AR, derive from point_labels[eval_mask] externally.
+    results.update(compute_ar_threshold_metric_set(point_scores, point_labels))
+
+    return results
 
 
 def compute_pa_k_auc(
@@ -1900,25 +2049,8 @@ class Evaluator:
         _fm_p = self.fm_patches if hasattr(self, 'fm_patches') else None
         patch_scores = self._apply_scoring_formula(recon_patches, disc_patches, score_mode, fm=_fm_p)
 
-        pa_k_values = list(range(0, 101, 5))
-        pak_auc_keys = ['pak_auc_prc_auc', 'pak_auc_roc_auc', 'pak_auc_f1',
-                        'pak_auc_f1_t', 'pak_auc_precision', 'pak_auc_recall',
-                        'pak_auc_f1_raw', 'pak_auc_f1_t_raw',
-                        'pak_auc_precision_raw', 'pak_auc_recall_raw'] + list(EXTRA_METRIC_KEYS)
-        zero_results = {
-            'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
-            'f1_score': 0.0, 'optimal_threshold': 0.0,
-            'f1_t': 0.0, 'precision_t': 0.0, 'recall_t': 0.0,
-            **{f'pa_{k}_f1': 0.0 for k in pa_k_values},
-            **{f'pa_{k}_roc_auc': 0.0 for k in pa_k_values},
-            **{f'pa_{k}_prc_auc': 0.0 for k in pa_k_values},
-            **{f'pa_{k}_precision': 0.0 for k in pa_k_values},
-            **{f'pa_{k}_recall': 0.0 for k in pa_k_values},
-            **{k: 0.0 for k in pak_auc_keys},
-        }
-
         if not (self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions')):
-            return zero_results
+            return _zero_metric_set()
 
         pt_labels = np.array(self.test_dataset.point_labels)
         total_len = len(pt_labels)
@@ -1927,67 +2059,12 @@ class Evaluator:
         point_scores = _aggregate_with_map(patch_scores.ravel(), flat_t, flat_wp, coverage, covered, total_len, method='mean')
         point_scores = np.nan_to_num(point_scores, nan=0.0)
 
-        if len(np.unique(pt_labels)) <= 1:
-            return zero_results
-
-        roc_auc = roc_auc_score(pt_labels, point_scores)
-        prc_auc = average_precision_score(pt_labels, point_scores)
-        fpr, tpr, thresholds = roc_curve(pt_labels, point_scores)
-        optimal_idx = find_f1_optimal_idx(fpr, tpr, pt_labels)
-        threshold = thresholds[optimal_idx]
-
-        predictions = (point_scores > threshold).astype(int)
-        prec_val = precision_score(pt_labels, predictions, zero_division=0)
-        rec_val = recall_score(pt_labels, predictions, zero_division=0)
-        f1_val = f1_score(pt_labels, predictions, zero_division=0)
-
-        f1_t, precision_t, recall_t = compute_f1_t_at_threshold(
-            pt_labels, point_scores, threshold
-        )
-
-        results = {
-            'roc_auc': roc_auc,
-            'prc_auc': prc_auc,
-            'precision': prec_val,
-            'recall': rec_val,
-            'f1_score': f1_val,
-            'optimal_threshold': threshold,
-            'f1_t': f1_t,
-            'precision_t': precision_t,
-            'recall_t': recall_t,
-        }
-
-        # === PA%K metrics (mean-based) ===
+        # === Single-source metric set (PA%K + AUC + VUS/Aff/RF1 + AR variants) ===
+        # See compute_full_metric_set() docstring for the full key schema.
         anomaly_regions = self.test_dataset.anomaly_regions
         eval_mask = np.ones(total_len, dtype=bool)
-
-        for k in pa_k_values:
-            # PA%K F1/Precision/Recall at optimal threshold
-            pa_metrics = compute_pa_k_metrics_from_mean_scores(
-                point_scores, pt_labels, anomaly_regions, threshold, k, eval_mask
-            )
-            results[f'pa_{k}_f1'] = pa_metrics['f1']
-            results[f'pa_{k}_precision'] = pa_metrics['precision']
-            results[f'pa_{k}_recall'] = pa_metrics['recall']
-
-            # PA%K ROC-AUC / PRC-AUC via threshold sweep on mean scores
-            pa_roc_prc = compute_pa_k_roc_prc_from_mean_scores(
-                point_scores, pt_labels, anomaly_regions, k, eval_mask
-            )
-            results[f'pa_{k}_roc_auc'] = pa_roc_prc['roc_auc']
-            results[f'pa_{k}_prc_auc'] = pa_roc_prc['prc_auc']
-
-        # === PA%K AUC (K=0..100 sweep → 6 integrated scalars) ===
-        pak_auc = compute_pa_k_auc(
-            point_scores, pt_labels, anomaly_regions, threshold, eval_mask
-        )
-        results.update(pak_auc)
-
-        # === VUS-PR/ROC + Affiliation-F1 (official implementations) ===
-        results.update(compute_extra_metrics(point_scores, pt_labels, threshold))
-        # Anomaly-ratio threshold variants (saved to epoch_metrics.json only;
-        # not printed per-epoch — recoverable via JSON post-hoc analysis).
-        results.update(compute_ar_threshold_metric_set(point_scores, pt_labels))
+        results = compute_full_metric_set(point_scores, pt_labels, anomaly_regions, eval_mask)
+        threshold = results.get('optimal_threshold', 0.0)
 
         # Disturbing normal performance (window-level, descriptive)
         # sample_type: 0=pure_normal, 1=disturbing_normal, 2=anomaly
@@ -2038,25 +2115,8 @@ class Evaluator:
         else:
             raise ValueError(f"Unknown score_type: {score_type}")
 
-        pa_k_values = list(range(0, 101, 5))
-        pak_auc_keys = ['pak_auc_prc_auc', 'pak_auc_roc_auc', 'pak_auc_f1',
-                        'pak_auc_f1_t', 'pak_auc_precision', 'pak_auc_recall',
-                        'pak_auc_f1_raw', 'pak_auc_f1_t_raw',
-                        'pak_auc_precision_raw', 'pak_auc_recall_raw'] + list(EXTRA_METRIC_KEYS)
-        zero_results = {
-            'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
-            'f1_score': 0.0, 'optimal_threshold': 0.0,
-            'f1_t': 0.0, 'precision_t': 0.0, 'recall_t': 0.0,
-            **{f'pa_{k}_f1': 0.0 for k in pa_k_values},
-            **{f'pa_{k}_roc_auc': 0.0 for k in pa_k_values},
-            **{f'pa_{k}_prc_auc': 0.0 for k in pa_k_values},
-            **{f'pa_{k}_precision': 0.0 for k in pa_k_values},
-            **{f'pa_{k}_recall': 0.0 for k in pa_k_values},
-            **{k: 0.0 for k in pak_auc_keys},
-        }
-
         if not (self.can_compute_point_level_pa_k and hasattr(self.test_dataset, 'anomaly_regions')):
-            return zero_results
+            return _zero_metric_set()
 
         pt_labels = np.array(self.test_dataset.point_labels)
         total_len = len(pt_labels)
@@ -2065,62 +2125,10 @@ class Evaluator:
         point_scores = _aggregate_with_map(patch_scores.ravel(), flat_t, flat_wp, coverage, covered, total_len, method='mean')
         point_scores = np.nan_to_num(point_scores, nan=0.0)
 
-        if len(np.unique(pt_labels)) <= 1:
-            return zero_results
-
-        roc_auc_val = roc_auc_score(pt_labels, point_scores)
-        prc_auc_val = average_precision_score(pt_labels, point_scores)
-        fpr, tpr, thresholds = roc_curve(pt_labels, point_scores)
-        optimal_idx = find_f1_optimal_idx(fpr, tpr, pt_labels)
-        threshold = thresholds[optimal_idx]
-
-        predictions = (point_scores > threshold).astype(int)
-        f1_t, precision_t, recall_t = compute_f1_t_at_threshold(
-            pt_labels, point_scores, threshold
-        )
-
-        results = {
-            'roc_auc': float(roc_auc_val),
-            'prc_auc': float(prc_auc_val),
-            'precision': float(precision_score(pt_labels, predictions, zero_division=0)),
-            'recall': float(recall_score(pt_labels, predictions, zero_division=0)),
-            'f1_score': float(f1_score(pt_labels, predictions, zero_division=0)),
-            'optimal_threshold': float(threshold),
-            'f1_t': f1_t,
-            'precision_t': precision_t,
-            'recall_t': recall_t,
-        }
-
-        # PA%K metrics (mean-based)
+        # === Single-source metric set (see compute_full_metric_set docstring) ===
         anomaly_regions = self.test_dataset.anomaly_regions
         eval_mask = np.ones(total_len, dtype=bool)
-
-        for k in pa_k_values:
-            pa_metrics = compute_pa_k_metrics_from_mean_scores(
-                point_scores, pt_labels, anomaly_regions, threshold, k, eval_mask
-            )
-            results[f'pa_{k}_f1'] = pa_metrics['f1']
-            results[f'pa_{k}_precision'] = pa_metrics['precision']
-            results[f'pa_{k}_recall'] = pa_metrics['recall']
-
-            pa_roc_prc = compute_pa_k_roc_prc_from_mean_scores(
-                point_scores, pt_labels, anomaly_regions, k, eval_mask
-            )
-            results[f'pa_{k}_roc_auc'] = pa_roc_prc['roc_auc']
-            results[f'pa_{k}_prc_auc'] = pa_roc_prc['prc_auc']
-
-        # === PA%K AUC (K=0..100 sweep → 6 integrated scalars) ===
-        pak_auc = compute_pa_k_auc(
-            point_scores, pt_labels, anomaly_regions, threshold, eval_mask
-        )
-        results.update(pak_auc)
-
-        # === VUS-PR/ROC + Affiliation-F1 (official implementations) ===
-        results.update(compute_extra_metrics(point_scores, pt_labels, threshold))
-        # Anomaly-ratio threshold variants (saved to epoch_metrics.json only;
-        # not printed per-epoch — recoverable via JSON post-hoc analysis).
-        results.update(compute_ar_threshold_metric_set(point_scores, pt_labels))
-
+        results = compute_full_metric_set(point_scores, pt_labels, anomaly_regions, eval_mask)
         return results
 
 
@@ -2155,64 +2163,12 @@ def compute_metrics_with_exclusion(point_scores, pt_labels, anomaly_regions, exc
     masked_labels = pt_labels[eval_mask]
 
     if len(np.unique(masked_labels)) <= 1:
+        # Distinct from MAE eval methods: callers (excl22 path) expect empty dict here.
         return {}
 
-    # Base metrics
-    roc_auc = roc_auc_score(masked_labels, masked_scores)
-    prc_auc = average_precision_score(masked_labels, masked_scores)
-    fpr, tpr, thresholds = roc_curve(masked_labels, masked_scores)
-    optimal_idx = find_f1_optimal_idx(fpr, tpr, masked_labels)
-    threshold = thresholds[optimal_idx]
-
-    predictions = (masked_scores > threshold).astype(int)
-    prec_val = precision_score(masked_labels, predictions, zero_division=0)
-    rec_val = recall_score(masked_labels, predictions, zero_division=0)
-    f1_val = f1_score(masked_labels, predictions, zero_division=0)
-
-    f1_t, precision_t, recall_t = compute_f1_t_at_threshold(
-        masked_labels, masked_scores, threshold
-    )
-
-    results = {
-        'roc_auc': float(roc_auc),
-        'prc_auc': float(prc_auc),
-        'precision': float(prec_val),
-        'recall': float(rec_val),
-        'f1_score': float(f1_val),
-        'optimal_threshold': float(threshold),
-        'f1_t': float(f1_t),
-        'precision_t': float(precision_t),
-        'recall_t': float(recall_t),
-    }
-
-    # PA%K metrics with eval_mask (exclude the excluded region from anomaly_regions)
+    # Filter anomaly_regions: drop the excluded region.
     filtered_regions = [r for r in anomaly_regions
                         if not (r.start == excl_region.start and r.end == excl_region.end)]
 
-    pa_k_values = list(range(0, 101, 5))
-    for k in pa_k_values:
-        pa_metrics = compute_pa_k_metrics_from_mean_scores(
-            point_scores, pt_labels, filtered_regions, threshold, k, eval_mask
-        )
-        results[f'pa_{k}_f1'] = pa_metrics['f1']
-        results[f'pa_{k}_precision'] = pa_metrics['precision']
-        results[f'pa_{k}_recall'] = pa_metrics['recall']
-
-        pa_roc_prc = compute_pa_k_roc_prc_from_mean_scores(
-            point_scores, pt_labels, filtered_regions, k, eval_mask
-        )
-        results[f'pa_{k}_roc_auc'] = pa_roc_prc['roc_auc']
-        results[f'pa_{k}_prc_auc'] = pa_roc_prc['prc_auc']
-
-    # PA%K AUC
-    pak_auc = compute_pa_k_auc(
-        point_scores, pt_labels, filtered_regions, threshold, eval_mask
-    )
-    results.update(pak_auc)
-
-    # === VUS-PR/ROC + Affiliation-F1 (official implementations) ===
-    results.update(compute_extra_metrics(point_scores, pt_labels, threshold))
-    # Anomaly-ratio threshold variants (saved to epoch_metrics.json only).
-    results.update(compute_ar_threshold_metric_set(point_scores, pt_labels))
-
-    return results
+    # === Single-source metric set (see compute_full_metric_set docstring) ===
+    return compute_full_metric_set(point_scores, pt_labels, filtered_regions, eval_mask)
