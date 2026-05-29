@@ -9,6 +9,7 @@ All metrics (including PA%K) use mean-aggregated point-level scores.
 Patch scores → mean aggregation to physical timestamps → threshold → PA%K adjustment.
 """
 
+import os
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -662,6 +663,8 @@ def compute_extra_metrics(
     point_labels: np.ndarray,
     threshold: float,
     sliding_window: int = 100,
+    *,
+    skip_vus: bool,
 ) -> Dict[str, float]:
     """VUS-PR, VUS-ROC (threshold-free) + Affiliation-F1, R-based F1 (at given threshold).
 
@@ -681,13 +684,14 @@ def compute_extra_metrics(
         threshold: cutoff for converting scores -> binary predictions (used by
                    Affiliation + R-based F1 — VUS is threshold-free).
         sliding_window: VUS buffer length (typical 100 for TSAD benchmarks).
+        skip_vus: if True, skip VUS-PR/ROC (~40s/call on 225K points). Use for
+            per-epoch eval during training and bg-worker scan loop. Always
+            False for final best-epoch report. Default: False.
 
     Returns:
         dict with keys vus_roc, vus_pr, affiliation_precision, affiliation_recall,
         affiliation_f1, r_based_f1. Returns zeros for degenerate input.
     """
-    from vus.metrics import get_metrics as _vus_get
-
     out = {
         'vus_roc': 0.0, 'vus_pr': 0.0,
         'affiliation_precision': 0.0, 'affiliation_recall': 0.0,
@@ -706,16 +710,21 @@ def compute_extra_metrics(
     pred = (s >= float(threshold)).astype(int)
 
     # VUS — official example normalizes scores to [0,1] via MinMaxScaler.
-    smin, smax = float(s.min()), float(s.max())
-    s_norm = (s - smin) / (smax - smin + 1e-12)
-    try:
-        vr = _vus_get(s_norm, y, metric='all', slidingWindow=sliding_window)
-        out['vus_roc'] = float(vr.get('VUS_ROC', 0.0))
-        out['vus_pr']  = float(vr.get('VUS_PR', 0.0))
-    except Exception as e:
-        print(f"  [VUS warn] {type(e).__name__}: {e}")
+    # Skipped during per-epoch training eval / bg-worker scan: VUS costs ~40s/call
+    # on 225K-point high-unique-value scores (86% of total scan time). Only compute
+    # for final best-epoch report.
+    if not skip_vus:
+        from vus.metrics import get_metrics as _vus_get
+        smin, smax = float(s.min()), float(s.max())
+        s_norm = (s - smin) / (smax - smin + 1e-12)
+        try:
+            vr = _vus_get(s_norm, y, metric='all', slidingWindow=sliding_window)
+            out['vus_roc'] = float(vr.get('VUS_ROC', 0.0))
+            out['vus_pr']  = float(vr.get('VUS_PR', 0.0))
+        except Exception as e:
+            print(f"  [VUS warn] {type(e).__name__}: {e}")
 
-    # Aff + R-F1 at given threshold
+    # Aff + R-F1 at given threshold (always computed — cheap)
     out.update(_compute_threshold_dependent(s, y, pred))
     return out
 
@@ -838,6 +847,8 @@ def compute_full_metric_set(
     eval_mask: Optional[np.ndarray] = None,
     n_thresholds: int = 200,
     sliding_window: int = 100,
+    *,
+    lite: bool,
 ) -> Dict[str, Any]:
     """SINGLE SOURCE OF TRUTH for per-epoch metric computation.
 
@@ -934,10 +945,16 @@ def compute_full_metric_set(
     )
     results.update(pak_auc)
 
-    # ---- VUS-PR/ROC + Affiliation-F1 + R-based F1 (at optimal threshold) ----
-    # NOTE: VUS is threshold-free and operates on FULL point_scores/labels
-    # (sliding-window VUS algorithm doesn't naturally support arbitrary masks).
-    results.update(compute_extra_metrics(point_scores, point_labels, threshold, sliding_window))
+    # ---- LITE mode: skip VUS only ----
+    # `lite=True` skips ONLY VUS-PR/ROC (~40s/call on high-unique-value scores).
+    # Aff/R-F1/AR are kept (cheap: ~1s combined). Used by per-epoch eval during
+    # training and bg-worker excl22-scan loop to avoid CPU starvation.
+    # `lite=False` (default): full set including VUS. Used for final best-epoch report.
+    # Root cause record (2026-05-27): VUS dominated bg-worker (86% of scan time,
+    # 4x slowdown under WaDi training CPU contention).
+    results.update(compute_extra_metrics(
+        point_scores, point_labels, threshold, sliding_window, skip_vus=lite
+    ))
 
     # ---- Anomaly-ratio threshold variants ----
     # NOTE: anomaly_ratio = full point_labels.mean(), preserving consistency
@@ -1379,38 +1396,39 @@ class Evaluator:
             'patch_anomaly_types': patch_anomaly_types,  # (n_windows, num_patches)
         }
 
-    def set_precomputed_patch_scores(
-        self,
-        recon_patches: np.ndarray,
-        disc_patches: np.ndarray,
-        student_recon_patches: np.ndarray,
-        labels: np.ndarray,
-        sample_types: np.ndarray,
-        anomaly_types: np.ndarray,
-        fm_patches: Optional[np.ndarray] = None,
-    ):
-        """Populate the evaluator cache with pre-computed patch scores.
+    def set_precomputed_patch_scores(self, bundle: "PatchScoresBundle"):
+        """Populate the evaluator cache from a ``PatchScoresBundle``.
 
         Use this to avoid a redundant GPU forward pass when patch scores
-        have already been computed (e.g., by _compute_patch_scores_all_patches).
+        have already been computed (e.g., by
+        ``_compute_patch_scores_all_patches`` or by a fresh
+        ``compute_epoch_test_inference`` call). The bundle is a typed
+        container that carries the FM array as an explicit field; this
+        prevents the original 2026-05-28 silent-drop bug where the
+        previous keyword-argument signature allowed callers to omit
+        ``fm_patches`` and fall back to the default ``None``.
 
         Args:
-            recon_patches: (n_windows, num_patches) teacher reconstruction scores
-            disc_patches: (n_windows, num_patches) discrepancy scores
-            student_recon_patches: (n_windows, num_patches) student reconstruction scores
-            labels: (n_windows,) window-level binary labels
-            sample_types: (n_windows,) window-level sample type indicators
-            anomaly_types: (n_windows,) window-level anomaly type indicators
-            fm_patches: optional (n_windows, num_patches) feature-matching distance scores.
-                Must be supplied when use_feature_matching=True so adaptive scoring
-                in evaluate() includes FM contribution (mirrors npz save path).
+            bundle: ``mae_anomaly.types.PatchScoresBundle`` produced
+                directly or via ``PatchScoresBundle.from_eval_data`` /
+                ``PatchScoresBundle.from_patch_scores_dict``.
         """
+        from .types import PatchScoresBundle as _Bundle
+        if not isinstance(bundle, _Bundle):
+            raise TypeError(
+                "set_precomputed_patch_scores expects a PatchScoresBundle "
+                "instance. Use PatchScoresBundle.from_eval_data(eval_data) "
+                "or PatchScoresBundle.from_patch_scores_dict(patch_scores) "
+                "to construct one."
+            )
         self._cache['raw_scores'] = self._build_cache_dict(
-            recon_patches, disc_patches, student_recon_patches,
-            labels, sample_types, anomaly_types,
+            bundle.recon, bundle.disc, bundle.student_recon,
+            bundle.labels, bundle.sample_types, bundle.anomaly_types,
         )
-        if fm_patches is not None:
-            self.fm_patches = fm_patches
+        # FM is an explicit Optional field on the bundle; assign it
+        # unconditionally (None is a valid value when the model did not
+        # produce FM, e.g., use_feature_matching=False).
+        self.fm_patches = bundle.fm
 
     def _get_cached_scores(self):
         """Get cached raw scores, computing if needed
@@ -1448,59 +1466,36 @@ class Evaluator:
 
     def _apply_scoring_formula(self, recon: np.ndarray, disc: np.ndarray, scoring_mode: str,
                                fm: Optional[np.ndarray] = None) -> np.ndarray:
-        """Apply scoring formula to raw recon/disc/fm scores
+        """Apply the configured anomaly score formula.
+
+        Thin wrapper around the single-source implementations in
+        ``mae_anomaly.scoring``. All score-related arithmetic lives there;
+        this method exists only to preserve the legacy positional signature
+        ``(recon, disc, scoring_mode, fm)`` that several internal callers
+        already use.
 
         Args:
-            recon: Raw reconstruction scores (teacher)
-            disc: Raw discrepancy scores (output-level)
-            scoring_mode: 'default', 'adaptive', or 'ratio_weighted'
-            fm: Raw feature matching distance scores (hidden-level), optional
+            recon: teacher reconstruction error.
+            disc: output-level student-teacher discrepancy.
+            scoring_mode: 'adaptive', 'ratio_weighted', or 'default'.
+            fm: hidden-level feature matching distance, or None when the
+                model did not produce it. Has effect only when both the
+                config flag ``use_feature_matching`` is True AND ``fm`` is
+                a non-None array.
 
         Returns:
-            Combined anomaly scores
-
-        Scoring formula (adaptive mode):
-            scaled_disc = disc * (recon.mean() / disc.mean())
-            scaled_fm   = fm   * (recon.mean() / fm.mean())
-            student_error = (w_disc * scaled_disc + w_fm * scaled_fm) / (w_disc + w_fm)
-            score = recon + student_error
+            Combined anomaly score (same shape as ``recon``).
         """
+        from .scoring import (
+            compute_adaptive_point_score,
+            compute_default_score,
+            compute_ratio_weighted_score,
+        )
         if scoring_mode == 'adaptive':
-            recon_mean = recon.mean() + 1e-4
-
-            # Resolve eval weights (-1 = use training weights)
-            w_disc = getattr(self.config, 'eval_disc_weight', -1.0)
-            w_fm = getattr(self.config, 'eval_fm_weight', -1.0)
-            if w_disc < 0:
-                w_disc = 1.0
-            if w_fm < 0:
-                w_fm = getattr(self.config, 'fm_loss_weight', 1.0)
-            # OD disabled → exclude untrained disc from scoring
-            if not getattr(self.config, 'use_output_discrepancy', True):
-                w_disc = 0.0
-
-            # Scale disc to recon's scale
-            scaled_disc = disc * (recon_mean / (disc.mean() + 1e-4))
-
-            if fm is not None and getattr(self.config, 'use_feature_matching', False):
-                # Scale FM to recon's scale
-                scaled_fm = fm * (recon_mean / (fm.mean() + 1e-4))
-                if w_disc + w_fm > 0:
-                    student_error = (w_disc * scaled_disc + w_fm * scaled_fm) / (w_disc + w_fm)
-                else:
-                    student_error = np.zeros_like(recon)
-            elif w_disc > 0:
-                student_error = scaled_disc
-            else:
-                # Both OD and FM disabled — teacher recon only
-                student_error = np.zeros_like(recon)
-
-            return recon + student_error
-        elif scoring_mode == 'ratio_weighted':
-            disc_median = np.median(disc) + 1e-4
-            return recon * (1 + disc / disc_median)
-        else:  # default
-            return recon + self.config.lambda_disc * disc
+            return compute_adaptive_point_score(recon, disc, fm, self.config)
+        if scoring_mode == 'ratio_weighted':
+            return compute_ratio_weighted_score(recon, disc, self.config)
+        return compute_default_score(recon, disc, self.config)
 
     def _get_aggregation_map(self):
         """Get cached aggregation map (geometry-only, scoring-mode independent)."""
@@ -1597,9 +1592,23 @@ class Evaluator:
 
                 # Process patches in batches for memory efficiency
                 # Memory per forward: batch_size * patch_batch_size * seq_len * features * 4 bytes
-                # Reduce patch_batch_size for d_model>256 to prevent GPU OOM on large test sets (SWaT/WaDi)
+                # 2026-05-28: HARD-LOCKED to 2. Earlier attempts at pb=4/6/8 caused
+                # memory-bandwidth-bound OOM-stall on large d_model datasets (WaDi/PSM):
+                # GPU util showed 100% but mem-bw dropped to ~2% and power dropped to ~100W
+                # (vs 300W+ at pb=2), inflating eval cost from ~30s to >10 min per eval.
+                # The "GPU dip" pb=8 was meant to fix turned out to be the patch_score loop
+                # iterating with too many in-flight tensors for HBM bandwidth on d_model>256.
+                # pb=2 keeps per-iter working set small enough for the memory controller.
+                # Note: patch_batch_size is a pure batching parameter — does NOT affect
+                # numerical results (each patch is masked independently, results stored per-patch).
+                # Env override TSMAE_PATCH_BATCH still respected for ablation only — DO NOT
+                # use values > 2 in production runs.
                 _use_complementary = getattr(self.config, 'eval_complementary_masking', False)
-                patch_batch_size = min(num_patches, 2 if self.config.d_model > 256 else 10)
+                _pb_override = int(os.environ.get('TSMAE_PATCH_BATCH', '0') or 0)
+                if _pb_override > 0:
+                    patch_batch_size = min(num_patches, _pb_override)
+                else:
+                    patch_batch_size = min(num_patches, 2)
                 batch_recon_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
                 batch_disc_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
                 batch_student_recon_patches = torch.zeros(batch_size, num_patches, device=self.config.device)
@@ -2033,12 +2042,21 @@ class Evaluator:
         self._cache[cache_key] = results
         return results
 
-    def evaluate(self) -> Dict[str, float]:
+    def evaluate(self, *, also_excl22: bool = False, lite: bool, executor=None) -> Dict[str, float]:
         """Evaluate and return metrics at point-level.
 
         All metrics (including PA%K) use mean-aggregated point-level scores.
         PA%K F1/Precision/Recall use the point-level optimal threshold.
         PA%K ROC-AUC/PRC-AUC sweep thresholds on continuous mean scores.
+
+        Args:
+            also_excl22: if True and dataset has SWaT-style large region (Region 22),
+                ALSO compute excl22-masked metrics in the same eval pass. Returned
+                dict will contain BOTH full-mode keys AND `excl22_*`-prefixed keys
+                (e.g. `excl22_pak_auc_f1`, `excl22_prc_auc`, `excl22_f1_t`, ...).
+                Extra cost: ~5-7s/call (one more lite metric set on masked region).
+                Only meaningful for SWaT — silently no-op if no large region found.
+                Designed for monitoring dual eval during training (2026-05-27).
         """
         score_mode = self.config.anomaly_score_mode
         cached = self._get_cached_scores()
@@ -2059,12 +2077,34 @@ class Evaluator:
         point_scores = _aggregate_with_map(patch_scores.ravel(), flat_t, flat_wp, coverage, covered, total_len, method='mean')
         point_scores = np.nan_to_num(point_scores, nan=0.0)
 
-        # === Single-source metric set (PA%K + AUC + VUS/Aff/RF1 + AR variants) ===
+        # === Single-source metric set (PA%K + AUC + Aff/RF1 + AR variants; VUS skipped) ===
+        # lite=True: skip VUS (~40s/call on 225K-point high-unique-value scores).
+        # Per-epoch eval runs every 5 epochs during training — VUS makes training
+        # I/O-bound and inflates bg-worker scan loop. VUS is recomputed offline
+        # for the final best epoch via _final_eval_with_vus() (see below).
         # See compute_full_metric_set() docstring for the full key schema.
         anomaly_regions = self.test_dataset.anomaly_regions
         eval_mask = np.ones(total_len, dtype=bool)
-        results = compute_full_metric_set(point_scores, pt_labels, anomaly_regions, eval_mask)
+        results = compute_full_metric_set(point_scores, pt_labels, anomaly_regions, eval_mask, lite=lite)
         threshold = results.get('optimal_threshold', 0.0)
+
+        # === SWaT excl22 dual eval (2026-05-27) ===
+        # When also_excl22=True and a large region (Region 22) exists, also compute
+        # metrics with that region masked out. Merge into results with `excl22_` prefix.
+        # No-op if dataset has no large region (e.g., WaDi, PSM).
+        if also_excl22:
+            largest = find_swat_largest_region(anomaly_regions)
+            if largest is not None:
+                excl22_results = compute_metrics_with_exclusion(
+                    point_scores, pt_labels, anomaly_regions, largest, lite=lite
+                )
+                if excl22_results:  # non-empty (region had distinct labels)
+                    for k, v in excl22_results.items():
+                        if not k.startswith('_'):  # skip diagnostic underscore-prefixed keys
+                            results[f'excl22_{k}'] = v
+                    results['excl22_region_start'] = int(largest.start)
+                    results['excl22_region_end'] = int(largest.end)
+                    results['excl22_region_length'] = int(largest.end - largest.start)
 
         # Disturbing normal performance (window-level, descriptive)
         # sample_type: 0=pure_normal, 1=disturbing_normal, 2=anomaly
@@ -2095,7 +2135,7 @@ class Evaluator:
 
         return results
 
-    def evaluate_by_score_type(self, score_type: str) -> Dict[str, float]:
+    def evaluate_by_score_type(self, score_type: str, *, lite: bool, executor=None) -> Dict[str, float]:
         """Evaluate using a single score component at point-level.
 
         Same point-level logic as evaluate() but with an individual score component.
@@ -2125,10 +2165,12 @@ class Evaluator:
         point_scores = _aggregate_with_map(patch_scores.ravel(), flat_t, flat_wp, coverage, covered, total_len, method='mean')
         point_scores = np.nan_to_num(point_scores, nan=0.0)
 
-        # === Single-source metric set (see compute_full_metric_set docstring) ===
+        # === Single-source metric set (lite — skip VUS by default; see compute_full_metric_set docstring) ===
+        # 2026-05-28: lite is now a parameter. Default lite=True for per-epoch usage
+        # (VUS too expensive). Final bg-worker eval passes lite=False to populate VUS.
         anomaly_regions = self.test_dataset.anomaly_regions
         eval_mask = np.ones(total_len, dtype=bool)
-        results = compute_full_metric_set(point_scores, pt_labels, anomaly_regions, eval_mask)
+        results = compute_full_metric_set(point_scores, pt_labels, anomaly_regions, eval_mask, lite=lite)
         return results
 
 
@@ -2136,14 +2178,43 @@ class Evaluator:
 # SWaT Region 22 Exclusion Metrics
 # =============================================================================
 
-def find_swat_largest_region(anomaly_regions):
-    """Find the largest anomaly region (the problematic region 22 in SWaT)."""
+def find_swat_region_22(anomaly_regions):
+    """Return SWaT attack ID 22 region (hard-coded identification, no heuristic).
+
+    SWaT A1+A2 dataset properties (2026-05-27 verified):
+    - In test split (back 50% of A2), there are 14 anomaly regions.
+    - **anomaly_regions[0] in time-sorted order IS SWaT attack ID 22.**
+    - Region 22 spans test-local coords ~[2869, 38769), length ~35,900 points
+      (~84% of all test anomaly points — dominant region).
+    - This is a fixed property of the SWaT dataset, not a heuristic.
+
+    Sanity check: length ≥ 30000 confirms SWaT (no other supported dataset has
+    a single region this large). Returns None for non-SWaT datasets so callers
+    can silently skip excl22 evaluation.
+
+    Args:
+        anomaly_regions: list of AnomalyRegion (test-local coordinates).
+
+    Returns:
+        AnomalyRegion for SWaT attack ID 22, or None if non-SWaT.
+    """
     if not anomaly_regions:
         return None
-    return max(anomaly_regions, key=lambda r: r.end - r.start)
+    # SWaT region 22 is always the first region in time-sorted order
+    sorted_regions = sorted(anomaly_regions, key=lambda r: r.start)
+    candidate = sorted_regions[0]
+    # Sanity check: SWaT region 22 length ≥ 30000 (actual: 35900 in test split)
+    if (candidate.end - candidate.start) >= 30000:
+        return candidate
+    return None
 
 
-def compute_metrics_with_exclusion(point_scores, pt_labels, anomaly_regions, excl_region):
+# Backward-compat alias (deprecated; will be removed after callers updated)
+find_swat_largest_region = find_swat_region_22
+
+
+def compute_metrics_with_exclusion(point_scores, pt_labels, anomaly_regions, excl_region,
+                                   lite: bool = False):
     """Compute full metrics excluding a specific anomaly region.
 
     Args:
@@ -2151,6 +2222,9 @@ def compute_metrics_with_exclusion(point_scores, pt_labels, anomaly_regions, exc
         pt_labels: (total_len,) binary labels
         anomaly_regions: list of AnomalyRegion (test-local coordinates)
         excl_region: AnomalyRegion to exclude (test-local coordinates)
+        lite: if True, skip VUS/Affiliation/R-F1/AR metrics for fast per-epoch
+            scanning. Use only for best-epoch selection. Best epoch must be
+            recomputed with lite=False to obtain full metric set.
 
     Returns:
         dict of metrics computed with eval_mask
@@ -2171,4 +2245,4 @@ def compute_metrics_with_exclusion(point_scores, pt_labels, anomaly_regions, exc
                         if not (r.start == excl_region.start and r.end == excl_region.end)]
 
     # === Single-source metric set (see compute_full_metric_set docstring) ===
-    return compute_full_metric_set(point_scores, pt_labels, filtered_regions, eval_mask)
+    return compute_full_metric_set(point_scores, pt_labels, filtered_regions, eval_mask, lite=lite)

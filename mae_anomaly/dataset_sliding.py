@@ -1098,6 +1098,14 @@ class SlidingWindowDataset(Dataset):
 
         # Epoch offset for train augmentation
         self._epoch_offset = 0
+        # Length stabilization (2026-05-29):
+        # epoch_offset=True changes len(window_start_indices) by ±1 between
+        # epochs. main process's RandomSampler uses updated len(dataset), but
+        # persistent DataLoader workers hold stale dataset state from epoch 0
+        # → IndexError when sampler returns idx == stale_len_minus_1 + 1.
+        # Fix: lock length to first-call (offset=0) value via truncate or
+        # repeat-pad after every _extract_windows() call.
+        self._n_windows_fixed = None
 
         # Extract windows
         self._extract_windows()
@@ -1165,6 +1173,39 @@ class SlidingWindowDataset(Dataset):
             sample_types.append(sample_type)
             anomaly_type_labels.append(anomaly_type)
             window_start_indices.append(start)
+
+        # === Length stabilization (2026-05-29) ===
+        # See __init__ comment. Lock len to first-call value so DataLoader
+        # workers (num_workers>0, persistent_workers=True) holding stale
+        # dataset state cannot get OOB indices from RandomSampler.
+        n_new = len(window_start_indices)
+        if self._n_windows_fixed is None:
+            # First call → canonical length is whatever offset=0 produced.
+            self._n_windows_fixed = n_new
+        else:
+            n_fixed = self._n_windows_fixed
+            if n_new > n_fixed:
+                # Trim to canonical length (drop last few windows).
+                seq_labels = seq_labels[:n_fixed]
+                sample_types = sample_types[:n_fixed]
+                anomaly_type_labels = anomaly_type_labels[:n_fixed]
+                window_start_indices = window_start_indices[:n_fixed]
+            elif n_new < n_fixed:
+                # Pad by repeating last entry. This duplicates an existing
+                # window (NOT fake data), keeping len(dataset) constant for
+                # the RandomSampler ↔ worker contract.
+                if n_new == 0:
+                    raise RuntimeError(
+                        f"_extract_windows produced 0 windows at "
+                        f"offset={self._epoch_offset}, series_length="
+                        f"{series_length}, window_size={self.window_size}"
+                    )
+                pad_n = n_fixed - n_new
+                seq_labels.extend([seq_labels[-1]] * pad_n)
+                sample_types.extend([sample_types[-1]] * pad_n)
+                anomaly_type_labels.extend([anomaly_type_labels[-1]] * pad_n)
+                window_start_indices.extend([window_start_indices[-1]] * pad_n)
+        # === END length stabilization ===
 
         self.seq_labels = np.array(seq_labels, dtype=np.int64)
         self.sample_types = np.array(sample_types, dtype=np.int64)

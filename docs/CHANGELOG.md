@@ -1,5 +1,126 @@
 # Changelog
 
+## 2026-05-29: Bg-worker CPU throttle + epoch dashboard VUS-completeness fix
+
+### Problem (관측됨)
+1. SWaT 종료 후 spawn 되는 2개 bg-worker (full + excl22) 가 16-core 시스템에서 **합산 13-14 cores 잠식** → 다음 dataset (WaDi/A1) main process 의 dataloader 가 starve → batch speed **4-6x 저속**. GPU util 1-12% 로 idle 상태 지속.
+2. SWaT epoch_dashboard.png 에 **VUS-PR / VUS-ROC 컬럼이 비어있음**. 사용자가 dashboard 를 본 시점에 VUS sweep 이 아직 안 끝난 상태였기 때문.
+
+### Root causes (코드 단위)
+1. **잘못된 affinity hardcode** [run_base_experiments.py:1523](scripts/run_base_experiments.py#L1523) (기존):
+   ```python
+   os.sched_setaffinity(0, set(range(16, 24)))  # 24+ cores 가정
+   ```
+   16-core 시스템에서 `range(16, 24)` 가 존재 안 함 → Exception 발생 → `except: pass` 로 silent 실패 → bg-worker 가 16 cores 전체 사용.
+2. **OMP_NUM_THREADS env 가 import 뒤에 설정** [L1517-1521] → matplotlib import 시점에 numpy/OpenBLAS 가 이미 16-thread pool 캐시 → env 무시.
+3. **VUS sweep max_workers=4 hardcoded** [L1987], **EXCL22 pool default 8** [L1742] — 2 bg-worker 병렬 + 각 내부 4-8 sub-worker × OpenBLAS 16-thread = 무제한.
+4. **L2702 main process 가 dashboard 렌더 → bg-worker 가 재렌더** — 2 render 사이에 user 가 보면 VUS 없음.
+
+### Fixes
+- [run_base_experiments.py:1511-1546] `_cpu_eval_viz_worker` 함수 첫 라인에서 OMP/MKL/OPENBLAS/NUMEXPR `NUM_THREADS=2` 설정, **matplotlib import 이전**. 이후 `torch.set_num_threads(2)`.
+- [L1538-1545] Dynamic affinity: `n_bg = max(2, cpu_count() // 4)` → 16c → 4 cores, 24c → 6 cores, 32c → 8 cores. 최소 2 cores 보장.
+- [L1765] `TSMAE_EXCL22_WORKERS` default 8 → 2.
+- [L2020] `TSMAE_VUS_WORKERS` env 신설, default 2 (was hardcoded 4).
+- [L2032-2065] VUS sweep `try-except-finally` 로 변경: 성공/실패 어느 경우든 finally block 에서 dashboard 1회 렌더링. `with VUS` / `VUS missing` 로 상태 log.
+- [L2755-2758] Main process 의 `plot_epoch_metrics()` 호출 제거. feature_stats viz 만 유지. dashboard 는 bg-worker 가 단일 source.
+
+### Effect (16c 기준 예상)
+| 항목 | 이전 | 이후 |
+|---|---|---|
+| bg-worker affinity | 미적용 (16/16) | **4 cores (12-15)** |
+| bg-worker 1 CPU | ~7 cores | **~4 cores** (max_workers=2 × OMP=2) |
+| bg-worker 2 CPU (SWaT excl22) | ~6 cores | **~4 cores** (둘이 같은 4 core pool 공유) |
+| main spare during bg-worker | 1-2 cores | **~12 cores** |
+| Next dataset (WaDi/A1) speed | 5-6x baseline | **baseline 도달 (15-25 s/ep)** |
+| bg-worker 완료 time | ~25 min | ~50-60 min (2-3x ↑, main 영향 0) |
+| Dashboard with VUS | TIMING race (재렌더 전 보면 빈 VUS) | **VUS sweep 완료 후 단일 렌더 → 항상 VUS 포함** |
+
+### Verification
+- syntax + import 검증 ✓ ([scripts/run_base_experiments.py](scripts/run_base_experiments.py) parses)
+- Smoke test (sim 5 ep): bg-worker PID `affinity=[12-15]` 정확 ✓, "epoch_dashboard.png will be rendered by bg-worker after VUS sweep" 로그 정확 ✓
+- 큐 재시작 (TS=20260529_054522): SWaT_A1A2 ep 4 @ 5.7 it/s 정상 ✓
+- 백업: `.trash/0529/cpu_throttle_053048/run_base_experiments.py.original`
+
+### Env override (사용자 자원에 따른 fine-tune)
+```bash
+export TSMAE_VUS_WORKERS=4         # 빠른 host 에서 sweep 가속
+export TSMAE_EXCL22_WORKERS=4      # 동상
+export OMP_NUM_THREADS=4           # bg-worker per-process OpenBLAS thread cap (default 2 in bg-worker)
+```
+
+---
+
+## 2026-05-29: Forward-skip warmup optimization + log-line recon/dis explicit fields
+
+### Forward-skip optimization (`model.py`, `trainer.py`, `loss.py`)
+- 새 파라미터 `teacher_only: bool = False` 를 `SelfDistilledMAEMultivariate.forward()` 에 추가. True 일 때 student decoder + student output projection + GRL classifier + SCAD head 의 forward pass 를 통째로 skip. 기존 동작상 이 출력들은 `if not teacher_only` gate (loss.py:196, trainer.py:597/620/704) 안에서만 소비되어 warmup 중에는 backward 에 기여하지 않는 dead compute 였음.
+- `trainer.py:517` 가 train step 마다 `teacher_only=(epoch < warmup)` 로 전달 → warmup 50% 구간에서 transformer forward 약 22% 절감, **dataset 당 ~3.5-5 분 / queue 23 entry × 4 dataset 기준 총 5-8 시간 절감 예상**.
+- `loss.py:179-187`: `student_output is None` 시 student recon metric 을 0.0 sentinel 로 반환. 다른 loss 경로 (FM/GRL/SCAD/discrepancy) 는 모두 이미 `not teacher_only` gate 가 있어 변경 불필요.
+- `model.py:1078-1086`: skip 분기에서 `self._student_hidden / _grl_cls_logits / _scad_z` 를 명시적으로 None 으로 클리어 → 다음 batch 에서 stale 값 읽힘 방지.
+- **검증**: smoke test (sim, 5 epoch, warmup=2) 통과. ep 1,2 (warmup): `recon_s=0, dis=0` (skip 모드 동작). ep 3,4,5 (post-warmup): `recon_s, dis` 정상 측정. 모든 viz 및 VUS sweep 정상 생성, COMPLETE 라인 정상 emit.
+- Backward compat: default False 이므로 evaluator (eval mode 시 student 정상 forward) / training_visualizer / 외부 caller 영향 없음. 현재 진행 중인 entry 는 import 시점 모듈 사용 → 영향 없음. 274 entry 부터 자동 적용.
+- 백업: `.trash/0529/forward_skip_warmup_041531/`
+
+### Log-line recon/dis explicit fields (`run_base_experiments.py`)
+- per-epoch eval 라인과 dataset COMPLETE 요약 라인에 신규 3 필드 추가:
+  - `recon_t` = `train_teacher_recon_normal` (teacher 단독 recon, normal 샘플 평균)
+  - `recon_s` = `train_student_recon_normal` (student 단독 recon — warmup 중 0)
+  - `dis` = `train_disc_loss` (output discrepancy — `s_loss` 와 동일 값, 명확한 이름)
+- 기존 `t_loss / s_loss` 는 misleading legacy alias 로 backward-compat 유지 (각각 joint recon, discrepancy 의미). 의미 명확화 위해 신규 코드/문서/모니터에서는 `recon_t / recon_s / dis` 사용 권장.
+- 백업: `.trash/0529/log_line_change_035408/`
+
+### Parser hardening (`monitor_status.py`)
+- `RE_EVAL_NEW` regex 에 nan/inf 대응 atom (`NUM`) + 신규 3 필드 optional capture 추가. 단일 nan 값으로 인한 전체 eval 라인 drop 방지.
+- 매칭 실패 시 `parse_warnings` stderr 출력 — 빈칸의 원인을 추적 가능.
+
+### `recon_snr` + Option B disc_snr annotation
+- 로그 라인에 `recon_SNR` 신규 필드 추가 (per-epoch eval + COMPLETE summary). Teacher-only recon 의 anomaly/normal 분리도 — `(recon_anomaly_mean − recon_normal_mean) / (σ_a + σ_n + ε)`. `disc_snr` 의 student-teacher 쌍 (Cohen's-d 형).
+- Pre-warmup 시 `disc_snr` 은 학습 안된 student 의 측정값이라 anomaly detection signal 로 해석 misleading (구체적으로: discrepancy = (teacher − random_student)² ≈ teacher_output² → normal 의 teacher output 크기에 좌우). 음수가 나오는 게 정상.
+- Option B 적용: pre-warmup row 의 `disc_snr` 값 옆에 ⚠️ + 표 하단 footnote 1회 (값은 그대로 표기 — student-joining 전환점 (음수→양수) 추적 보존).
+- `recon_snr` 은 teacher-only 분리도라 pre-warmup 에서도 의미 그대로.
+- `monitor_status.py` regex 에 optional `recon_SNR=({NUM})` 추가, group renumbering, legacy 호환.
+- SKILL.md/set_guideline.md comparison table 12 → 13 columns (diag 1 → 2).
+
+### Documentation
+- `set_guideline.md`: training loss 표를 "정확한 의미" 컬럼 포함 6 행 표 (legacy + 신규 + d_loss) 로 정정. 보고용 dataset 결과 테이블의 `t_loss / s_loss` 컬럼을 `recon_t / recon_s / dis` 로 교체.
+- `.claude/skills/training-status/SKILL.md`: Family table 에 Training loss row 추가, Comparison table 컬럼 13개 (recon_snr + loss 3개), SWaT dual-eval 시 2-table format 명시, no-blank rule + 5종 합법 사례 절차적 enforcement, Option B disc_snr annotation 룰.
+
+---
+
+## 2026-05-29: FM-score consistency refactor + KEEP_CHECKPOINT_DATASETS + 3x3 epoch dashboard + auto test stride
+
+대규모 refactor — 2026-05-28 식별된 FM-score 누락 버그의 근본 원인 (인라인 9곳 중복 + 데이터 컨테이너 silent key drop + Optional default 패턴) 을 전수 차단. 자세한 post-mortem 은 `docs/POST_MORTEMS/2026-05-29_fm_score_omission.md` 참조.
+
+### Phase 1 — Single-source scoring (`mae_anomaly/scoring.py` 신설)
+- 모든 anomaly score 공식 (adaptive, default, ratio_weighted) 을 단일 모듈 `mae_anomaly/scoring.py` 로 통합. 이전 코드에 인라인 9곳 ({evaluator, run_base_experiments × 3, visualization/base × 2, visualization/best_model_visualizer × 3}) 에 흩어져 있던 식들을 모두 `compute_adaptive_components` / `compute_adaptive_point_score` / `compute_score` 단일 함수 호출로 교체.
+- `ADAPTIVE_SCORE_EPSILON = 1e-4` 로 epsilon 통일 (이전엔 1e-4 와 1e-8 혼용 → 미세 결과 drift).
+- `resolve_score_weights(config)` 가 `eval_disc_weight`, `eval_fm_weight`, `fm_loss_weight`, `use_output_discrepancy`, `use_feature_matching` 의 default 해석을 한 곳에서 처리. Config dataclass 와 dict (bg-worker spawn 후) 모두 지원.
+- doctest 10/10 통과 + `temp/0529/test_scoring_equivalence.py` 10/10 통과 (canonical path byte-equal).
+
+### Phase 2 — `PatchScoresBundle` dataclass (`mae_anomaly/types.py` 신설)
+- patch-level 추론 출력의 단일 typed container. `fm` 은 명시적 `Optional[ndarray]` 필드로, 호출자가 누락할 수 없음 (2026-05-28 FM 누락 버그의 구조적 차단).
+- `from_eval_data(eval_data)` / `from_patch_scores_dict(ps)` 두 classmethod 로 기존 dict 흐름 통합. `Evaluator.set_precomputed_patch_scores` 는 이제 bundle 만 받음 (Optional kwarg 없음). bg-worker pickle 호환 검증 (26 KB roundtrip OK).
+
+### Phase 3 — API hygiene (kw-only required)
+- `Evaluator.evaluate(*, lite, also_excl22=False)`, `Evaluator.evaluate_by_score_type(score_type, *, lite)`, `compute_full_metric_set(..., *, lite)`, `compute_extra_metrics(..., *, skip_vus)` 모두 `lite` 등을 keyword-only required 로 변경. positional 전달이나 default fallback 으로 silent 동작 분기 차단.
+
+### Phase 4 — `KEEP_CHECKPOINT_DATASETS`
+- `SWaT_A1A2`, `WaDi_A1`, `WaDi_A2`, `PSM` 4개 base dataset 에 한해 학습 종료 후 `best_model.pt`, `best_checkpoint.pt`, `latest_checkpoint.pt` 자동 보존. SWaT 의 excl22 best 도 함께. 다른 dataset (simulation, SMD × 28, Exathlon × 6) 은 기존 delete-after-inference 유지하여 디스크 사용 제한. 환경변수 `KEEP_BEST_CKPT=1` 도 그대로 동작.
+
+### Phase 5 — 3x3 epoch_dashboard + bg-worker VUS sweep
+- `plot_epoch_metrics` 의 dashboard 가 2x3 → 3x3 으로 확장. 새 패널 3개: VUS-PR, VUS-ROC, Range-based F1 (Affiliation-F1 + R-based F1).
+- VUS 는 per-epoch 평가에서 계산 비용이 커서 학습 중에는 lite=True 로 skip. 학습 종료 후 bg-worker 가 모든 저장된 `epoch_NNN_scores.npz` 에 대해 `ProcessPoolExecutor(max_workers=4)` 병렬로 VUS sweep 후 `epoch_metrics.json` 갱신 및 dashboard 재렌더.
+- 예상 sweep 시간 (병렬 4): SWaT 17min, WaDi 2min, PSM 4min. 메인 프로세스 GPU 학습과 무관 (CPU only) → 다음 dataset 학습 즉시 시작 가능. 실패 시 zero-filled bottom row 로 폴백.
+
+### Phase 6 — 추론 stride 자동화
+- `Config.sliding_window_test_stride` default 가 21 → −1 (sentinel) 로 변경. `mae_anomaly/utils/experiment.py:resolve_test_stride(config)` 가 sentinel 을 받으면 `num_patches − 1` 로 해석. 양수 override 는 그대로. Set C (num_patches=50) 기준 자동값 49.
+- 4 call sites (run_base_experiments × 2, viz × 2) 모두 helper 경유로 통일.
+
+### 위험·검증
+- 매 Phase 끝 byte-equal 검증 (Phase 1: 0.0 diff for canonical / NPZ-save / dict-config 경로; Phase 2: bundle pickle roundtrip OK; Phase 3: kw-only required TypeError 강제 동작 확인).
+- 회귀 test `temp/0529/test_scoring_equivalence.py` 가 모든 Phase 후에도 10/10 통과 유지.
+- 검증 학습 (sim 5 ep + SWaT 10 ep) 으로 end-to-end 동작 확인 후 산출 dir 삭제.
+
 ## 2026-05-26: Comparison boundary-safe predicate 를 MAE-strict 형태로 통일 (effective span = window + target)
 
 **Predicate 표기 통일 (numerical 결과 0 영향)** — `<= end` 표기를 `< end_eff` (where `end_eff = i + seq_len + 1`) 로 변경. `b <= X` ⇔ `b < X + 1` 정수 동치에 의해 algebraically 같으나, 표기 형태가 MAE 의 `start < b < end` 와 글자 그대로 동일해짐. Effective span 을 `(window, target)` 결합 = `seq_len + 1` 로 정의하여 next-step target boundary leak 까지 자동 차단.

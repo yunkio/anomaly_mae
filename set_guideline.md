@@ -32,7 +32,22 @@ Claude용 참조 문서. 실험 재현/새 실험 지시 시 사용.
 | `cnn_kernel_size` | 3 | 5 | - (linear) |
 | `patchify_mode` | patch_cnn | patch_cnn | **linear** |
 
-공통: `seq_length=500, enc2, td4, sd1, epochs=50, lr=1e-3, batch_size=512, sliding_window_stride=21, sliding_window_test_stride=21, mask_after_encoder=True, anomaly_score_mode=adaptive, use_amp=True, use_discriminator=False`
+공통: `seq_length=500, enc2, td4, sd1, epochs=50, lr=1e-3, batch_size=512, sliding_window_stride=21, sliding_window_test_stride=-1 (= num_patches-1, Phase 6 2026-05-29), mask_after_encoder=True, anomaly_score_mode=adaptive, use_amp=True, use_discriminator=False`
+
+### Anomaly score 공식 위치 (Phase 1 2026-05-29)
+- **모든 score 공식은 `mae_anomaly/scoring.py` 에만 존재**. 인라인 중복 금지.
+- adaptive 공식 수정 시 `compute_adaptive_components` / `compute_adaptive_point_score` 만 수정.
+- `ADAPTIVE_SCORE_EPSILON = 1e-4` 단일 epsilon. 추가 epsilon 도입 금지.
+- caller 패턴: `from mae_anomaly.scoring import compute_score; score = compute_score(recon, disc, fm, config)`.
+
+### Patch-level 데이터 흐름 (Phase 2 2026-05-29)
+- patch-level 추론 출력은 `mae_anomaly.types.PatchScoresBundle` dataclass 로만 전달.
+- `Evaluator.set_precomputed_patch_scores(bundle)` 는 bundle 만 받음 (kwargs 형태 호출 차단).
+- 새 필드 추가 시 bundle 자체 확장 + classmethod (`from_eval_data`, `from_patch_scores_dict`) 갱신.
+
+### Checkpoint 보존 정책 (Phase 4 2026-05-29)
+- `KEEP_CHECKPOINT_DATASETS = {SWaT_A1A2, WaDi_A1, WaDi_A2, PSM}` 에 속한 dataset 은 학습 종료 후 `best_model.pt + best_checkpoint.pt + latest_checkpoint.pt` 자동 보존 (SWaT 는 excl22 best 도 보존). 외에 environment `KEEP_BEST_CKPT=1` 도 동작.
+- 다른 dataset (simulation, SMD × 28, Exathlon × 6) 은 기존 cleanup 유지하여 디스크 부담 제한.
 
 ### Set C: Dynamic d_model 규칙
 
@@ -203,27 +218,39 @@ Bash tool의 `run_in_background` 파라미터로 백그라운드 실행하고, `
 | 2 | **PAK_AUC_F1** | Adaptive의 PA%K F1 AUC (K=0→100 sweep) — **best epoch 선정 기준** |
 | 3 | **PAK_AUC_PRC** | Adaptive의 PA%K PRC AUC (K=0→100 sweep) |
 | 4 | **F1_T** | Adaptive의 Time-series F1 (QuoVadisTAD) |
-| 5 | **d_SNR** | Discrepancy loss의 SNR |
+| 5 | **dis_snr** (구 `d_SNR` / `disc_snr`) | Discrepancy SNR — `(disc_a − disc_n) / (σ_a + σ_n + ε)`. Cohen's-d 형 effect size. 양수 = anomaly higher (정상). **Pre-warmup 시 `-`** (학습 안된 student 측정 — Option C 마스킹) |
+| 6 | **re_snr** (구 `recon_SNR`) | Teacher recon SNR — `(recon_a − recon_n) / (σ_a + σ_n + ε)`. Teacher 단독 분리도. Pre-warmup 에서도 real value. 2026-05-29 신규 |
 
-**학습 Loss (2+1개)**:
+**학습 Loss (legacy 2개 + 명확한 신규 3개 + 선택 1개) — 2026-05-29 정정**:
 
-| 항목 | 설명 |
-|------|------|
-| **t_loss** | Teacher reconstruction loss (`train_rec_loss`) |
-| **s_loss** | Student discrepancy loss (`train_disc_loss`) |
-| **d_loss** | Discriminator loss — `use_discriminator=True`일 때만 출력 |
+| 항목 | History key | 정확한 의미 | 비고 |
+|------|------|------|------|
+| **t_loss** (legacy) | `train_rec_loss` | **joint reconstruction loss** (teacher + student 결합) | ⚠️ 이름이 misleading — "teacher loss" 아님. 가독성을 위해 `recon_t` 사용 권장 |
+| **s_loss** (legacy) | `train_disc_loss` | **output discrepancy** (teacher↔student 출력 차이) | ⚠️ 이름이 misleading — "student loss" 아님. `dis` 와 동일 값 |
+| **re_t** (구 `recon_t`, 2026-05-29) | `train_teacher_recon_normal` | **teacher 단독** recon error (normal 샘플 평균) | pre-warmup 에서도 real value |
+| **re_s** (구 `recon_s`, 2026-05-29) | `train_student_recon_normal` | **student 단독** recon error (normal 샘플 평균) | **Pre-warmup 시 `-`** — forward-skip optimization (model.forward(teacher_only=True) 가 warmup 중 student decoder skip → 0 sentinel → 표시 `-`). ~22% transformer forward compute 절감 |
+| **dis** (= `s_loss` alias) | `train_disc_loss` | output discrepancy | **Pre-warmup 시 `-`** — loss.py:196 `if not teacher_only` block 안에서만 계산 → warmup 중 0 → 표시 `-` |
+| **dis** (2026-05-29 신규) | `train_disc_loss` | output discrepancy (s_loss 의 alias, 가독성용) | s_loss 와 항상 동일 값 |
+| **d_loss** | `train_d_loss` | discriminator loss — `use_discriminator=True` 일 때만 |  |
+
+> ℹ️ 변수명 `t_loss` / `s_loss` 는 코드 진화 과정에서 의미가 변했지만 backward-compat 위해 유지됨. 새 코드/문서/모니터에서는 **`recon_t` / `recon_s` / `dis`** 를 사용.
 
 **SWaT 특수 처리**: SWaT 데이터셋은 region 22가 테스트 데이터의 ~16%를 차지하여 성능을 왜곡함. 따라서 SWaT의 모니터링 메트릭은 `metrics_excl_region22` (experiment_metadata.json)에서 추출한다.
 
-출력 예시:
+출력 예시 (2026-05-29 신규 포맷):
 ```
-# discriminator OFF
-[base_simulation] [1/4] COMPLETE: PRC=0.9550 PAK_AUC_F1=0.8225 PAK_AUC_PRC=0.8488 F1_T=0.8991 | d_SNR=1.23 t_loss=0.0312 s_loss=0.0045 | best_ep=30
-# discriminator ON
-[base_simulation] [1/4] COMPLETE: PRC=0.9550 PAK_AUC_F1=0.8225 PAK_AUC_PRC=0.8488 F1_T=0.8991 | d_SNR=1.23 t_loss=0.0312 s_loss=0.0045 d_loss=0.6543 | best_ep=30
+# per-epoch eval (every 5 epochs)
+[Epoch 25] PRC=0.9550 F1=0.85 F1_T=0.30 PAK_F1=0.8225 PAK_PRC=0.8488 AFF_F1=0.75 RF1=0.16 VUS_PR=0 VUS_ROC=0 d_SNR=1.23 recon_SNR=0.95 | t_loss=0.0312 s_loss=0.0045 recon_t=0.0298 recon_s=0.0000 dis=0.0045 (infer=11s eval=10s) [async]
+
+# dataset COMPLETE summary (discriminator OFF)
+[base_simulation] [1/4] COMPLETE: PRC=0.9550 PAK_AUC_F1=0.8225 PAK_AUC_PRC=0.8488 F1_T=0.8991 | d_SNR=1.23 recon_SNR=0.95 t_loss=0.0312 s_loss=0.0045 recon_t=0.0298 recon_s=0.0050 dis=0.0045 | best_ep=30
+# dataset COMPLETE summary (discriminator ON)
+[base_simulation] [1/4] COMPLETE: ... | d_SNR=1.23 recon_SNR=0.95 t_loss=0.0312 s_loss=0.0045 recon_t=0.0298 recon_s=0.0050 dis=0.0045 d_loss=0.6543 | best_ep=30
 ```
 
-- **epoch callback**: `PRC`, `PAK_F1`, `PAK_PRC`, `F1_T`, `d_SNR`, `t_loss`, `s_loss` (+`d_loss`) 출력
+> 이전 (pre-2026-05-29) 로그 포맷에는 `recon_t / recon_s / dis / recon_SNR` 가 없음 (exp271 SWaT 등). 파서는 backward-compat 유지.
+
+- **epoch callback**: `PRC`, `F1`, `F1_T`, `PAK_F1`, `PAK_PRC`, `AFF_F1`, `RF1`, `VUS_PR`, `VUS_ROC`, `d_SNR`, `recon_SNR`, `t_loss`, `s_loss`, `recon_t`, `recon_s`, `dis` (+`d_loss`) 출력
 - **background COMPLETE**: 동일 메트릭 + 소요시간 출력
 
 ### 모니터링 명령어
@@ -275,13 +302,16 @@ ps aux | grep python | grep -v grep | grep -v vscode
 모니터링 시 완료된 데이터셋 결과를 **테이블 형식**으로 출력한다:
 
 ```
-| Dataset    | PRC    | PAK_F1 | PAK_PRC | F1_T   | d_SNR | t_loss | s_loss | d_loss |
-|------------|--------|--------|---------|--------|-------|--------|--------|--------|
-| sim        | 0.9550 | 0.8225 |  0.8488 | 0.8991 |  1.23 | 0.0312 | 0.0045 |   —    |
-| SWaT(ex22) | 0.3982 | 0.4550 |  0.3921 | 0.4690 |  0.85 | 0.0198 | 0.0067 |   —    |
-| WaDi_A1    |  ...   |  ...   |   ...   |  ...   |  ...  |  ...   |  ...   |   —    |
-| WaDi_A2    |  ...   |  ...   |   ...   |  ...   |  ...  |  ...   |  ...   |   —    |
+| Dataset    | PRC    | PAK_F1 | PAK_PRC | F1_T   | re_t   | re_snr | re_s   | dis    | dis_snr | d_loss |
+|------------|--------|--------|---------|--------|--------|--------|--------|--------|---------|--------|
+| sim        | 0.9550 | 0.8225 |  0.8488 | 0.8991 | 0.0298 | 0.95   | 0.0050 | 0.0045 | 1.23    |   —    |
+| SWaT(ex22) | 0.3982 | 0.4550 |  0.3921 | 0.4690 | 0.0190 | 0.78   | 0.0048 | 0.0067 | 0.85    |   —    |
+| WaDi_A1    |  ...   |  ...   |   ...   |  ...   |  ...   |  ...   |  ...   |  ...   |  ...    |   —    |
+| WaDi_A2    |  ...   |  ...   |   ...   |  ...   |  ...   |  ...   |  ...   |  ...   |  ...    |   —    |
 ```
+
+> 표 컬럼은 짧은 이름 `re_t / re_snr / re_s / dis / dis_snr` (2026-05-29 update) 사용. 컬럼 순서도 사용자 지정. legacy `t_loss / s_loss` 는 로그 파싱에는 남아있지만 보고용 테이블에서는 표기하지 않는다.
+> Pre-warmup 행에서는 `re_s, dis, dis_snr` 셀이 `-` 로 표시 (Option C 마스킹).
 
 - `d_loss` 컬럼: `use_discriminator=True`일 때만 값 표시, 아니면 `—`
 - `SWaT(ex22)`: `metrics_excl_region22`에서 추출한 메트릭 사용

@@ -1905,13 +1905,24 @@ def _run_parallel_mode(
                         )
                         n_win = viz_pred_data['n_windows']
                         num_p = viz_pred_data['num_patches']
+                        # NB: collect_all_visualization_data was removed from
+                        # mae_anomaly.visualization, so this code path is already
+                        # unreachable (ImportError before reaching here). The bundle
+                        # construction below is kept consistent with the new API so
+                        # that if the visualization collector is ever restored, this
+                        # site does not silently regress. ``fm`` defaults to None
+                        # because the legacy viz_pred_data dict had no FM channel.
+                        from mae_anomaly.types import PatchScoresBundle
                         evaluator.set_precomputed_patch_scores(
-                            recon_patches=viz_pred_data['recon_errors'].reshape(n_win, num_p),
-                            disc_patches=viz_pred_data['discrepancies'].reshape(n_win, num_p),
-                            student_recon_patches=viz_pred_data['student_errors'].reshape(n_win, num_p),
-                            labels=viz_detailed_data['labels'],
-                            sample_types=viz_detailed_data['sample_types'],
-                            anomaly_types=viz_detailed_data['anomaly_types'],
+                            PatchScoresBundle(
+                                recon=viz_pred_data['recon_errors'].reshape(n_win, num_p),
+                                disc=viz_pred_data['discrepancies'].reshape(n_win, num_p),
+                                student_recon=viz_pred_data['student_errors'].reshape(n_win, num_p),
+                                fm=None,
+                                labels=viz_detailed_data['labels'],
+                                sample_types=viz_detailed_data['sample_types'],
+                                anomaly_types=viz_detailed_data['anomaly_types'],
+                            )
                         )
                     else:
                         # Eval-only: use evaluator's own forward pass (no viz data overhead)

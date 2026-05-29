@@ -13,6 +13,31 @@ from mae_anomaly import Config
 D_MODEL_CANDIDATES = [64, 96, 128, 192, 256, 384, 512]
 
 
+def resolve_test_stride(config) -> int:
+    """Resolve the effective sliding-window test stride.
+
+    Phase 6 (2026-05-29): one-line formula
+        S = W // 10 - 1
+    chosen so that:
+
+    * coverage = W / S = 10·W / (W − 10) ≈ 10–11 for W ∈ [100, 1000].
+    * S ends in the digit 9, which is automatically coprime to every
+      standard patch size used in this codebase ({2, 4, 5, 8, 10, 20}).
+      The coprime property guarantees that, as the covering window
+      index varies, the patch-position residue ``(k·S) mod P`` cycles
+      through all ``P`` values — so the ~10 patch scores averaged into
+      each timestep's point score sample maximally diverse contexts.
+
+    Override: any positive ``sliding_window_test_stride`` in the config
+    is used verbatim (escape hatch for legacy reproduction).
+    """
+    raw = int(getattr(config, 'sliding_window_test_stride', -1))
+    if raw > 0:
+        return raw
+    W = int(getattr(config, 'seq_length', 1))
+    return max(1, W // 10 - 1)
+
+
 def resolve_dynamic_d_model(num_features: int, patch_size: int) -> int:
     """Select d_model >= raw patch info from candidate list.
 

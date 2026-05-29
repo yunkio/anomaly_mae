@@ -841,16 +841,26 @@ class SelfDistilledMAEMultivariate(nn.Module):
         x: torch.Tensor,
         masking_ratio: Optional[float] = None,
         mask: Optional[torch.Tensor] = None,
-        point_labels: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        point_labels: Optional[torch.Tensor] = None,
+        teacher_only: bool = False,
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor]:
         """
         Args:
             x: (batch_size, seq_length, num_features)
             masking_ratio: ratio of patches to mask
             mask: optional pre-defined mask
             point_labels: (batch_size, seq_length) for force_mask_anomaly
+            teacher_only: if True, skip student decoder + GRL classifier + SCAD head.
+                          Saves ~22% of transformer forward compute during
+                          teacher_only_warmup epochs. Returns student_output=None.
+                          Side-effect attrs (self._student_hidden, _grl_cls_logits,
+                          _scad_z) are set to None so consumers via getattr()
+                          see a clean signal rather than stale prior-batch values.
+                          Default False preserves backward compat for all callers
+                          (evaluator, training_visualizer). Added 2026-05-29.
         Returns:
             teacher_output, student_output, mask
+            student_output is None when teacher_only=True.
         """
         if masking_ratio is None:
             masking_ratio = self.config.masking_ratio
@@ -1012,7 +1022,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
             torch.cuda.synchronize()
             _t_teacher = time.time()
 
-        if self.config.use_student and self.student_decoder is not None:
+        if self.config.use_student and self.student_decoder is not None and not teacher_only:
             if self.mask_after_encoder:
                 # Insert mask tokens before student decoder
                 # Detach encoder output to prevent encoder updates from student loss
@@ -1069,6 +1079,14 @@ class SelfDistilledMAEMultivariate(nn.Module):
             # Uses same stats stored by self.revin during normalize() at forward entry.
             if self.use_revin:
                 student_output = self.revin.denormalize(student_output)
+        else:
+            # teacher_only mode (warmup) OR use_student=False / no student_decoder.
+            # Explicitly clear side-effect attrs so downstream getattr() reads None
+            # rather than stale prior-batch values. student_output stays None.
+            # Saves student-decoder forward + projection + GRL classifier + SCAD head.
+            self._student_hidden = None
+            self._grl_cls_logits = None
+            self._scad_z = None
 
         if _profiling:
             torch.cuda.synchronize()

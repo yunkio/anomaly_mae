@@ -176,15 +176,26 @@ class SelfDistillationLoss(nn.Module):
         teacher_recon_normal = (is_normal_sample * teacher_recon_per_sample).sum() / (is_normal_sample.sum() + 1e-4)
         teacher_recon_anomaly = (has_anomaly_sample * teacher_recon_per_sample).sum() / (has_anomaly_sample.sum() + 1e-4)
 
-        # Student reconstruction loss (for tracking, always computed)
-        student_recon_full = F.mse_loss(
-            student_output * (1 - mask_expanded),
-            original_input * (1 - mask_expanded),
-            reduction='none'
-        )
-        student_recon_per_sample = student_recon_full.sum(dim=(1, 2)) / ((1 - mask_expanded).sum(dim=(1, 2)) * num_features + 1e-4)
-        student_recon_normal_metric = (is_normal_sample * student_recon_per_sample).sum() / (is_normal_sample.sum() + 1e-4)
-        student_recon_anomaly_metric = (has_anomaly_sample * student_recon_per_sample).sum() / (has_anomaly_sample.sum() + 1e-4)
+        # Student reconstruction loss (for tracking).
+        # 2026-05-29: when student_output is None (teacher_only mode in model
+        # forward — skips student decoder during warmup for compute savings),
+        # student recon metrics are unavailable. Set to 0.0 sentinel — pre-
+        # warmup recon_s is meaningless anyway since student weights are at
+        # random init and don't update. Downstream consumers (history append
+        # at trainer.py:1141, monitor) handle 0.0 transparently. Post-warmup
+        # student_output is real and metrics are computed normally.
+        if student_output is None:
+            student_recon_normal_metric = torch.tensor(0.0, device=teacher_output.device)
+            student_recon_anomaly_metric = torch.tensor(0.0, device=teacher_output.device)
+        else:
+            student_recon_full = F.mse_loss(
+                student_output * (1 - mask_expanded),
+                original_input * (1 - mask_expanded),
+                reduction='none'
+            )
+            student_recon_per_sample = student_recon_full.sum(dim=(1, 2)) / ((1 - mask_expanded).sum(dim=(1, 2)) * num_features + 1e-4)
+            student_recon_normal_metric = (is_normal_sample * student_recon_per_sample).sum() / (is_normal_sample.sum() + 1e-4)
+            student_recon_anomaly_metric = (has_anomaly_sample * student_recon_per_sample).sum() / (has_anomaly_sample.sum() + 1e-4)
 
         # Feature-level stats from teacher_recon_full (B, L, F) — masked positions only
         # Uses existing tensor, single reduction per stat: ~0.03ms/batch overhead

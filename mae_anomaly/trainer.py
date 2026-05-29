@@ -154,10 +154,14 @@ class Trainer:
             if _cls_no_decay:
                 param_groups.append({'params': _cls_no_decay, 'weight_decay': 0.0, 'lr': _cls_lr})
 
+        # fused=True (2026-05-29): single-GPU CUDA-fused AdamW kernel,
+        # cuts optimizer step from ~4 ms to ~1.5 ms (-1.7% total batch time).
+        # No accuracy impact; AdamW fused param verified in torch 2.4.1+cu118.
         self.optimizer = torch.optim.AdamW(
             param_groups,
             lr=config.learning_rate,
             betas=(0.9, 0.99),  # Compromise: 0.95 (original MAE, 75% masking) ↔ 0.999 (PyTorch default)
+            fused=True,
         )
 
         # LR warmup + cosine annealing (matching original MAE)
@@ -244,6 +248,7 @@ class Trainer:
                 lr=config.learning_rate * config.disc_lr_ratio,
                 betas=(0.0, 0.99),  # TTUR: β1=0 for discriminator
                 weight_decay=0.0,   # Spectral norm provides regularization
+                fused=True,         # CUDA fused kernel (2026-05-29)
             )
             # D scheduler: CosineAnnealingLR from disc_warmup_epochs to end
             d_active_epochs = max(config.num_epochs - config.disc_warmup_epochs, 1)
@@ -507,7 +512,17 @@ class Trainer:
                 _mr_max = getattr(self.config, 'masking_ratio_max', -1.0)
                 _mr = random.uniform(_mr_min, _mr_max) if (_mr_min >= 0 and _mr_max >= 0) else None
             with autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
-                teacher_output, student_output, mask = self.model(sequences, masking_ratio=_mr, point_labels=point_labels)
+                # 2026-05-29: propagate teacher_only so model can skip student
+                # decoder / GRL classifier / SCAD head forward during warmup.
+                # During warmup these are computed but their outputs feed only
+                # into loss tensors that are gated out at loss.py:196 and at
+                # trainer.py:597/620/704 — so the forward compute was wasted.
+                # Evaluator and visualizer paths leave teacher_only at default
+                # False, so they still get full student forward.
+                teacher_output, student_output, mask = self.model(
+                    sequences, masking_ratio=_mr, point_labels=point_labels,
+                    teacher_only=teacher_only,
+                )
 
                 if do_profile:
                     self.model._profiling = False
@@ -997,7 +1012,8 @@ class Trainer:
               f"Est. per epoch (train only): {est_epoch_s:.1f}s | "
               f"Est. remaining ({remaining} epochs): {est_remaining_s:.0f}s ({est_remaining_s/60:.1f}min)\n")
 
-    def train(self, epoch_callback=None, profile_n_batches: int = 0) -> Dict:
+    def train(self, epoch_callback=None, profile_n_batches: int = 0,
+              start_epoch: int = 0, pre_epoch_hook=None) -> Dict:
         """Train the model for num_epochs.
 
         Args:
@@ -1005,23 +1021,37 @@ class Trainer:
                            Use for lightweight epoch-wise test evaluation.
             profile_n_batches: If > 0, profile first N batches of epoch 0 with per-component
                               cuda.synchronize() timing. Results stored in history['batch_profiling'].
+            start_epoch: 0-indexed epoch to start from. Set > 0 on resume after loading
+                              optimizer/scheduler/RNG state externally. Default 0 = fresh.
+                              Added 2026-05-28 for crash-resume support.
+            pre_epoch_hook: Optional callable(epoch_idx) invoked at the START of each epoch
+                              BEFORE batches are iterated. Used by caller to reseed
+                              DataLoader's explicit generator deterministically per-epoch
+                              (so resume produces identical sample order). Default None.
         """
         teacher_warmup = self.config.teacher_only_warmup_epochs
-        # Epoch offset: non-replacement random offsets within [0, stride)
+        # Epoch offset: deterministic per-cycle permutation (was stateful pool — broke resume).
+        # Same set of offsets per cycle as before; the assignment of position-within-cycle to
+        # epoch is also deterministic by (cycle_idx, position). Replaced 2026-05-28.
         epoch_offset = getattr(self.config, 'epoch_offset', False)
-        if epoch_offset:
-            train_dataset = self.train_loader.dataset
-            if hasattr(train_dataset, 'stride'):
-                stride = train_dataset.stride
-                import numpy as np
-                offset_rng = np.random.RandomState(42)
-                offset_pool = []  # Refilled each cycle
-        for epoch in range(self.config.num_epochs):
+        train_dataset = self.train_loader.dataset if epoch_offset else None
+        stride = getattr(train_dataset, 'stride', None) if epoch_offset else None
+        import numpy as np
+
+        def _epoch_offset_for(epoch_idx, _stride):
+            """Deterministic offset for given epoch index. Resume-safe."""
+            cycle_idx = epoch_idx // _stride
+            pos_in_cycle = epoch_idx % _stride
+            _rng = np.random.RandomState(42 + cycle_idx)
+            return int(_rng.permutation(_stride)[pos_in_cycle])
+
+        for epoch in range(start_epoch, self.config.num_epochs):
+            # Pre-epoch hook (DataLoader generator reseed for resume-safe sample order)
+            if pre_epoch_hook is not None:
+                pre_epoch_hook(epoch)
             # Shift train window start positions each epoch (data augmentation)
-            if epoch_offset and hasattr(train_dataset, 'set_epoch_offset'):
-                if not offset_pool:
-                    offset_pool = list(offset_rng.permutation(stride))
-                train_dataset.set_epoch_offset(offset_pool.pop())
+            if epoch_offset and stride is not None and hasattr(train_dataset, 'set_epoch_offset'):
+                train_dataset.set_epoch_offset(_epoch_offset_for(epoch, stride))
 
             # --- Teacher freeze (방법 C: eval + requires_grad_(False)) ---
             if (getattr(self.config, 'freeze_teacher_after_warmup', False) and

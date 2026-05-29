@@ -76,6 +76,16 @@ exp_dirs = sh(f"grep -aoE 'Experiment dir:[[:space:]]+\\S+' '{LOG}'").splitlines
 exp_dirs = [l.split(':',1)[1].strip() for l in exp_dirs if ':' in l]
 amp_line = sh(f"grep -aE 'AMP: use_amp=' '{LOG}' | head -1")
 
+# Parse teacher_only_warmup_epochs from log (config_override line at queue start).
+# Falls back to 250 (exp271 canonical) if not found. Used to mask pre-warmup
+# disc_snr / dis / recon_s display to "-" since they are not meaningful before
+# student joining. 2026-05-29 update — replaces hardcoded WARMUP = 250.
+_warmup_match = sh(f"grep -aoE 'teacher_only_warmup_epochs[= ]+[0-9]+' '{LOG}' | head -1")
+try:
+    WARMUP = int(re.search(r'(\d+)', _warmup_match).group(1)) if _warmup_match else 250
+except (AttributeError, ValueError):
+    WARMUP = 250
+
 # unique dataset dirs in order; current = last
 unique_ds = []
 for d in exp_dirs:
@@ -94,30 +104,84 @@ def ds_short(p):
 # ---------- TAIL-ONLY parse (~last 500 epoch lines, cheap) ----------
 RE_EPOCH_DONE = re.compile(r'Epoch (\d+)/(\d+):\s*100%\|.*?\|\s*\d+/\d+\s*\[(\d{2}:\d{2})<00:00,\s*([\d.]+)it/s\]')
 RE_EPOCH_INPROG = re.compile(r'Epoch (\d+)/(\d+):\s*(\d+)%\|.*?\|\s*(\d+)/(\d+)\s*\[(\d{2}:\d{2})<(\d{2}:\d{2}),\s*([\d.]+)it/s\]')
-# New log format (family-ordered: point-strict | PA%K | event/range | VUS | diag)
-# 2026-05-27 onward: prc f1 f1_t pak_f1 pak_prc aff_f1 rf1 vus_pr vus_roc d_snr
+# Number atom: matches positive/negative decimals, scientific notation, AND nan/inf.
+# Critical: without nan|inf, a single nan in any field drops the entire eval line
+# from parsing → blanks in the monitoring table. 2026-05-29 fix.
+NUM = r'(?:[-+]?(?:nan|inf|\d+\.?\d*(?:[eE][+-]?\d+)?))'
+
+# New log format (family-ordered: point-strict | PA%K | event/range | VUS | diag).
+# 2026-05-27 onward: prc f1 f1_t pak_f1 pak_prc aff_f1 rf1 vus_pr vus_roc d_snr.
+# 2026-05-29 onward: also optional recon_t, recon_s, dis fields after s_loss
+# (added for explicit student-vs-teacher recon distinction in monitoring; the
+# legacy t_loss=train_rec_loss, s_loss=train_disc_loss kept for backward compat).
+# All number fields use the NUM atom to handle nan/inf without dropping the line.
 RE_EVAL_NEW = re.compile(
     r'\[Epoch\s*(\d+)\]\s+'
-    r'PRC=([\d.]+)\s+F1=([\d.]+)\s+F1_T=([\d.]+)\s+'
-    r'PAK_F1=([\d.]+)\s+PAK_PRC=([\d.]+)\s+'
-    r'AFF_F1=([\d.]+)\s+RF1=([\d.]+)\s+'
-    r'VUS_PR=([\d.]+)\s+VUS_ROC=([\d.]+)\s+'
-    r'd_SNR=([\d.]+)\s+\|\s+'
-    r't_loss=([\d.eE+-]+)\s+s_loss=([\d.eE+-]+)\s+\(infer=(\d+)s\s+eval=(\d+)s\)(?:\s+\[async\])?(\s+★)?'
+    rf'PRC=({NUM})\s+F1=({NUM})\s+F1_T=({NUM})\s+'
+    rf'PAK_F1=({NUM})\s+PAK_PRC=({NUM})\s+'
+    rf'AFF_F1=({NUM})\s+RF1=({NUM})\s+'
+    rf'VUS_PR=({NUM})\s+VUS_ROC=({NUM})\s+'
+    rf'd_SNR=({NUM})(?:\s+recon_SNR=({NUM}))?\s+\|\s+'
+    rf't_loss=({NUM})\s+s_loss=({NUM})'
+    rf'(?:\s+recon_t=({NUM}))?(?:\s+recon_s=({NUM}))?(?:\s+dis=({NUM}))?'
+    r'(?:\s+d_loss=' + NUM + r')?'
+    r'\s+\(infer=(\d+)s\s+eval=(\d+)s\)(?:\s+\[async\])?(\s+★)?'
 )
 # Old format (exp271 SWaT and earlier) — fallback for backward compat
 RE_EVAL_OLD = re.compile(
-    r'\[Epoch\s*(\d+)\]\s+PRC=([\d.]+)\s+PAK_F1=([\d.]+)\s+PAK_PRC=([\d.]+)\s+F1_T=([\d.]+)\s+d_SNR=([\d.]+)\s+\|\s+t_loss=([\d.eE+-]+)\s+s_loss=([\d.eE+-]+)\s+\(infer=(\d+)s\s+eval=(\d+)s\)(?:\s+\[async\])?(\s+★)?'
+    rf'\[Epoch\s*(\d+)\]\s+PRC=({NUM})\s+PAK_F1=({NUM})\s+PAK_PRC=({NUM})\s+'
+    rf'F1_T=({NUM})\s+d_SNR=({NUM})\s+\|\s+t_loss=({NUM})\s+s_loss=({NUM})'
+    r'\s+\(infer=(\d+)s\s+eval=(\d+)s\)(?:\s+\[async\])?(\s+★)?'
 )
+# Catch-all for diagnostic: any line that looks like an eval line but didn't
+# match either NEW or OLD. Used to emit a stderr warning so we know WHY
+# a metric became blank (regex drift vs genuine missing data).
+RE_EVAL_LOOSE = re.compile(r'\[Epoch\s*\d+\]\s+PRC=')
 RE_CRIT = re.compile(r'\[CRITICAL\]\s+epoch\s+(\d+):\s+(\d+)\s+batch')
+# Dataset transition marker (e.g., "# [2/4] WaDi_A1") — resets eval history
+# so best-eval picker stays within the current dataset.
+RE_DATASET_MARK = re.compile(r'^#\s*\[(\d+)/(\d+)\]\s+(\S+)')
+# SWaT excl22 dual-eval line (2026-05-27): printed right after each [Epoch N] line.
+# Format: "              [excl22] PRC=... F1=... F1_T=... PAK_F1=... PAK_PRC=... AFF_F1=... RF1=..."
+RE_EVAL_EXCL22 = re.compile(
+    r'\[excl22\]\s+'
+    r'PRC=([\d.]+)\s+F1=([\d.]+)\s+F1_T=([\d.]+)\s+'
+    r'PAK_F1=([\d.]+)\s+PAK_PRC=([\d.]+)\s+'
+    r'AFF_F1=([\d.]+)\s+RF1=([\d.]+)'
+)
 
+# Read whole log if <=50MB (typical 4-dataset run ~5-10MB),
+# otherwise last 20MB. Tail-only window caused best-eval mis-identification
+# when sparse eval lines (~1 per 5 epochs) got pushed beyond window by
+# dense tqdm progress bars (2026-05-27 fix).
 with open(LOG, 'rb') as f:
     f.seek(0, 2); end = f.tell()
-    f.seek(max(0, end - 400_000))
+    if end <= 50 * 1024 * 1024:
+        f.seek(0)
+    else:
+        f.seek(end - 20 * 1024 * 1024)
     tail_lines = f.read().decode('utf-8', errors='replace').splitlines()
 
+def _f(s):
+    """Float-coerce a string captured by NUM, including nan/inf. None-safe."""
+    if s is None:
+        return None
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return float('nan')
+
 done_epochs, inprog, evals, crit = [], None, [], []
+parse_warnings = []  # eval-line strings we saw but couldn't parse → stderr later
 for line in tail_lines:
+    m = RE_DATASET_MARK.search(line)
+    if m:
+        # New dataset begins — clear per-dataset state so best-eval, done_epochs,
+        # and in-progress reflect only the CURRENT dataset.
+        done_epochs = []
+        evals = []
+        inprog = None
+        continue
     m = RE_EPOCH_DONE.search(line)
     if m:
         ep, tot = int(m.group(1)), int(m.group(2))
@@ -138,29 +202,49 @@ for line in tail_lines:
         evals.append(dict(
             epoch=int(m.group(1)),
             # point-strict
-            prc=float(m.group(2)), f1=float(m.group(3)), f1_t=float(m.group(4)),
+            prc=_f(m.group(2)), f1=_f(m.group(3)), f1_t=_f(m.group(4)),
             # PA%K
-            pak_f1=float(m.group(5)), pak_prc=float(m.group(6)),
+            pak_f1=_f(m.group(5)), pak_prc=_f(m.group(6)),
             # event/range
-            aff_f1=float(m.group(7)), r_f1=float(m.group(8)),
+            aff_f1=_f(m.group(7)), r_f1=_f(m.group(8)),
             # VUS
-            vus_pr=float(m.group(9)), vus_roc=float(m.group(10)),
-            # diagnostic
-            d_snr=float(m.group(11)),
-            t_loss=float(m.group(12)), s_loss=float(m.group(13)),
-            infer=int(m.group(14)), eval=int(m.group(15)), best=bool(m.group(16))
+            vus_pr=_f(m.group(9)), vus_roc=_f(m.group(10)),
+            # diagnostic (d_snr always present; recon_snr 2026-05-29 onward optional)
+            d_snr=_f(m.group(11)),
+            recon_snr=_f(m.group(12)),
+            t_loss=_f(m.group(13)), s_loss=_f(m.group(14)),
+            # NEW (2026-05-29): optional explicit recon/discrepancy split
+            recon_t=_f(m.group(15)), recon_s=_f(m.group(16)), dis=_f(m.group(17)),
+            infer=int(m.group(18)), eval=int(m.group(19)), best=bool(m.group(20))
         ))
         continue
     m = RE_EVAL_OLD.search(line)
     if m:
         evals.append(dict(
-            epoch=int(m.group(1)), prc=float(m.group(2)), pak_f1=float(m.group(3)),
-            pak_prc=float(m.group(4)), f1_t=float(m.group(5)),
+            epoch=int(m.group(1)), prc=_f(m.group(2)), pak_f1=_f(m.group(3)),
+            pak_prc=_f(m.group(4)), f1_t=_f(m.group(5)),
             f1=None, vus_pr=None, vus_roc=None, aff_f1=None, r_f1=None,  # old-format
-            d_snr=float(m.group(6)),
-            t_loss=float(m.group(7)), s_loss=float(m.group(8)),
+            d_snr=_f(m.group(6)), recon_snr=None,
+            t_loss=_f(m.group(7)), s_loss=_f(m.group(8)),
+            recon_t=None, recon_s=None, dis=None,  # not in old format
             infer=int(m.group(9)), eval=int(m.group(10)), best=bool(m.group(11))
         ))
+        continue
+    # Diagnostic: line looks like an eval line but matched neither NEW nor OLD.
+    # Likely cause: log format change (new field added without parser update) or
+    # malformed value (e.g., 1e-308 truncated). Record for stderr report so the
+    # blanks-cause is visible instead of silently dropped.
+    if RE_EVAL_LOOSE.search(line):
+        parse_warnings.append(line.strip()[:200])
+        continue
+    # SWaT excl22 dual-eval line — attach to the most recent eval entry
+    m = RE_EVAL_EXCL22.search(line)
+    if m and evals:
+        evals[-1]['excl22'] = {
+            'prc': float(m.group(1)), 'f1': float(m.group(2)), 'f1_t': float(m.group(3)),
+            'pak_f1': float(m.group(4)), 'pak_prc': float(m.group(5)),
+            'aff_f1': float(m.group(6)), 'r_f1': float(m.group(7)),
+        }
         continue
     m = RE_CRIT.search(line)
     if m: crit.append((int(m.group(1)), int(m.group(2))))
@@ -281,29 +365,443 @@ def _fmt(v, fmt='.4f'):
     try: return format(float(v), fmt)
     except: return '   —  '
 
+def _emit_eval(label, ev):
+    """Emit one eval row in the standard family-ordered format.
+    Pre-warmup masks re_s/dis/dis_snr to None → '-' display."""
+    _is_pre = ev['epoch'] <= WARMUP
+    _d_snr  = None if _is_pre else ev.get('d_snr')
+    _dis    = None if _is_pre else ev.get('dis')
+    _re_s   = None if _is_pre else ev.get('recon_s')
+    out.append(
+        f"  {label} (ep {ev['epoch']:>3}):"
+        f"  [point] f1={_fmt(ev.get('f1'))} prc={_fmt(ev['prc'])} f1_t={_fmt(ev['f1_t'])}"
+        f"  [PA%K] pak_f1={_fmt(ev['pak_f1'])} pak_prc={_fmt(ev['pak_prc'])}"
+        f"  [range] aff_f1={_fmt(ev.get('aff_f1'))} r_f1={_fmt(ev.get('r_f1'))}"
+        f"  [diag] t_re={_fmt(ev.get('recon_t'))} re_snr={_fmt(ev.get('recon_snr'))}"
+        f" s_re={_fmt(_re_s)} dis={_fmt(_dis)} dis_snr={_fmt(_d_snr)}"
+    )
+    if ev.get('excl22'):
+        e = ev['excl22']
+        out.append(
+            f"               (excl22):"
+            f"  [point] f1={_fmt(e['f1'])} prc={_fmt(e['prc'])} f1_t={_fmt(e['f1_t'])}"
+            f"  [PA%K] pak_f1={_fmt(e['pak_f1'])} pak_prc={_fmt(e['pak_prc'])}"
+            f"  [range] aff_f1={_fmt(e['aff_f1'])} r_f1={_fmt(e['r_f1'])}"
+        )
+
+# --- MILESTONE rows (2026-05-29) — emit all key milestone evals so the
+# monitoring table accumulates instead of losing prior bests when a new
+# best appears. Rows: first, best@pre-warmup, last-pre-warmup, best@post-
+# warmup, best-overall, latest. Same-epoch labels are merged via "≡".
+if evals:
+    first_eval = evals[0]
+    pre_evals = [e for e in evals if e['epoch'] <= WARMUP]
+    post_evals = [e for e in evals if e['epoch'] > WARMUP]
+    best_pre  = max(pre_evals, key=lambda e: e['pak_f1']) if pre_evals else None
+    last_pre  = pre_evals[-1] if pre_evals else None
+    best_post = max(post_evals, key=lambda e: e['pak_f1']) if post_evals else None
+    best_all  = max(evals, key=lambda e: e['pak_f1'])
+    latest_ev = evals[-1]
+
+    # Build epoch → list-of-labels map (so same-epoch rows merge)
+    label_map = {}  # epoch → list of (priority, label)
+    def _add(ev, label, priority):
+        if ev is None:
+            return
+        label_map.setdefault(ev['epoch'], []).append((priority, label))
+    _add(first_eval, "first eval",                 0)
+    _add(best_pre,   "best @ pre-warmup ☆",        1)
+    _add(last_pre,   "last pre-warmup",            2)
+    _add(best_post,  "best @ post-warmup ♦",       3)
+    _add(best_all,   "best overall ★",             4)
+    _add(latest_ev,  "latest",                     5)
+    # 50-epoch interval markers (50, 100, 150, ..., 450, 500). 2026-05-29 update.
+    # Forces visibility of every-50-ep checkpoint. Skipped when the epoch
+    # already has a milestone label (first/best/latest/etc.) — user does not
+    # want "≡ 50ep mark" merged onto existing milestone rows. The evals list
+    # only contains logged evals (≤ current training epoch), so future
+    # 50ep marks never appear.
+    _milestone_epochs = set(label_map.keys())  # snapshot before 50ep adds
+    for ev in evals:
+        if ev['epoch'] % 50 == 0 and ev['epoch'] not in _milestone_epochs:
+            _add(ev, "50ep mark",                  6)
+
+    # Build set of emitted milestone epochs (for per-column best computation
+    # downstream — we want the bold to be applied only across milestone rows,
+    # not across all evals).
+    emitted_epochs = sorted(label_map.keys())
+    emitted_evs = [ev for ev in evals if ev['epoch'] in label_map]
+
+    # Per-column best-of-milestones — emitted as a separate [BEST PER COLUMN]
+    # block so the consumer (AI status report) bolds the correct cell even
+    # when the displayed text values are tied (display .4f hides precision —
+    # e.g. 0.000218 vs 0.000201 both print as 0.0002). 2026-05-29 update.
+    # Direction rule (per user spec):
+    #   t_re, s_re (loss-like) → min is best
+    #   all other 11 columns → max is best
+    # Output for each column: "<col>: ep N = <val_full_precision>"
+    # AI uses the epoch reference to bold ONE specific row (with tiebreak: if
+    # multiple epochs tie at exact float value, all of them bold).
+    MAX_COLS = [
+        ('f1',         lambda e: e.get('f1')),
+        ('prc',        lambda e: e.get('prc')),
+        ('f1_t',       lambda e: e.get('f1_t')),
+        ('pak_f1',     lambda e: e.get('pak_f1')),
+        ('pak_prc',    lambda e: e.get('pak_prc')),
+        ('aff_f1',     lambda e: e.get('aff_f1')),
+        ('r_f1',       lambda e: e.get('r_f1')),
+        ('re_snr',     lambda e: e.get('recon_snr')),
+        ('dis',        lambda e: e.get('dis')),
+        ('dis_snr',    lambda e: e.get('d_snr')),
+    ]
+    MIN_COLS = [
+        ('t_re',       lambda e: e.get('recon_t')),
+        ('s_re',       lambda e: e.get('recon_s')),
+    ]
+    # For pre-warmup rows, dis / dis_snr / s_re are masked — exclude those rows
+    # for those columns when computing best.
+    def _val_for_col(ev, col, getter):
+        v = getter(ev)
+        if v is None:
+            return None
+        if col in ('s_re', 'dis', 'dis_snr') and ev['epoch'] <= WARMUP:
+            return None  # masked at display
+        return v
+
+    def _best_per_column(evs, columns, mode):
+        results = {}
+        for col, getter in columns:
+            cands = []
+            for ev in evs:
+                v = _val_for_col(ev, col, getter)
+                if v is not None:
+                    try:
+                        cands.append((float(v), ev['epoch']))
+                    except (TypeError, ValueError):
+                        continue
+            if not cands:
+                results[col] = (None, [])
+                continue
+            best_v = min(c[0] for c in cands) if mode == 'min' else max(c[0] for c in cands)
+            # Tie-break: when multiple epochs match best_v (full-precision tie),
+            # return ONLY the latest one (max epoch). Per user 2026-05-29 spec
+            # — bold last tied row, not all of them.
+            tied_eps = [ep for v, ep in cands if v == best_v]
+            results[col] = (best_v, [max(tied_eps)])
+        return results
+
+    best_max = _best_per_column(emitted_evs, MAX_COLS, 'max')
+    best_min = _best_per_column(emitted_evs, MIN_COLS, 'min')
+    out.append("\n[BEST PER COLUMN — milestone rows only]")
+    for col, _getter in MAX_COLS + MIN_COLS:
+        mode = 'min' if col in ('t_re', 's_re') else 'max'
+        info = best_min.get(col) if mode == 'min' else best_max.get(col)
+        if info is None or info[0] is None:
+            out.append(f"  {col:<10}: (no data)")
+        else:
+            v, eps = info
+            eps_str = ",".join(f"ep{e}" for e in eps)
+            out.append(f"  {col:<10}: {mode} = {v:.6f} @ {eps_str}")
+
+    # Emit milestones in chronological order, merging same-epoch labels with ≡
+    ev_by_epoch = {e['epoch']: e for e in evals}
+    for ep in sorted(label_map.keys()):
+        labels_sorted = [lbl for _, lbl in sorted(label_map[ep])]
+        merged_label = " ≡ ".join(labels_sorted)
+        _emit_eval(merged_label, ev_by_epoch[ep])
+
+# Legacy t_loss/s_loss summary (only — milestone block above already emitted
+# all rows incl. latest, best, first, warmup-boundary).
 if last_eval:
-    # Family-ordered: point-strict | PA%K | event/range | VUS | diag
-    out.append(
-        f"  Latest eval (ep {last_eval['epoch']:>3}):"
-        f"  [point] prc={_fmt(last_eval['prc'])} f1={_fmt(last_eval.get('f1'))} f1_t={_fmt(last_eval['f1_t'])}"
-        f"  [PA%K] pak_auc_f1={_fmt(last_eval['pak_f1'])} pak_auc_prc={_fmt(last_eval['pak_prc'])}"
-        f"  [range] aff_f1={_fmt(last_eval.get('aff_f1'))} r_f1={_fmt(last_eval.get('r_f1'))}"
-        f"  [VUS] vus_pr={_fmt(last_eval.get('vus_pr'))} vus_roc={_fmt(last_eval.get('vus_roc'))}"
-        f"  [diag] disc_snr={_fmt(last_eval['d_snr'])}"
-    )
-    out.append(f"  Latest losses:                  t_loss={last_eval['t_loss']:.4f}  s_loss={last_eval['s_loss']:.4f}  (infer={last_eval['infer']}s eval={last_eval['eval']}s)")
+    out.append(f"  Latest losses (legacy):         "
+               f"t_loss={last_eval['t_loss']:.4f}  s_loss={last_eval['s_loss']:.4f}  "
+               f"(infer={last_eval['infer']}s eval={last_eval['eval']}s)")
 if best_eval:
-    flag = " ★ (current best)" if best_eval is evals[-1] and best_eval['best'] else ""
-    out.append(
-        f"  Best pak_auc_f1 (ep {best_eval['epoch']:>3}):"
-        f"  [point] prc={_fmt(best_eval['prc'])} f1={_fmt(best_eval.get('f1'))} f1_t={_fmt(best_eval['f1_t'])}"
-        f"  [PA%K] pak_auc_f1={_fmt(best_eval['pak_f1'])} pak_auc_prc={_fmt(best_eval['pak_prc'])}"
-        f"  [range] aff_f1={_fmt(best_eval.get('aff_f1'))} r_f1={_fmt(best_eval.get('r_f1'))}"
-        f"  [VUS] vus_pr={_fmt(best_eval.get('vus_pr'))} vus_roc={_fmt(best_eval.get('vus_roc'))}"
-        f"  [diag] disc_snr={_fmt(best_eval['d_snr'])}{flag}"
-    )
+    _btl = best_eval.get('t_loss')
+    _bsl = best_eval.get('s_loss')
+    if _btl is not None or _bsl is not None:
+        out.append(
+            f"  Best losses    (legacy):         "
+            f"t_loss={_fmt(_btl)}  s_loss={_fmt(_bsl)}"
+        )
 if not evals:
     out.append(f"  (no eval logged yet — eval interval = 5)")
+
+# ---------- SPEED HEALTH JUDGMENT (2026-05-27) ----------
+# Per-dataset baseline (s/ep) from known-good runs with VUS skipped + canonical config.
+# Format: (lo, hi). Lo = ideal (cold cache, no contention); hi = realistic full-load steady-state.
+# Keys checked via substring against ds_short output (e.g. "SWaT/A1A2_full", "WaDi/A1").
+# More specific keys first (e.g. WaDi/A1 before WaDi) so they match first.
+BASELINES = [
+    ('SWaT/A1A2',  (8, 10)),
+    ('WaDi/A1',    (15, 25)),
+    ('WaDi/A2',    (15, 25)),
+    ('PSM',        (10, 15)),
+    ('simulation', (3, 5)),
+]
+
+def judge_speed(ds_name, speed_last5, eval_cost_s, epoch):
+    """Return (verdict, reason) for current speed."""
+    if speed_last5 is None or speed_last5 <= 0:
+        return ('unknown', 'no speed data')
+    base = None
+    for k, v in BASELINES:
+        if k in (ds_name or ''):
+            base = (k, v)
+            break
+    if base is None:
+        return ('unknown', f"no baseline for ds={ds_name}")
+    base_key, (lo, hi) = base
+    ratio = speed_last5 / hi
+    # Grace period: first 10 epochs of a dataset
+    if epoch is not None and epoch < 10:
+        return ('🟢 초기 transition', f"ep{epoch}<10 grace period (last5={speed_last5:.1f}s)")
+    if ratio <= 1.5:
+        return ('정상', f"last5={speed_last5:.1f}s/ep, baseline {base_key} {lo}-{hi}, ratio={ratio:.2f}x")
+    elif ratio <= 2.5:
+        return ('주의 ⚠️',
+                f"last5={speed_last5:.1f}s/ep, baseline {lo}-{hi}, ratio={ratio:.2f}x — "
+                f"CPU contention 의심 (check: ps aux --sort=-%cpu | head -5)")
+    elif ratio <= 5.0:
+        return ('심각 (저속) 🟠',
+                f"last5={speed_last5:.1f}s/ep, baseline {lo}-{hi}, ratio={ratio:.2f}x — "
+                f"bg-worker stuck 의심 (check: pgrep -af spawn_main)")
+    else:
+        return ('🚨 stuck 의심',
+                f"last5={speed_last5:.1f}s/ep, baseline {lo}-{hi}, ratio={ratio:.2f}x — "
+                f"메인 학습 정지 가능. 자동 정지 X. 사용자 확인 필요.")
+
+_cur_ds_short = ds_short(current_path) if current_path else ''
+_cur_epoch = last_ep[0] if last_ep else None
+verdict, reason = judge_speed(_cur_ds_short, mean_train_recent, mean_eval_sec, _cur_epoch)
+
+# ---------- AUTO-INTERPRETATION (rule-based, 2026-05-27) ----------
+# Read prior monitoring_log.jsonl entries to derive trend-aware interpretation.
+# This runs BEFORE writing the current entry, so we get history from prior ticks only.
+def _interpret(current_path, last_eval, best_eval, last_ep, mean_train_recent,
+               verdict_now, current_run_root):
+    """Rule-based interpretation with explicit evidence per field.
+
+    Each verdict carries its supporting data (dataset, epoch, metric values) so
+    that reading monitoring_log.jsonl alone is enough to reconstruct WHY each
+    judgment was made — no cross-referencing other files needed.
+    """
+    # Evidence dict: collected from current monitoring snapshot
+    evidence = {
+        'dataset': ds_short(current_path) if current_path else None,
+        'current_train_epoch': last_ep[0] if last_ep else None,
+        'total_epochs': last_ep[1] if last_ep else None,
+        'latest_eval_epoch': last_eval.get('epoch') if last_eval else None,
+        'latest_pak_f1': last_eval.get('pak_f1') if last_eval else None,
+        'latest_prc': last_eval.get('prc') if last_eval else None,
+        'latest_f1_t': last_eval.get('f1_t') if last_eval else None,
+        'latest_disc_snr': last_eval.get('d_snr') if last_eval else None,
+        'best_epoch': best_eval.get('epoch') if best_eval else None,
+        'best_pak_f1': best_eval.get('pak_f1') if best_eval else None,
+        'warmup_boundary': 250,  # teacher_only_warmup_epochs from exp271 canonical
+        'eval_interval': 5,
+        'speed_last5': mean_train_recent,
+    }
+    interp = {
+        'phase': None,
+        'phase_reason': None,
+        'best_held_ticks': 0,
+        'best_held_evals': None,
+        'latest_vs_best': None,
+        'speed_trend_3': [],
+        'speed_trend_label': None,
+        'eval_lag_epochs': None,
+        'notable': [],
+        'evidence': evidence,
+    }
+    lines = []
+
+    # Phase: pre-warmup vs post-warmup
+    # teacher_only_warmup_epochs hard-coded from exp271 canonical (250). May read from config later.
+    WARMUP = 250
+    cur_ep = (last_eval['epoch'] if last_eval else (_cur_epoch or 0))
+    ds_name = evidence['dataset'] or '?'
+    if cur_ep <= WARMUP:
+        interp['phase'] = 'pre-warmup'
+        interp['phase_reason'] = (f'dataset={ds_name}, latest_eval_epoch={cur_ep} ≤ '
+                                  f'teacher_only_warmup_epochs={WARMUP} → teacher-only training (student frozen)')
+    else:
+        interp['phase'] = 'post-warmup'
+        interp['phase_reason'] = (f'dataset={ds_name}, latest_eval_epoch={cur_ep} > '
+                                  f'teacher_only_warmup_epochs={WARMUP} → student joined (teacher+student co-training)')
+
+    # Eval lag
+    if last_ep and last_eval:
+        interp['eval_lag_epochs'] = last_ep[0] - last_eval['epoch']
+
+    # Latest vs best
+    if last_eval and best_eval and last_eval.get('pak_f1') is not None and best_eval.get('pak_f1') is not None:
+        interp['latest_vs_best'] = round(last_eval['pak_f1'] - best_eval['pak_f1'], 4)
+
+    # Read prior jsonl entries to compute trends
+    prior_entries = []
+    log_path = None
+    if current_run_root and current_run_root.exists():
+        log_path = current_run_root / 'monitoring_log.jsonl'
+        if log_path.exists():
+            try:
+                with open(log_path) as f:
+                    for line in f:
+                        try:
+                            prior_entries.append(json.loads(line))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    # Speed trend (last 3 ticks including current)
+    prior_speeds = [e.get('speed_last5') for e in prior_entries[-2:]
+                    if e.get('speed_last5') is not None]
+    if mean_train_recent is not None:
+        speeds_seq = prior_speeds + [round(mean_train_recent, 2)]
+        interp['speed_trend_3'] = speeds_seq
+        if len(speeds_seq) >= 2:
+            delta = speeds_seq[-1] - speeds_seq[0]
+            rel = abs(delta) / max(speeds_seq[0], 0.1)
+            if rel < 0.10:
+                interp['speed_trend_label'] = 'stable'
+            elif delta > 0:
+                interp['speed_trend_label'] = 'degrading' if rel > 0.20 else 'slow-degrading'
+            else:
+                interp['speed_trend_label'] = 'improving'
+
+    # Best-held tick count (consecutive prior ticks where best_pak_f1 == current best)
+    if best_eval and best_eval.get('pak_f1') is not None:
+        held = 0
+        for e in reversed(prior_entries):
+            if e.get('best_pak_f1') == best_eval['pak_f1'] and e.get('best_epoch') == best_eval.get('epoch'):
+                held += 1
+            else:
+                break
+        interp['best_held_ticks'] = held
+
+    # Best-held eval count (how many evals since best)
+    if last_eval and best_eval and last_eval.get('epoch') and best_eval.get('epoch'):
+        # eval interval = 5 (assumed)
+        gap = last_eval['epoch'] - best_eval['epoch']
+        interp['best_held_evals'] = gap // 5 if gap >= 0 else 0
+
+    # ---- Notable observations (rule-fired alerts) ----
+    # Every notable string carries inline evidence so log-only reading is sufficient.
+    notable = []
+
+    # Best update detection (compare to previous tick)
+    if prior_entries:
+        prev_best = prior_entries[-1].get('best_pak_f1')
+        prev_best_ep = prior_entries[-1].get('best_epoch')
+        cur_best = best_eval.get('pak_f1') if best_eval else None
+        cur_best_ep = best_eval.get('epoch') if best_eval else None
+        if prev_best is not None and cur_best is not None and cur_best > prev_best + 1e-6:
+            notable.append(
+                f"★ best PAK_F1 updated [{ds_name}]: "
+                f"{prev_best:.4f}@ep{prev_best_ep} → {cur_best:.4f}@ep{cur_best_ep} "
+                f"(+{cur_best-prev_best:.4f}) — metric: pak_auc_f1"
+            )
+
+    # Plateau detection (best held > 5 evals)
+    if interp['best_held_evals'] is not None and interp['best_held_evals'] >= 5:
+        notable.append(
+            f"plateau [{ds_name}]: best {interp['best_held_evals']} evals 미경신 "
+            f"(best={best_eval['pak_f1']:.4f}@ep{best_eval['epoch']}, "
+            f"latest={last_eval['pak_f1']:.4f}@ep{last_eval['epoch']}, "
+            f"gap={last_eval['epoch']-best_eval['epoch']}ep — metric: pak_auc_f1)"
+        )
+
+    # Divergence detection (latest << best)
+    if interp['latest_vs_best'] is not None and interp['latest_vs_best'] < -0.05:
+        notable.append(
+            f"divergence 의심 [{ds_name}]: latest vs best = {interp['latest_vs_best']:+.4f} "
+            f"(best={best_eval['pak_f1']:.4f}@ep{best_eval['epoch']}, "
+            f"latest={last_eval['pak_f1']:.4f}@ep{last_eval['epoch']} — metric: pak_auc_f1)"
+        )
+
+    # Phase transition (just crossed warmup)
+    if prior_entries:
+        prev_eval_ep = prior_entries[-1].get('latest_eval_epoch')
+        if prev_eval_ep is not None and last_eval and last_eval.get('epoch'):
+            if prev_eval_ep <= WARMUP < last_eval['epoch']:
+                notable.append(
+                    f"🎉 student-joining boundary 통과 [{ds_name}]: "
+                    f"prev_eval_ep={prev_eval_ep} ≤ {WARMUP} < latest_eval_ep={last_eval['epoch']} "
+                    f"→ post-warmup 진입 (student now training, expect PAK_F1 boost)"
+                )
+
+    # Speed degradation alert
+    if interp['speed_trend_label'] == 'degrading':
+        seq = interp['speed_trend_3']
+        pct_str = f"{(seq[-1]-seq[0])/seq[0]*100:+.1f}%" if seq[0] > 0 else "N/A (prior=0, dataset transition)"
+        notable.append(
+            f"⚠️ speed degrading [{ds_name}]: "
+            f"speed_last5 sequence={seq} s/ep (3-tick window), "
+            f"Δ={seq[-1]-seq[0]:+.2f}s ({pct_str})"
+        )
+
+    # Eval lag growing (bg-worker contention indicator)
+    if interp['eval_lag_epochs'] is not None and interp['eval_lag_epochs'] > 30:
+        notable.append(
+            f"⚠️ eval lag = {interp['eval_lag_epochs']} epochs [{ds_name}] "
+            f"(current_epoch={evidence['current_train_epoch']}, "
+            f"latest_eval_epoch={evidence['latest_eval_epoch']}, eval_interval=5) "
+            f"→ async queue 적체; bg-worker 의심"
+        )
+
+    # Bg-worker bottleneck (verdict-driven)
+    if verdict_now and ('심각' in verdict_now or '🚨' in verdict_now):
+        notable.append(
+            f"🚨 speed 진단 = '{verdict_now}' [{ds_name}]: "
+            f"speed_last5={mean_train_recent:.2f}s/ep → 사용자 확인 필요 (자동 정지 X)"
+        )
+
+    interp['notable'] = notable
+
+    # ---- Human-readable lines for status report ----
+    lines.append(f"  Phase             : **{interp['phase']}**  ({interp['phase_reason']})")
+    if interp['best_held_ticks'] > 0:
+        lines.append(f"  Best held         : {interp['best_held_ticks']} tick(s) "
+                     f"= {interp['best_held_evals']} eval(s) "
+                     f"({best_eval.get('pak_f1'):.4f} @ ep {best_eval.get('epoch')})")
+    if interp['latest_vs_best'] is not None:
+        sign = '+' if interp['latest_vs_best'] >= 0 else ''
+        lines.append(f"  Latest vs best    : {sign}{interp['latest_vs_best']:+.4f}")
+    if interp['speed_trend_label']:
+        seq_str = ' → '.join(f'{s:.1f}' for s in interp['speed_trend_3'])
+        lines.append(f"  Speed trend (3)   : [{seq_str}] s/ep — {interp['speed_trend_label']}")
+    if interp['eval_lag_epochs'] is not None:
+        lines.append(f"  Eval lag          : {interp['eval_lag_epochs']} epochs")
+    if notable:
+        lines.append(f"  Notable           :")
+        for n in notable:
+            lines.append(f"    • {n}")
+    return interp, lines
+
+# Determine run root for interp (same logic as later jsonl write block)
+_run_root_for_interp = None
+if current_path:
+    p_ = Path(current_path)
+    for ancestor in [p_, p_.parent, p_.parent.parent, p_.parent.parent.parent]:
+        if ancestor.name and re.match(r'^\d+_', ancestor.name):
+            _run_root_for_interp = ancestor
+            break
+
+interpretation, interp_lines = _interpret(
+    current_path, last_eval, best_eval, last_ep, mean_train_recent,
+    verdict, _run_root_for_interp,
+)
+
+# ---------- SPEED HEALTH ----------
+out.append(f"\n[SPEED HEALTH]")
+out.append(f"  🩺 학습 속도 진단: {verdict}")
+out.append(f"     {reason}")
+
+# ---------- INTERPRETATION (rule-based auto-analysis) ----------
+out.append(f"\n[INTERPRETATION — rule-based]")
+for line in interp_lines:
+    out.append(line)
 
 # Health
 out.append(f"\n[HEALTH]")
@@ -341,3 +839,56 @@ if completed_paths:
 
 out.append("=" * 50)
 print('\n'.join(out), flush=True)
+
+# ---------- MONITORING LOG (append to exp_dir/monitoring_log.jsonl) ----------
+# Per user request 2026-05-27: store monitoring records inside the run's exp dir
+# (NOT /tmp), so they survive across sessions and travel with the experiment results.
+try:
+    if current_path:
+        # current_path = .../271_<ts>_.../<dataset>/<sub>  →  run_root = .../271_<ts>_...
+        p = Path(current_path)
+        run_root = None
+        for ancestor in [p, p.parent, p.parent.parent, p.parent.parent.parent]:
+            if ancestor.name and re.match(r'^\d+_', ancestor.name):
+                run_root = ancestor
+                break
+        if run_root and run_root.exists():
+            log_path = run_root / 'monitoring_log.jsonl'
+            def _to_int(x):
+                try: return int(x)
+                except: return None
+            def _to_float(x):
+                try: return float(x)
+                except: return None
+            record = {
+                'ts': now.isoformat(),
+                'runtime': runtime,
+                'dataset_idx': ds_idx,
+                'dataset': _cur_ds_short,
+                'epoch': _cur_epoch,
+                'total_epochs': last_ep[1] if last_ep else None,
+                'speed_last5': mean_train_recent,
+                'speed_last20': mean_train_sec,
+                'eval_cost': mean_eval_sec,
+                'amortized': per_epoch_avg,
+                'gpu_util': _to_int(gpu.get('util')) if gpu else None,
+                'gpu_mem_mb': _to_int(gpu.get('mem_u')) if gpu else None,
+                'gpu_temp': _to_int(gpu.get('temp')) if gpu else None,
+                'gpu_power': _to_float(gpu.get('pw')) if gpu else None,
+                'cpu_load1': _to_float(loadavg[0]) if loadavg else None,
+                'worker_cpu_pct': _to_float(proc_cpu),
+                'ram_used_mb': _to_int(mem_used),
+                'latest_eval_epoch': last_eval['epoch'] if last_eval else None,
+                'latest_pak_f1': last_eval.get('pak_f1') if last_eval else None,
+                'best_pak_f1': best_eval.get('pak_f1') if best_eval else None,
+                'best_epoch': best_eval.get('epoch') if best_eval else None,
+                'nan_inf_count': len(crit) if crit else 0,
+                'judgment_verdict': verdict,
+                'judgment_reason': reason,
+                'interpretation': interpretation,  # rule-based auto-analysis dict
+            }
+            with open(log_path, 'a') as f:
+                f.write(json.dumps(record) + '\n')
+except Exception as e:
+    # Logging is best-effort; never block monitoring output
+    print(f"  [monitoring_log warn] {type(e).__name__}: {e}", file=sys.stderr)

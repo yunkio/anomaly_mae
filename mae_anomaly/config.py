@@ -20,7 +20,10 @@ class Config:
     use_sliding_window_dataset: bool = True  # Use new sliding window dataset
     sliding_window_total_length: int = 275000  # Total length (220K train + 55K test)
     sliding_window_stride: int = 21  # Stride for train window extraction (overlapping windows)
-    sliding_window_test_stride: int = 21  # Stride for test window extraction
+    # Phase 6 (2026-05-29): sentinel -1 means "auto: resolves to (num_patches - 1)
+    # at the call site". Any positive int overrides. The previous fixed default
+    # of 21 is preserved when the user explicitly sets it via config-override.
+    sliding_window_test_stride: int = -1  # Stride for test window extraction (-1 = num_patches-1)
     epoch_offset: bool = True  # Non-replacement random train window offset each epoch (cycles through [0, stride))
     sliding_window_train_ratio: float = 0.8  # Train ratio (220K/275K = 0.8, test = 55K)
     normalize_mode: str = 'minmax'  # Normalization mode for input signals (exp271 canonical default 2026-05-27)
