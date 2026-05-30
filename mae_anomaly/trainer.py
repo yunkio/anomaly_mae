@@ -1013,12 +1013,15 @@ class Trainer:
               f"Est. remaining ({remaining} epochs): {est_remaining_s:.0f}s ({est_remaining_s/60:.1f}min)\n")
 
     def train(self, epoch_callback=None, profile_n_batches: int = 0,
-              start_epoch: int = 0, pre_epoch_hook=None) -> Dict:
+              start_epoch: int = 0, pre_epoch_hook=None, post_epoch_callback=None) -> Dict:
         """Train the model for num_epochs.
 
         Args:
-            epoch_callback: Optional callable(epoch, model, history) invoked at end of each epoch.
-                           Use for lightweight epoch-wise test evaluation.
+            epoch_callback: Optional callable(epoch, model, history) invoked MID-epoch
+                           (after train_loss is recorded, before the per-epoch
+                           contribution-ratio keys are appended). Use for lightweight
+                           epoch-wise test evaluation that must read the model while it
+                           still holds this epoch's weights.
             profile_n_batches: If > 0, profile first N batches of epoch 0 with per-component
                               cuda.synchronize() timing. Results stored in history['batch_profiling'].
             start_epoch: 0-indexed epoch to start from. Set > 0 on resume after loading
@@ -1028,6 +1031,12 @@ class Trainer:
                               BEFORE batches are iterated. Used by caller to reseed
                               DataLoader's explicit generator deterministically per-epoch
                               (so resume produces identical sample order). Default None.
+            post_epoch_callback: Optional callable(epoch, history) invoked at the very END
+                              of each epoch AFTER every per-epoch history key has been
+                              appended. Use for checkpoint saving so the persisted
+                              history is COMPLETE (all per-epoch arrays equal length) —
+                              this is what makes resume-then-finish produce a consistent
+                              history (2026-05-30 score-contribution off-by-one fix).
         """
         teacher_warmup = self.config.teacher_only_warmup_epochs
         # Epoch offset: deterministic per-cycle permutation (was stateful pool — broke resume).
@@ -1235,5 +1244,13 @@ class Trainer:
             # Record per-epoch timing
             epoch_timing['callback'] = t_callback
             self.history.setdefault('epoch_timings', []).append(epoch_timing)
+
+            # Post-epoch hook: history for this epoch is now COMPLETE (epoch, train_*,
+            # contribution ratios, anomaly-type scores, timings all appended). The
+            # caller saves the checkpoint here so the persisted history is internally
+            # consistent and a later resume produces equal-length per-epoch arrays
+            # (2026-05-30 root-cause fix for the score-contribution off-by-one).
+            if post_epoch_callback is not None:
+                post_epoch_callback(epoch, self.history)
 
         return self.history

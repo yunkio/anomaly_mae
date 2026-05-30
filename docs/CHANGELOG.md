@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-05-30: Resume record-consistency (score-contribution off-by-one + lost eval records)
+
+### Problem (관측됨)
+1. resume 후 완주한 run 의 `best_model_score_contribution.png` 누락. `training_histories.json` 의 per-epoch contribution-ratio 배열이 `epoch` 보다 1 짧음 (`epoch=500`, `epoch_recon_ratio_*=499`) → stackplot crash → `_safe_plot` swallow.
+2. resume 된 dataset 의 `epoch_metrics.json` 에 eval epoch 구멍. `271_lr SWaT-full [285,290]`, `271_lr WaDi/A1 [275,280,350,355]` 누락. pause 직전 1–2 eval 이 영구 손실.
+
+### Root causes (코드 단위)
+1. **off-by-one**: 구 checkpoint 저장이 `epoch_callback`(mid-epoch, [trainer.py:1225](mae_anomaly/trainer.py#L1225)) 안에서 history 를 스냅샷 — `epoch` 은 append 됐지만 contribution-ratio 들 ([trainer.py:1245](mae_anomaly/trainer.py#L1245)) 은 아직 append 전 → len(contrib)=N-1 박제.
+2. **lost evals**: per-epoch eval 이 background thread 에서 `torch.save` *뒤* (step D) 큐에 put 되고, 그 다음 eval-epoch thread 가 drain → checkpoint_N 이 ep N eval 을 못 담음. pause 가 그 사이에 떨어지면 큐 결과 영구 손실. 게다가 `epoch_metrics_list` 스냅샷이 build 시점(drain 전)에 동기적으로 떠짐.
+
+### Fixes
+- **[trainer.py] `post_epoch_callback` 추가** (tracked): epoch loop 의 가장 끝 (모든 per-epoch append 완료 후) 호출. checkpoint 저장을 이리로 이동 → history 항상 len==epoch.
+- **[run_base_experiments.py, gitignored runner] eval-before-checkpoint 불변식**: `_run_bg_all` 을 `[join → eval 실행 → 기록 → checkpoint fold-in+save → best 복사]` 로 재배치. "checkpoint_N 존재 ⟺ ep N 까지 eval 기록 완료". result queue 폐기.
+- **CPU-clone 스냅샷** (`_clone_state_to_cpu`/`_clone_optim_state`): live param 공유 race 제거.
+- **strict resume normalization** (로드측): `epoch` 을 `1..N` 재구성 + per-epoch 키 len==ckpt_epoch 강제. `batch_profiling` 등 per-batch 키는 `_NON_PER_EPOCH` 로 제외.
+- **[best_model_visualizer.py, gitignored] viz 방어**: stackplot 전 epoch 축과 ratio 배열 min-length 정렬.
+- **완료 dataset gap backfill**: 유실 eval 의 `epoch_scores/epoch_NNN_scores.npz` 로 메트릭 재계산 → `epoch_metrics.json` 보충. npz 없는 진행중 dataset 은 깨끗한 재학습.
+
+### Verification
+`simulation` full pipeline kill@ep13 → resume → finish ep14: `epoch=[1..14]` 연속(skip/dup 0), per-epoch 43키 전부 len 14, `epoch_metrics evals=[5,10,14]`(누락 0), `batch_profiling=9` 보존. 상세: [docs/POST_MORTEMS/2026-05-30_resume_record_consistency.md](POST_MORTEMS/2026-05-30_resume_record_consistency.md).
+
+### Note
+핵심 수정 2 파일 (`scripts/run_base_experiments.py`, `mae_anomaly/visualization/best_model_visualizer.py`) 은 `.gitignore` (`scripts/run_*.py`, `mae_anomaly/visualization/`) 로 추적 제외 → 디스크에서 활성이나 commit 대상 아님. tracked 변경은 `trainer.py` + 본 문서 + post-mortem.
+
 ## 2026-05-29: Bg-worker CPU throttle + epoch dashboard VUS-completeness fix
 
 ### Problem (관측됨)
