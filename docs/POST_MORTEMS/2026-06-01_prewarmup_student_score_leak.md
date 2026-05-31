@@ -96,6 +96,38 @@ raw 배열(teacher_recon_error/discrepancy_error/fm_error)은 게이트와 무�
 - **R5** 모든 in-scope cell(45)의 pre-warmup npz coverage 완비 확인 → 재학습 0건으로
   scalar 정정 가능. (feasibility 한계는 누락 npz 가 아니라 누락 per-epoch model weight.)
 
+## Execution outcome (2026-06-01, 실측)
+
+`scripts/backfill_prewarmup_recon_only.py --apply` (OMP=1, 14 worker, 6114s) 로 45 cell 정정.
+
+- **R1** pre-warmup npz `adaptive_score := teacher_recon_error`: 1450 파일 덮어씀
+  (나머지는 직전 run 에서 이미 recon-only → idempotent skip). 전 npz `.tmp` 대신
+  `.rebuild.npz` 로 원자적 교체 (np.savez_compressed 의 `.npz` 자동 접미사 회피).
+- **R2/R3** pre-warmup epoch_metrics row: 2250 row (45×50) 를 `compute_full_metric_set`
+  (SWaT 는 `compute_metrics_with_exclusion` 추가) 로 재계산. raw 배열은 불변.
+- **R4** best_epoch 재선정 → **5 cell flip** (양방향, 예측과 정확히 일치):
+  271canon/PSM 105→100, 271_lr/WaDi_A2 245→240, 271_lr/SWaT_full 370→180(post→pre,
+  Δ=2e-5 동률), 285/PSM 95→490(pre→post), 286/WaDi_A1 225→165. flip + pre-warmup-best
+  16 cell 의 `experiment_metadata.metrics` scalar 재계산.
+- **백업**: `.trash/0531/backfill_backups/` (원본 npz+json), `.trash/0531/backfill_viz_backups/`
+  (원본 PNG 107M).
+
+### 독립 감사 (`scripts/audit_prewarmup_backfill.py` + 병렬 recompute)
+- C1 pre-npz recon-only **45/45**, C2 post-npz 미변경 **45/45**, C4 post-warmup row
+  byte-identical **45/45**, C5 best_epoch=argmax **45/45**.
+- 기록된 pre-warmup row 와 독립 재계산 **정확 일치(max diff = 0.000e+00, 75 row 표본)**.
+- 유일 flag 1건(285/WaDi_A2 ep5)은 backfill 오류가 **아니라** 원본 per-epoch eval 의
+  `teacher_pak_auc_f1` 과 재계산 경로 간 **1.58e-6 PA%K 적분 jitter** (다른 epoch 은 diff 0).
+
+### 재시각화
+- epoch-metric curve: **45/45 cell** 재생성 (`scripts/reviz_prewarmup_backfill.py`).
+- best_model: 29 CORRECT(post-warmup best, 영향 없음), 16 STALE → **Option A**
+  (`scripts/reviz_flip_cells_optionA.py`): 정정 best-epoch npz 로 score 기반 5종
+  (ROC/PRC/CM/score-dist/threshold) 재생성, 신호복원 7종은 STALE 마커.
+  5 flip cell 은 weight 부재로 신호복원 재생성 불가(사용자 deprioritise),
+  11 pre-warmup-best 는 weight 존재 → full pipeline 로 재생성 가능(deferred).
+- 상세: `docs/POST_MORTEMS/2026-06-01_prewarmup_backfill_stale_viz.md`.
+
 ## Prevention
 
 - 평가 경로에도 학습 스케줄(warmup) 맥락을 명시적으로 주입(`set_eval_context`)하는 패턴을
