@@ -413,6 +413,37 @@ if config.teacher_only_warmup_epochs < 0:
     config.teacher_only_warmup_epochs = config.num_epochs // 2  # Auto: 25 for 50 epochs
 ```
 
+**Pre-warmup anomaly score = recon-only (2026-06-01)**:
+
+The warm-up gate masks *training* (the student decoder/discrepancy/FM are skipped
+in `model.forward(teacher_only=True)`), but **evaluation must mask the score too**.
+During warm-up the student is frozen / random-initialised, so its output-discrepancy
+(`disc`) and feature-matching (`fm`) signals are noise that must NOT enter the
+adaptive anomaly score. The eval-side gate:
+
+```python
+# mae_anomaly/scoring.py — single source for the window predicate
+def is_prewarmup_epoch(config, epoch):  # epoch is 1-indexed (ep = trained+1)
+    return epoch is not None and config.teacher_only_warmup_epochs > 0 \
+           and epoch <= config.teacher_only_warmup_epochs
+
+# scoring functions take a REQUIRED keyword-only force_recon_only.
+# True  → w_disc=0 AND fm_active=False → student_error=0 → score == recon (exact).
+# False → legacy full adaptive score (post-warmup, byte-for-byte unchanged).
+compute_score(recon, disc, fm, config, force_recon_only=is_prewarmup_epoch(config, ep))
+
+# Evaluator carries the flag per eval:
+evaluator.set_eval_context(epoch=ep)   # sets self._force_recon_only
+metrics = evaluator.evaluate(...)      # _apply_scoring_formula forwards the flag
+```
+
+Zeroing `w_disc` alone is insufficient — the FM term is a separate branch
+(`fm_active and fm is not None`), so recon-only requires **both** `w_disc=0` and
+`fm_active=False`. The raw per-epoch npz arrays (`teacher_recon_error`,
+`discrepancy_error`, `fm_error`) are always saved un-gated, so offline recompute
+keeps full information; only the composed `adaptive_score` is gated. See
+`docs/POST_MORTEMS/2026-06-01_prewarmup_student_score_leak.md`.
+
 **Epoch Offset (Train Augmentation)**:
 
 When `epoch_offset=True`, each epoch's train window start positions are shifted by a random offset from `[0, stride)`. Offsets are sampled without replacement (non-replacement within each cycle of `stride` epochs), so over `stride` epochs all possible offsets are covered exactly once. Test windows are always fixed at offset=0.

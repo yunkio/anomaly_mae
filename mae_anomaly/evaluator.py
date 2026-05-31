@@ -1283,6 +1283,11 @@ class Evaluator:
         self.config = config
         self.test_loader = test_loader
         self.test_dataset = test_dataset
+        # Pre-warmup gate state. When True, the adaptive scoring formula drops
+        # the (frozen/random-init) student's discrepancy + FM terms so the
+        # anomaly score is teacher-recon only. Set per-eval via
+        # set_eval_context(epoch=...); default False == legacy (full) scoring.
+        self._force_recon_only = False
         if self.model is not None:
             self.model.eval()
 
@@ -1492,10 +1497,27 @@ class Evaluator:
             compute_ratio_weighted_score,
         )
         if scoring_mode == 'adaptive':
-            return compute_adaptive_point_score(recon, disc, fm, self.config)
+            return compute_adaptive_point_score(
+                recon, disc, fm, self.config,
+                force_recon_only=self._force_recon_only,
+            )
         if scoring_mode == 'ratio_weighted':
             return compute_ratio_weighted_score(recon, disc, self.config)
         return compute_default_score(recon, disc, self.config)
+
+    def set_eval_context(self, *, epoch):
+        """Mark whether the upcoming eval is within the teacher-only warmup
+        window, so the adaptive score drops the (frozen-student) disc/FM terms.
+
+        ``epoch`` is 1-indexed (``ep = trained_epoch + 1``) — the same index
+        used for ``epoch_metrics`` rows and the npz filename. Pre-warmup iff
+        ``0 < epoch <= config.teacher_only_warmup_epochs``. Pass ``epoch=None``
+        for post-hoc / final viz with no defined epoch → recon-only NOT forced
+        (legacy full scoring). Must be called before evaluate()/the per-epoch
+        scoring; it is a no-op-safe setter (default state is False).
+        """
+        from mae_anomaly.scoring import is_prewarmup_epoch
+        self._force_recon_only = is_prewarmup_epoch(self.config, epoch)
 
     def _get_aggregation_map(self):
         """Get cached aggregation map (geometry-only, scoring-mode independent)."""

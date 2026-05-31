@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-06-01: Pre-warmup recon-only anomaly score (frozen-student disc/FM leak fix)
+
+### Problem (관측됨)
+`teacher_only_warmup_epochs > 0` 실험에서 teacher-only warmup 구간(eval epoch ≤ warmup)의
+anomaly score 에 **frozen / random-init student 의 disc·FM 항이 혼입**. Warmup gate 가
+학습(trainer/loss)만 막고 평가(evaluator)는 항상 full forward 를 돌려, student 가 아직
+학습되지 않은 구간에서도 disc/FM 가 score 에 더해졌다. `w_disc=0` 만으로는 FM 항이 별도
+분기로 남아 누수 지속.
+
+### Root cause (코드 단위)
+eval 경로(`evaluator._apply_scoring_formula` → `scoring.compute_adaptive_components`)에
+warmup 개념이 없었음. recon-only 보장은 `w_disc=0` **AND** `fm_active=False` 동시 필요.
+
+### Fixes
+- **[scoring.py] `is_prewarmup_epoch(config, epoch)`** 단일 게이트 술어 추가
+  (`0 < epoch ≤ teacher_only_warmup_epochs`; None/warmup0 → False). evaluator·npz·contrib·
+  train-scoring·viz 가 공유.
+- **[scoring.py] `force_recon_only: bool` required keyword-only** 를
+  `compute_adaptive_components` / `compute_adaptive_point_score` / `compute_score` 에 추가.
+  True → `w_disc=0` & `fm_active=False` → `score == recon` (정확). 누락 호출자는 즉시
+  `TypeError` (API-change checklist 규칙 #2).
+- **[evaluator.py] `set_eval_context(*, epoch)`** + `self._force_recon_only` —
+  `_apply_scoring_formula` 가 adaptive 분기에 플래그 forward.
+- **[run_base_experiments.py, gitignored runner]** per-epoch eval(`epoch=ep`),
+  npz adaptive_score, contribution, best-epoch train scoring, best-model viz,
+  final bg-worker eval(`epoch=timing['best_epoch']`) 게이트 연결. raw npz 배열은 항상 raw.
+- **[base.py / best_model_visualizer.py, gitignored viz]** post-hoc viz 는 epoch 맥락 없음 →
+  `force_recon_only=False` (legacy full score) 명시; `derive_pred_data` 에 게이트 kwarg 추가.
+
+### Verification
+doctest 12/12; `is_prewarmup_epoch` 경계(250=pre,251=post,None=post,warmup0=post);
+모듈 `force_recon_only=True → score==recon` 정확 일치; evaluator 배선
+(ep250=recon-only, ep251=full, None=full); 13개 게이트 호출부 전수 `force_recon_only` 전달;
+편집 5파일 `py_compile` 통과. 상세: [docs/POST_MORTEMS/2026-06-01_prewarmup_student_score_leak.md](POST_MORTEMS/2026-06-01_prewarmup_student_score_leak.md).
+
+### Note
+tracked 변경: `mae_anomaly/scoring.py`(+게이트), `mae_anomaly/evaluator.py`,
+`mae_anomaly/types.py`(단일소스 PatchScoresBundle), 본 문서, post-mortem, ARCHITECTURE.
+런타임 fix 의 다수가 위치한 `scripts/run_base_experiments.py` 와
+`mae_anomaly/visualization/*` 는 `.gitignore` 로 추적 제외(디스크 활성, commit 대상 아님).
+완료 실험 소급 재계산(pre-warmup npz + epoch_metrics + best_epoch 재산정)은 별도 backfill.
+
 ## 2026-05-30: Resume record-consistency (score-contribution off-by-one + lost eval records)
 
 ### Problem (관측됨)
