@@ -60,6 +60,7 @@ dataset/
 temp/
 .trash/
 trash/
+legacy/
 references/
 ResearchProposal/
 comparison/results/
