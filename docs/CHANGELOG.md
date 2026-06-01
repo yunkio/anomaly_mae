@@ -144,6 +144,28 @@ export OMP_NUM_THREADS=4           # bg-worker per-process OpenBLAS thread cap (
 - 매 Phase 끝 byte-equal 검증 (Phase 1: 0.0 diff for canonical / NPZ-save / dict-config 경로; Phase 2: bundle pickle roundtrip OK; Phase 3: kw-only required TypeError 강제 동작 확인).
 - 회귀 test `temp/0529/test_scoring_equivalence.py` 가 모든 Phase 후에도 10/10 통과 유지.
 - 검증 학습 (sim 5 ep + SWaT 10 ep) 으로 end-to-end 동작 확인 후 산출 dir 삭제.
+## 2026-05-30: Weak-supervised baseline fidelity rework (normalization · DeepMIL encoder · NRdetector params · provenance gate)
+
+Root-cause 분석 (`temp/ssl_official_baseline_porting_0529/rework_execution_after_root_cause/17_PROVENANCE_FAILURE_ROOT_CAUSE.md`) 후, 4 weak baseline (`deepmil`/`wetas`/`treemil`/`nrdetector`) 의 충실도 결함을 코드 레벨에서 수정. **기존 22개 unsupervised baseline·metric·output 코드 무수정.** 상태 = 구현 완료 · CPU dry-test 통과 · **GPU 미실행** (결과표 weak 행 수치 0개; Q3 = N/A 구조적 부적합, Q1 = pending).
+
+**1) Normalization fidelity (핵심):** 이전엔 4 weak 모델이 pipeline **global MinMax scaler** 를 받아 원논문과 불일치(silent fidelity 결함)했음. `run_baseline.py:240` 에 `SELF_NORMALIZING_WEAK={wetas, treemil, nrdetector, deepmil}` 추가 → 4종 모두 **raw 데이터 수신**(`normalize_mode='none'`) 후 각 wrapper 가 **원논문 normalization 자체 적용**:
+- WETAS = per-recording StandardScaler (z-score, `timeseries.py:35-40`)
+- TreeMIL = per-file StandardScaler (z-score, `timeseries.py:53-55`) — 이전 deviation 이 문서에 silent 였음 → `MODELS.md §25` 에 명시
+- DeepMIL = per-recording StandardScaler (WETAS-lineage)
+- NRdetector = per-split z-score StandardScaler (`data_loader.py:50-55`)
+- residual (결함 아님): `predict(test_X)` 가 test segment 경계를 안 받는 contract 제약 → per-recording test 불가, transductive whole-test z-score 로 대체 (train→test leakage 없음, scope gap = granularity 뿐).
+
+**2) DeepMIL encoder → WETAS DiCNN + optimizer:** 이전 bespoke `TSSegmentEncoder` (NON_OFFICIAL) 제거 → encoder = **WETAS `DilatedCNN`** (DERIVATIVE_CITED, WETAS ICCV'21 p.7360 "DeepMIL employs the same model architecture with WETAS (i.e., DiCNN)"; input=F, hidden=out=128, kernel=2, n_layers=7, RF=128). **OFFICIAL 아님** 명시 (Sultani 원논문 = video/C3D, 학습형 TS encoder 부재). head+loss 는 Sultani CVPR'18 FAITHFUL 유지 (`D→512→32→1`, hinge margin 1.0, λ_smooth=λ_sparse=8e-5, L2=0.001). scoring = **dense per-timestep** (32-seg broadcast 은퇴; `n_segments` vestigial). **optimizer = Adam lr=1e-4** (WETAS `train_classifier.py:234` 출처) — Sultani 의 Adagrad lr=0.01 은 frozen-C3D shallow head 전용이라 deep DiCNN 과 joint 학습 시 발산(logits→-200/-440, score collapse)하므로 encoder 출처 optimizer 채택. preset 도 `optimizer='adam'`/`lr=1e-4` 로 갱신.
+
+**3) NRdetector encoder_lr 파라미터화 + confound 문서화:** `encoder_lr` 을 preset 에 노출 (`encoder_lr=1e-3`, 이전 wrapper 하드코딩). `encoder_epochs=50`/`encoder_lr=1e-3` = **IMPL-INVENTED** — 공식은 encoder 학습 recipe 없이 pretrained `.pth` 로드만 (`modules/extractor.py:65`); 우리는 pth 미보유라 from-scratch BCE-only 학습 → 출처 없는 50/1e-3 은 confound 로 문서화. `prior=None` → 런타임 동적 추정 (PU class prior = intrinsic anomaly ratio, 데이터셋 의존 → estimate 가 맞음; 공식 고정 0.25 우회는 의도적). `noisy_rate=0.4` = reveal fraction (양성 라벨 40%만 공개, `selector.py:31-39`) = 실험 knob 이라 고정.
+
+**4) Parameterization (R3b):** 4 weak 모델 고정값 전부 `baseline_common.py` preset 에 노출 (하드코딩 금지). 분류 구분 — fixed-param / runtime-estimated (`prior`) / normalization / impl-invented (`encoder_epochs`·`encoder_lr`). default 값은 `MODELS.md §23–26` 및 `GUIDE.md §20`.
+
+**5) Provenance gate G1–G5 (재발방지, project-wide):** `GUIDE.md §7.1` + `MODELS.md` weak 섹션에 신설 — G1 모든 컴포넌트 `{FAITHFUL|DERIVATIVE_CITED|NON_OFFICIAL}`+source locus ("design choice" escape 금지) · G2 NON_OFFICIAL ⇒ ≥5-round source-chain · G3 in-project sibling cross-check · G4 provenance≠comparability routing · G5 vendored baseline VCS 가시성.
+
+**문서 변경:** `comparison/GUIDE.md` (§7 분류표에 "Weakly Supervised (4)" 행 + 개수 주석, §7.1 provenance gate 신설, §20 normalization fidelity 표·DeepMIL DiCNN/optimizer·충실도 주의 갱신), `comparison/MODELS.md` (§23 DeepMIL encoder/optimizer/dense/normalization 재작성, §24 WETAS·§25 TreeMIL·§26 NRdetector normalization 명시, §26 encoder confound+verbatim 발췌+prior 동적+noisy_rate knob, weak intro 에 normalization fidelity·G1–G5). DeepMIL CVPR'18 DOI = `10.1109/CVPR.2018.00678` (검증).
+
+**코드 변경 (참조):** `comparison/run_baseline.py` (`SELF_NORMALIZING_WEAK`), `comparison/baseline_common.py` (nrdetector `encoder_lr` 파라미터화 + deepmil `optimizer`/`lr` 갱신 + 4종 normalization/분류 주석), `comparison/baselines/{deepmil,wetas,treemil,nrdetector}/{model,wrapper}.py` (상세 work-log: `temp/ssl_official_baseline_porting_0529/rework_execution_after_root_cause/09_CODE_REWORK_LOG.md`).
 
 ## 2026-05-26: Comparison boundary-safe predicate 를 MAE-strict 형태로 통일 (effective span = window + target)
 

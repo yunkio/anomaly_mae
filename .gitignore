@@ -1,92 +1,52 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
-dist/
-build/
-*.backup
-*.backup_*
+# ============================================================
+# Cross-machine consistency policy (machineB) — SCOPED
+# TRACK : only .py / .md that belong to the comparison + mae_anomaly
+#         experiments (their code + runner scripts + docs).
+# IGNORE: everything else (all other dirs, binaries, data, json, .txt,
+#         notebooks, caches, results, deprecated/legacy, .claude, CLAUDE.md).
+# ============================================================
+
+# 1) ignore everything, but keep descending into directories
+*
+!*/
+
+# 2) whitelist .py / .md ONLY inside the experiment areas ----
+!comparison/**/*.py
+!comparison/**/*.md
+!mae_anomaly/**/*.py
+!mae_anomaly/**/*.md
+!scripts/**/*.py
+!scripts/**/*.md
+!docs/**/*.py
+!docs/**/*.md
+
+# 3) experiment-related root docs + keep .gitignore ----------
+!/README.md
+!/ablation_guideline.md
+!/set_guideline.md
+!.gitignore
+
+# 4) re-exclude — WIN over the whitelist above ---------------
+# results / deprecated / caches inside the tracked areas
+comparison/results/
+comparison/_deprecated/
+**/_deprecated/
+**/__pycache__/
+docs/report_images/
+# .py junk
 *_backup*.py
 *_option*.py
-
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Results
-results/*/
-!results/archived/
-*.png
-*.jpg
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Claude
-.claude/
-CLAUDE.md
-
-# Visualization (exclude from git - keep only core model)
-mae_anomaly/visualization/
-scripts/visualize_all.py
-
-# Ablation experiments (exclude from git)
-scripts/ablation/
-scripts/run_*.py
-scripts/run_*.sh
-scripts/eval_*.py
-scripts/preprocess_*.py
-scripts/prepare_*.py
-scripts/profile_*.py
-scripts/rerun_*.py
-scripts/rerun_*.sh
-scripts/resume_*.sh
-scripts/retrain_*.sh
-scripts/aggregate_*.py
-scripts/patch_*.py
-scripts/validate_*.py
-
-# Comparison framework (exclude from git)
-comparison/
-
-# Documentation (exclude generated artifacts, keep markdown docs)
-docs/ablation/
-docs/report_images/
-ablation_guideline.md
-
-# Temporary files
-temp/
-.trash/
-trash/
-
-# Research proposal (separate from codebase)
-ResearchProposal/
-
-# Reference papers
-references/
-
-# Poe config
-.poe/
-
-# Experiment queue configs (generated per-run)
-configs/
-
-# Backup files
 *.bak
 
-# Dataset files (large binary files)
-dataset/
-
-# Marimo
-__marimo__/
+# 5) hard-exclude non-experiment dir trees entirely (root-anchored).
+#    Wins over `!*/`; also blocks embedded git repos / edge cases under them.
+/temp/
+/.trash/
+/trash/
+/dataset/
+/legacy/
+/references/
+/ResearchProposal/
+/.claude/
+/configs/
+/results/
