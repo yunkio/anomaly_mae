@@ -951,7 +951,7 @@ dataset = SlidingWindowDataset(
 - Constant column removal (z-score normalization handled by SlidingWindowDataset)
 
 **Registry** (concat / simple, 2026-06-01):
-- **`SMD_concat`** (`load_smd_concat`): all 28 machines concatenated, **per-machine test-cut** (orig_train + front-50% test → train, back-50% test → test) — matches SMAP/MSL/Exathlon concat. `run_boundaries` mark every machine boundary AND each orig_train/test_front seam.
+- **`SMD_concat`** (`load_smd_concat`): all 28 machines concatenated, **per-machine test-cut** (orig_train + front-50% test → train, back-50% test → test) — matches SMAP/MSL/Exathlon concat. `run_boundaries` mark every machine boundary AND each orig_train/test_front seam. **Per-machine normalization (2026-06-02)**: emits `entity_norm_segments` so each machine is scaler-fit on its own train portion (not one whole-array fit over all 28 machines — see SMAP/MSL normalization note).
 - **`SMD_simple_<machine>`** (`load_smd_simple`): one machine = one dataset (test-cut). 28 keys. (run_base `DATASETS` uses these; `results_subdir` stays `SMD/<machine>`.)
 - Legacy: `smd` = all machines with the **ORIGINAL** train/test split (no test-cut); `smd_machine-X-Y` = single machine original split.
 
@@ -1068,7 +1068,7 @@ Per-app train/test split:
 Sliding windows respect `run_boundaries` (trace boundaries within both train and test portions).
 
 **Registry** (concat / simple, 2026-06-01):
-- **`Exathlon_concat`** (`load_exathlon_concat`): all 6 apps concatenated into one stream. Each app is loaded via `load_exathlon(app)`, split into its train/test by `train_ratio`, then re-merged as `[all_app_train | all_app_test]`. `run_boundaries` merge every app's internal **trace** boundaries (mapped into the global train/test blocks) PLUS every app boundary. 19 features (all apps).
+- **`Exathlon_concat`** (`load_exathlon_concat`): all 6 apps concatenated into one stream. Each app is loaded via `load_exathlon(app)`, split into its train/test by `train_ratio`, then re-merged as `[all_app_train | all_app_test]`. `run_boundaries` merge every app's internal **trace** boundaries (mapped into the global train/test blocks) PLUS every app boundary. 19 features (all apps). **Per-app normalization (2026-06-02)**: emits `entity_norm_segments` so each app is scaler-fit on its own train portion (not one whole-array fit over all apps — see SMAP/MSL normalization note).
 - **`Exathlon_simple_app<N>`** (`load_exathlon`): one app = one dataset. 6 keys. (run_base `DATASETS` uses these; `results_subdir` stays `Exathlon/app<N>`.) Legacy alias `exathlon_app<N>` retained.
 - Boundary safety (verified): no window crosses a trace, app, or train|test boundary — **0 crossing windows** (see CHANGELOG 2026-06-01).
 
@@ -1156,15 +1156,15 @@ Per channel:
 - **`SMAP_concat` / `MSL_concat`** — all channels time-concatenated into one multivariate stream; `run_boundaries` mark every channel + the train|test seam so windows never cross segments. SMAP=54ch×25feat, MSL=27ch×55feat.
 - **`SMAP_simple_<ch>` / `MSL_simple_<ch>`** — one channel = one dataset (e.g. `SMAP_simple_A-1`, `MSL_simple_C-1`); SMD-style. 54 + 27 = 81 keys.
 
-**Normalization is leakage-free**: `SlidingWindowDataset._minmax_per_feature(signals, train_end)` fits min/max on `signals[:train_end]` (the train portion, `train_end = int(len·train_ratio)`) only, then applies to all; the held-out `test_back_50%` (eval set) never enters the fit. `test_front_50%` is part of train *by design* (chronological prefix), not leakage. Cross-channel pooled fit (one min/max per feature over all channels' train portions). z-score (`_standardize_per_feature`) is identical.
+**Normalization is leakage-free AND per-entity (2026-06-02)**: each channel is normalized using statistics fitted on **its own train portion only** (`SlidingWindowDataset(entity_segments=...)` → `_normalize_per_entity`), then concatenated. The held-out `test_back_50%` (eval set) never enters any fit; `test_front_50%` is part of train *by design* (chronological prefix), not leakage. **Previously this was a single cross-channel (whole-array) min/max fit over all channels' pooled train portions — fixed 2026-06-02**: whole-array fit mixed channels of differing scale so the dominant normalized signal became "which channel" rather than "is this anomalous", crushing small-magnitude channels' intra-channel variation. The concat loaders now emit `data_info['entity_norm_segments']` (per-channel `(train_len, test_len)`) and `SlidingWindowDataset` fits each channel independently. z-score (`_standardize_per_feature`, computed in float64) and minmax behave identically per entity. Single-entity datasets (SWaT/WaDi/PSM) keep the whole-array path (one entity → equivalent).
 
 ### Pattern A — all-channels concat (legacy convention)
 
 **Loaders**: `load_smap_combined()`, `load_msl_combined()`. **Entries**: `smap`, `smap_normalonly`, `msl`, `msl_normalonly` (4 total).
 
-Channels are time-concatenated into a single 2D stream. `data_info['run_boundaries']` lists every discontinuity (intra-channel `orig_train ↔ test_front` junction + inter-channel boundaries). `UnifiedLoader` applies a **single per-feature min-max fit across all channels' train portion** (Anomaly-Transformer / TimesNet / DCdetector convention via the OmniAnomaly preprocessed mirror).
+Channels are time-concatenated into a single 2D stream. `data_info['run_boundaries']` lists every discontinuity (intra-channel `orig_train ↔ test_front` junction + inter-channel boundaries). **As of 2026-06-02 the scaler is fit PER CHANNEL on each channel's own train portion** (`entity_norm_segments` → `_normalize_per_entity`), not a single cross-channel pooled fit. (The earlier whole-array fit followed the Anomaly-Transformer / TimesNet / DCdetector mirror but mixed channel scales — see the normalization note above.)
 
-Trade-off: cross-channel concat means `0.5` in normalized space can mean different physical values for different channels. `run_boundaries` + `compute_segment_safe_window_indices` guarantee windows never cross channel boundaries.
+`run_boundaries` + `compute_segment_safe_window_indices` guarantee windows never cross channel boundaries. With per-entity normalization, a normalized value now has a consistent within-channel meaning (each channel is centered/scaled on itself).
 
 | Spacecraft | Total | Train | Test | train_ratio | train anom% | test anom% | run_boundaries | safe-cut moved |
 |---|---|---|---|---|---|---|---|---|

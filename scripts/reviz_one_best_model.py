@@ -84,7 +84,8 @@ def main():
         normalize_mode=config.normalize_mode,
         minmax_range=getattr(config, 'minmax_range', '0_1'),
         minmax_clamp_min=getattr(config, 'minmax_clamp_min', None),
-        minmax_clamp_max=getattr(config, 'minmax_clamp_max', None))
+        minmax_clamp_max=getattr(config, 'minmax_clamp_max', None),
+        entity_segments=(data_info or {}).get('entity_norm_segments'))
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
     # --- GPU patch scores -> pred_data (production path) ---

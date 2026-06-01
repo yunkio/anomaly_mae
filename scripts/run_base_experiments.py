@@ -2328,12 +2328,20 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
 
     # Extract run_boundaries for datasets with non-contiguous blocks (e.g., SMD block split)
     run_boundaries = data_info.get('run_boundaries') if data_info else None
+    # Per-entity normalization segments for concat multi-entity datasets
+    # (SMAP/MSL/SMD/Exathlon). When present, SlidingWindowDataset fits a scaler
+    # per entity on its own train portion (leakage-free) instead of one
+    # whole-array fit that mixes entities of differing scale (2026-06-02 fix).
+    entity_segments = data_info.get('entity_norm_segments') if data_info else None
 
     print(f"  Signals: {signals.shape}")
     print(f"  Labels: normal={np.sum(point_labels==0):,}, anomaly={np.sum(point_labels==1):,}")
     print(f"  Train ratio: {train_ratio:.4f}")
     if run_boundaries:
         print(f"  Run boundaries: {len(run_boundaries)} (windows will not cross block boundaries)")
+    if entity_segments:
+        print(f"  Per-entity normalization: {len(entity_segments)} entities "
+              f"(each fit on its own train portion; NO whole-array fit)")
 
     # Apply normal50 noise if needed
     noisy_labels = None
@@ -2386,6 +2394,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
         minmax_range=getattr(config, 'minmax_range', '0_1'),
         minmax_clamp_min=getattr(config, 'minmax_clamp_min', None),
         minmax_clamp_max=getattr(config, 'minmax_clamp_max', None),
+        entity_segments=entity_segments,
     )
     # === Per-dataset DataLoader num_workers (2026-05-29) ===
     # WaDi/A1 and WaDi/A2 have 123 features → batch tensor is ~252 MB at
@@ -2452,6 +2461,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
             minmax_range=getattr(config, 'minmax_range', '0_1'),
             minmax_clamp_min=getattr(config, 'minmax_clamp_min', None),
             minmax_clamp_max=getattr(config, 'minmax_clamp_max', None),
+            entity_segments=entity_segments,
         )
     else:
         train_dataset = SlidingWindowDataset(
@@ -2464,6 +2474,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
             minmax_range=getattr(config, 'minmax_range', '0_1'),
             minmax_clamp_min=getattr(config, 'minmax_clamp_min', None),
             minmax_clamp_max=getattr(config, 'minmax_clamp_max', None),
+            entity_segments=entity_segments,
         )
     # drop_last=True (when dataset is large enough): keeps batch shape constant across steps,
     # which stabilizes cuDNN.benchmark heuristic search and removes a small last-batch overhead.
@@ -3201,6 +3212,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
             minmax_range=getattr(config, 'minmax_range', '0_1'),
             minmax_clamp_min=getattr(config, 'minmax_clamp_min', None),
             minmax_clamp_max=getattr(config, 'minmax_clamp_max', None),
+            entity_segments=entity_segments,
         )
         # train_infer_loader: best-epoch single inference pass. workers reduce
         # one-shot load latency; persistent_workers=False since this loader is
