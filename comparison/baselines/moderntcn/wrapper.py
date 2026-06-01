@@ -13,30 +13,34 @@ Paper-faithful notes (vs upstream `luodhhh/ModernTCN/ModernTCN-detection/`):
   ``lr_new = base_lr * 0.5 ** (epoch_idx_1based - 1)``. We mirror this here via
   ``lr_decay_per_epoch=0.5`` applied at the end of each epoch (skipping the very
   first epoch so the first epoch runs at base_lr, matching the upstream formula).
-- Score aggregation (Phase 2.5.1 correction, 2026-05-24 — supersedes earlier
-  Phase 2.5 non-overlap simplification per user direction): Upstream
-  `exp_anomaly_detection.py::test()` (lines 31-40 of the test() body) iterates
-  the test loader and concatenates per-window per-position MSE via
-  ``np.concatenate(attens_energy, axis=0).reshape(-1)``. The loader's effective
-  stride is dataset-conditional in upstream (``data_provider/data_loader.py``):
-  **SMD `step=100`** (non-overlap if win=100) vs **PSM/MSL/SMAP/SWaT `step=1`**
-  (full overlap). The majority of upstream's reference datasets use
-  ``step=1``; SMD is the outlier. User directive (2026-05-24): unify to the
-  **stride=1 sliding window + last-position score + Option B forward-fill
-  head** pattern (the standard "stride=1 sliding, score = per-window scalar
-  mapped to last-timestep" recipe used by omnianomaly / usad / tranad /
-  gcn_lstm / gdn). For each stride=1 window we compute the per-window scalar
-  ``score_w = mean(MSE(recon[:, -1, :], input[:, -1, :]))`` (i.e. the
-  last-timestep position of the per-position MSE map, mean-over-features), and
-  assign it to test timestep ``t = w + win_size - 1`` (last position of
-  window w). This produces ``valid_scores`` of length
-  ``T_test - win_size + 1``. The first ``win_size - 1`` timesteps (which lack
-  a fully-contextualized window ending on them) are filled via Option B head
-  forward-fill (`scores[:win_size-1] = valid_scores[0]`). No tail padding is
-  required because the last valid window already ends at index ``T_test - 1``.
-  Architecture and per-position MSE formula are unchanged from upstream.
-  Canonical pattern reference: `comparison/baselines/omnianomaly/model.py`
-  `predict()`.
+- Score aggregation (BFA strict-fidelity fix, 2026-06-01 — supersedes the
+  earlier last-position-only reduction): Upstream
+  `exp_anomaly_detection.py::test()` defines
+  ``self.anomaly_criterion = nn.MSELoss(reduce=False)`` and computes, per test
+  window, ``score = torch.mean(self.anomaly_criterion(batch_x, outputs), dim=-1)``
+  → shape ``(B, win_size)`` keeping **ALL** window positions, then flattens
+  every position of every window via
+  ``attens_energy = np.concatenate(attens_energy, axis=0).reshape(-1)`` into
+  ``test_energy``. The test loader strides with **step=1** for SWaT/PSM/MSL/SMAP
+  (``data_provider/data_loader.py:SWATSegLoader/PSMSegLoader __init__ default
+  step=1``; ``__getitem__`` does ``index = index * self.step`` then slices
+  ``self.test[index:index+win_size]``), i.e. fully-overlapping test windows, so
+  upstream scores every absolute timestep once per covering window, at every
+  position. (SMD is the lone ``step=100`` non-overlap outlier.)
+  Our harness requires a single per-timestep score of shape ``(T_test,)`` aligned
+  to length-``T_test`` point labels (``comparison/run_baseline.py`` contract).
+  The faithful reconciliation of upstream's "all positions, all overlapping
+  windows" flatten to a per-timestep contract is **overlap-averaged per-position
+  MSE**: for each stride=1 window ``w`` covering ``[w, w+win_size-1]`` we keep the
+  full per-position MSE row ``err[w, :]`` (shape ``(win_size,)``, mean-over-features
+  exactly as upstream) and accumulate ``score_sum[w+j] += err[w, j]`` with
+  ``count[w+j] += 1`` for every position ``j``; the final score is
+  ``score_sum / count``. This (a) keeps all positions (no longer discards 99/100
+  of the reconstruction signal), (b) scores each timestep in every covering
+  window's context, and (c) covers every index ``0..T_test-1`` (the union of all
+  stride-1 windows), so NO head/tail fill hack is needed — every timestep has
+  ``count >= 1``. Architecture and the per-window per-position MSE formula are
+  unchanged from upstream.
 - StandardScaler: upstream `data_provider/data_loader.py:SWATSegLoader` fits a
   StandardScaler on the train split and transforms both train and test. We do the
   same (Path B self-normalizing), driver passes raw data
@@ -256,27 +260,29 @@ class ModernTCNBaseline:
         return self
 
     def predict(self, test_X: np.ndarray) -> np.ndarray:
-        """Compute per-timestep anomaly score (length=T_test) using stride=1
-        sliding-window inference + last-position scalar score + Option B
-        forward-fill head (canonical pattern; see
-        `comparison/baselines/omnianomaly/model.py::predict()`).
+        """Compute per-timestep anomaly score (length=T_test) via stride=1
+        sliding-window inference and **overlap-averaged per-position
+        reconstruction MSE** — the faithful reconciliation of upstream's
+        all-position flatten to the harness ``(T_test,)`` contract.
 
-        Reference upstream test loop (per-window-per-position MSE flatten —
-        unchanged for the per-window MSE *formula*; we map it to a length-T_test
-        score via the standard sliding+last-position recipe instead of the
-        dataset-conditional concat.reshape(-1) flatten):
+        Upstream test loop (`exp_anomaly_detection.py::test()`):
 
+            self.anomaly_criterion = nn.MSELoss(reduce=False)
             outputs = self.model(batch_x, None, None, None)
             score = torch.mean(self.anomaly_criterion(batch_x, outputs), dim=-1)  # (B, W)
+            ...
+            attens_energy = np.concatenate(attens_energy, axis=0).reshape(-1)    # ALL positions
 
-        Reduction-to-scalar-per-window: take the *last position* of the
-        per-window MSE map ``score[:, -1]``; this is the per-window scalar
-        ``score_w = mean(MSE(recon[:, -1, :], input[:, -1, :]))`` aligned with
-        test timestep ``t = w + W - 1``. Stride=1 sliding produces
-        ``valid_scores`` of length ``T_test - W + 1``. Option B head
-        forward-fill assigns ``valid_scores[0]`` to the first ``W-1`` indices
-        (which have no fully-contextualized window ending on them). Tail needs
-        no padding: the last valid score is at index ``T_test - 1``.
+        i.e. upstream keeps EVERY position of EVERY (step=1, overlapping for
+        SWaT/PSM/MSL/SMAP) test window and flattens them all into ``test_energy``.
+        Each absolute timestep is thereby scored once per covering window, at
+        every position. To express this as one score per absolute timestep
+        (length ``T_test``), we overlap-average: keep the full per-position MSE
+        row ``err[w, :]`` for each window ``w`` and accumulate
+        ``score_sum[w + j] += err[w, j]`` (``count[w + j] += 1``) for all
+        positions ``j``, then ``score = score_sum / count``. Every index
+        ``0..T_test-1`` is covered by at least one stride=1 window, so no
+        head/tail fill is needed.
         """
         if self.model is None:
             raise RuntimeError("Model not trained. Call fit() first.")
@@ -291,13 +297,15 @@ class ModernTCNBaseline:
             raise ValueError(f"Test sequence length {N_test} shorter than win_size {self.win_size}")
 
         W = self.win_size
-        # Stride=1 sliding window (canonical pattern: omnianomaly / usad / tranad / gcn_lstm / gdn).
-        # n_windows = N_test - W + 1; window w starts at index w, ends at index w + W - 1.
+        # Stride=1 sliding window: window w starts at index w, ends at index w + W - 1.
         n_windows = N_test - W + 1
-        valid_len = n_windows  # one scalar per window → length T_test - W + 1
 
         self.model.eval()
-        valid_scores = np.empty(valid_len, dtype=np.float32)
+        # Overlap-averaged per-position MSE: accumulate every position of every
+        # window (upstream's all-position flatten), then divide by coverage count.
+        # float64 accumulators avoid precision loss over many overlapping windows.
+        score_sum = np.zeros(N_test, dtype=np.float64)
+        count = np.zeros(N_test, dtype=np.float64)
         n_batches = (n_windows + self.batch_size - 1) // self.batch_size
         with torch.no_grad():
             for batch_idx in range(n_batches):
@@ -312,11 +320,13 @@ class ModernTCNBaseline:
                 input_x = torch.from_numpy(batch_windows).to(self.device)
                 recon = self.model(input_x)
                 # Per-timestep, per-feature MSE → mean over features → (B, W).
+                # (upstream: score = torch.mean(MSELoss(reduce=False)(x, recon), dim=-1))
                 err = ((recon - input_x) ** 2).mean(dim=-1)  # (B, W)
-                # Last-position scalar per window: err[:, -1] → (B,). Canonical
-                # "stride=1 sliding + last-position score" pattern (omnianomaly).
-                last_pos = err[:, -1].cpu().numpy().astype(np.float32)  # (B,)
-                valid_scores[batch_start:batch_end] = last_pos
+                err_np = err.cpu().numpy().astype(np.float64)  # (actual_bs, W)
+                # Scatter-add every position j of window w to absolute timestep (w + j).
+                for j, w_idx in enumerate(range(batch_start, batch_end)):
+                    score_sum[w_idx : w_idx + W] += err_np[j]
+                    count[w_idx : w_idx + W] += 1.0
 
                 if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
                     progress = (batch_idx + 1) / n_batches * 100
@@ -325,15 +335,10 @@ class ModernTCNBaseline:
         if self.verbose:
             print()
 
-        # Map each window's last-position score to its corresponding test timestep:
-        # window w (w = 0..n_windows-1) → t = w + W - 1.
-        # So valid_scores[w] is the score for timestep (w + W - 1), i.e. valid_scores
-        # populates indices [W-1, W, W+1, ..., T_test-1].
-        # Option B head forward-fill: indices [0, W-2] copy valid_scores[0].
-        scores = np.empty(N_test, dtype=np.float32)
-        scores[W - 1 :] = valid_scores  # length N_test - (W-1) == valid_len ✓
-        if W > 1:
-            scores[: W - 1] = valid_scores[0]
+        # Every index 0..N_test-1 is covered by >=1 stride-1 window (the union of
+        # all windows spans the whole series), so count is strictly positive
+        # everywhere; the maximum() guard is purely defensive against division by 0.
+        scores = (score_sum / np.maximum(count, 1.0)).astype(np.float32)
         return scores
 
     def save(self, save_dir: Path) -> None:

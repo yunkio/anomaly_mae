@@ -1,0 +1,33 @@
+{
+  "description": "6번 re-run: moderntcn × 4 OLD datasets (PSM/SWaT/WaDi A1/A2). normalonly+minmax+segaware. (재실험 trigger: 2026-06-02)",
+  "experiments": [
+    {
+      "name": "moderntcn_psm",
+      "experiment": "psm_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    }
+  ]
+}

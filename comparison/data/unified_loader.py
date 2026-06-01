@@ -215,16 +215,40 @@ class UnifiedLoader:
             self.scaler_min = None
             self.scaler_range = None
             print(f"\n  No normalization (raw data — wrapper applies its own scaler).")
-        elif self.normalize_mode == 'minmax':
-            # Paper-faithful: sklearn MinMaxScaler default behaviour (no clip).
-            # QuoVadis reference data_utils.py:preprocess_data fits MinMaxScaler on
-            # train and transforms test without clipping — test can be outside [0,1].
-            self.features, self.scaler_min, self.scaler_range = _minmax_per_feature(
-                features_raw.astype(np.float32), self.train_end, clip=False
-            )
-            print(f"\n  Min-max normalization (train-only fit, NO clip — paper-faithful):")
-            print(f"    Train min range:  [{self.scaler_min.min():.4f}, {self.scaler_min.max():.4f}]")
-            print(f"    Train range:      [{self.scaler_range.min():.4f}, {self.scaler_range.max():.4f}]")
+        elif self.normalize_mode in ('minmax', 'zscore'):
+            # Per-source-FILE leak-free norm for multi-file datasets (SMAP/MSL
+            # channels, SMD machines, Exathlon apps): fit a scaler on each file's
+            # TRAIN slice, transform that file's paired TEST slice. Single-file
+            # datasets reduce to the EXACT legacy whole-array path (bit-identical
+            # NO-OP via the same _minmax_per_feature / _standardize_per_feature).
+            f_tr, f_te = self.get_file_norm_segments()
+            mode = self.normalize_mode
+            if len(f_tr) > 1:  # multi-file -> per source file (leak-free)
+                from comparison.baselines._per_file_norm import normalize_concat_per_file
+                self.features = normalize_concat_per_file(
+                    features_raw.astype(np.float32), self.train_end, f_tr, f_te, mode
+                )
+                # Per-file scalers are not a single global stat -> sentinels.
+                self.scaler_min = self.scaler_range = self.scaler_mean = self.scaler_std = None
+                print(f"\n  Per-file {mode} normalization (multi-file, "
+                      f"{len(f_tr)} entities, train-only fit — leak-free):")
+            elif mode == 'minmax':
+                # Paper-faithful: sklearn MinMaxScaler default behaviour (no clip).
+                # QuoVadis reference data_utils.py:preprocess_data fits MinMaxScaler on
+                # train and transforms test without clipping — test can be outside [0,1].
+                self.features, self.scaler_min, self.scaler_range = _minmax_per_feature(
+                    features_raw.astype(np.float32), self.train_end, clip=False
+                )
+                print(f"\n  Min-max normalization (train-only fit, NO clip — paper-faithful):")
+                print(f"    Train min range:  [{self.scaler_min.min():.4f}, {self.scaler_min.max():.4f}]")
+                print(f"    Train range:      [{self.scaler_range.min():.4f}, {self.scaler_range.max():.4f}]")
+            else:
+                self.features, self.scaler_mean, self.scaler_std = _standardize_per_feature(
+                    features_raw.astype(np.float32), self.train_end
+                )
+                print(f"\n  Z-score normalization (train-only fit):")
+                print(f"    Train mean range: [{self.scaler_mean.min():.4f}, {self.scaler_mean.max():.4f}]")
+                print(f"    Train std range:  [{self.scaler_std.min():.4f}, {self.scaler_std.max():.4f}]")
         else:
             self.features, self.scaler_mean, self.scaler_std = _standardize_per_feature(
                 features_raw.astype(np.float32), self.train_end
@@ -698,6 +722,51 @@ class UnifiedLoader:
         if self.train_end > prev:
             segments.append((prev, self.train_end))
         return segments
+
+    def get_file_norm_segments(self):
+        """Per-source-FILE (entity) train/test segments for leak-free per-file norm.
+
+        Returns ``(train_segs, test_segs)``: two lists of ``(lo, hi)`` half-open
+        slices.  ``train_segs`` are in train-block coords ``[0, train_end)``;
+        ``test_segs`` are in TEST-LOCAL coords ``[0, test_len)``.  The i-th train
+        file pairs 1:1 with the i-th test file (entity order identical in both
+        blocks for every multi-file loader).
+
+        Multi-file datasets -> one entry per entity (cumsum of per-file lengths):
+          - smap / msl  : channel (``channel_meta[k]['train_portion_len'/'test_portion_len']``)
+          - smd_concat  : machine (``train_seg_lengths`` / ``test_seg_lengths``)
+          - exathlon_concat : app  (``train_lens`` / ``test_lens``)
+        Any other ``dataset_type`` (single-file PSM/SWaT/WaDi/simulation, etc.)
+        -> ``([(0, train_end)], [(0, test_len)])`` == whole-array, a true NO-OP.
+
+        SEPARATE from ``get_boundary_train_segments`` (window-safety): this list
+        keys on the per-FILE length arrays + dataset_type, never on the raw
+        ``run_boundaries`` set (which also marks intra-file seams).
+        """
+        di = self.data_info or {}
+        dt = di.get('dataset_type')
+        total_len = len(self.labels) if self.labels is not None else 0
+        test_len = total_len - self.train_end
+        if dt in ('smap', 'msl'):
+            trl = [m['train_portion_len'] for m in di['channel_meta']]
+            tel = [m['test_portion_len'] for m in di['channel_meta']]
+        elif dt == 'smd_concat':
+            trl = di['train_seg_lengths']
+            tel = di['test_seg_lengths']
+        elif dt == 'exathlon_concat':
+            trl = di['train_lens']
+            tel = di['test_lens']
+        else:
+            return [(0, self.train_end)], [(0, test_len)]
+
+        def _cum(lens):
+            segs, p = [], 0
+            for L in lens:
+                segs.append((p, p + int(L)))
+                p += int(L)
+            return segs
+
+        return _cum(trl), _cum(tel)
 
     def create_train_windows_boundary_safe(self, seq_len: int, stride: int = 1):
         """MAE-style single-pass sliding window for the standard variant.

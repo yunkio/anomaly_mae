@@ -16,6 +16,7 @@ import os
 import sys
 import json
 import time
+import inspect
 import importlib
 import numpy as np
 from pathlib import Path
@@ -617,7 +618,10 @@ def compute_all_metrics(
 
     # Extra metrics (vus_roc/vus_pr/affiliation_f1/r_based_f1) at F1-optimal threshold.
     # Operates on masked arrays so eval region is respected.
-    results.update(compute_extra_metrics(masked_scores, masked_labels, threshold))
+    # `skip_vus=False`: include VUS (2026-05-31 evaluator.py made the kwarg required;
+    # caller side updated 2026-06-01 — passing False keeps the existing 6번 result
+    # schema, which included VUS-PR/VUS-ROC).
+    results.update(compute_extra_metrics(masked_scores, masked_labels, threshold, skip_vus=False))
 
     # AR-threshold variants (prevalence-threshold; suffix _ar).
     results.update(compute_ar_threshold_metric_set(masked_scores, masked_labels))
@@ -1122,6 +1126,43 @@ def run_dl_baseline_with_epoch_eval(
 
 
 # ============================================================
+# Per-source-FILE NORM plumbing helpers (leak-free per-file norm)
+# ============================================================
+
+def _predict_gated(model_instance, test_X, test_segments):
+    """Call ``predict`` forwarding per-file ``test_segments`` ONLY if the wrapper
+    accepts it. Uses ``inspect.signature`` (NOT a bare try/except) so a real
+    TypeError raised inside ``predict`` is never masked.
+
+    The 6 untouchable wrappers (timesnet/tfmae/memto/moderntcn/dcdetector/catch)
+    expose a single-arg ``predict(test_X)`` -> the gate falls through to the
+    legacy call, leaving them bit-for-bit unchanged.
+    """
+    try:
+        params = inspect.signature(model_instance.predict).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if 'test_segments' in params:
+        return model_instance.predict(test_X, test_segments=test_segments)
+    return model_instance.predict(test_X)
+
+
+def _fit_kwargs_with_norm(model, base_kwargs, norm_train_segments):
+    """Augment ``model.fit`` kwargs with ``norm_train_segs=`` ONLY if the
+    wrapper's ``fit`` declares that parameter (sibling-gated via inspect).
+    Returns a NEW dict; ``base_kwargs`` is not mutated.
+    """
+    kwargs = dict(base_kwargs)
+    try:
+        fit_params = inspect.signature(model.fit).parameters
+    except (TypeError, ValueError):
+        fit_params = {}
+    if 'norm_train_segs' in fit_params:
+        kwargs['norm_train_segs'] = norm_train_segments
+    return kwargs
+
+
+# ============================================================
 # SOTA Baseline Execution (with per-epoch eval via callback)
 # ============================================================
 
@@ -1138,6 +1179,8 @@ def run_sota_baseline_with_epoch_eval(
     eval_interval: int = 1,
     max_eval_workers: int = 10,
     train_segments=None,
+    norm_train_segments=None,
+    test_segments=None,
 ) -> dict:
     """Run a SOTA baseline with per-epoch inference + synchronous CPU eval.
 
@@ -1180,8 +1223,8 @@ def run_sota_baseline_with_epoch_eval(
         if not should_eval:
             return
 
-        # Inference
-        scores = model_instance.predict(test_X)
+        # Inference (forward per-file test_segments iff the wrapper accepts it)
+        scores = _predict_gated(model_instance, test_X, test_segments)
 
         # CPU eval (synchronous — avoids ThreadPool deadlock with CUDA)
         try:
@@ -1215,9 +1258,13 @@ def run_sota_baseline_with_epoch_eval(
         # All 14 SOTA wrappers accept `train_segments=...` and filter windows that
         # cross a boundary. (DAGMM was previously row-by-row and ignored this; the
         # TranAD-author DAGMM impl now uses 5-step windows and respects segments.)
-        model.fit(train_X, epoch_callback=epoch_callback, train_segments=train_segments)
+        _fit_kw = {'epoch_callback': epoch_callback, 'train_segments': train_segments}
     else:
-        model.fit(train_X, epoch_callback=epoch_callback)
+        _fit_kw = {'epoch_callback': epoch_callback}
+    # SEPARATE per-file NORM segments (window-safety train_segments is unchanged):
+    # forwarded as `norm_train_segs=` only to wrappers whose fit declares it.
+    _fit_kw = _fit_kwargs_with_norm(model, _fit_kw, norm_train_segments)
+    model.fit(train_X, **_fit_kw)
     train_time = time.time() - start_time
 
     print(f"\n  Training complete: {train_time:.1f}s")
@@ -1237,10 +1284,10 @@ def run_sota_baseline_with_epoch_eval(
             final_scores = np.load(best_scores_file)['anomaly_score']
         else:
             # eval_interval>1 or save failed — fall back to last-epoch predict
-            final_scores = model.predict(test_X)
+            final_scores = _predict_gated(model, test_X, test_segments)
     else:
         # No per-epoch eval done — compute metrics on last-epoch predict
-        final_scores = model.predict(test_X)
+        final_scores = _predict_gated(model, test_X, test_segments)
         final_metrics = compute_all_metrics(final_scores, test_y, anomaly_regions)
         final_metrics['epoch'] = getattr(model, 'epochs', 1)
         if excl_region is not None:
@@ -1284,6 +1331,8 @@ def run_weak_sota_baseline_with_epoch_eval(
     eval_interval: int = 1,
     max_eval_workers: int = 10,
     train_segments=None,
+    norm_train_segments=None,
+    test_segments=None,
     resume: bool = False,
 ) -> dict:
     """Weakly-supervised SOTA execution path (2026-05-29/30 SSL porting).
@@ -1400,7 +1449,7 @@ def run_weak_sota_baseline_with_epoch_eval(
         should_eval = (ep % eval_interval == 0) or (ep == model_instance.epochs)
         if not should_eval:
             return
-        scores = model_instance.predict(test_X)
+        scores = _predict_gated(model_instance, test_X, test_segments)
         try:
             eval_start = time.time()
             ep_metrics = compute_all_metrics(scores, test_y, anomaly_regions)
@@ -1439,9 +1488,14 @@ def run_weak_sota_baseline_with_epoch_eval(
     # ---- Train with callback — ONLY behavioral delta vs SOTA path: forward train_y ----
     start_time = time.time()
     if train_segments is not None:
-        model.fit(train_X, train_y=train_y, epoch_callback=epoch_callback, train_segments=train_segments)
+        _fit_kw = {'train_y': train_y, 'epoch_callback': epoch_callback,
+                   'train_segments': train_segments}
     else:
-        model.fit(train_X, train_y=train_y, epoch_callback=epoch_callback)
+        _fit_kw = {'train_y': train_y, 'epoch_callback': epoch_callback}
+    # SEPARATE per-file NORM segments (window-safety train_segments is unchanged):
+    # forwarded as `norm_train_segs=` only to wrappers whose fit declares it.
+    _fit_kw = _fit_kwargs_with_norm(model, _fit_kw, norm_train_segments)
+    model.fit(train_X, **_fit_kw)
     train_time = time.time() - start_time
 
     print(f"\n  Training complete: {train_time:.1f}s")
@@ -1458,9 +1512,9 @@ def run_weak_sota_baseline_with_epoch_eval(
         if best_scores_file.exists():
             final_scores = np.load(best_scores_file)['anomaly_score']
         else:
-            final_scores = model.predict(test_X)
+            final_scores = _predict_gated(model, test_X, test_segments)
     else:
-        final_scores = model.predict(test_X)
+        final_scores = _predict_gated(model, test_X, test_segments)
         final_metrics = compute_all_metrics(final_scores, test_y, anomaly_regions)
         final_metrics['epoch'] = getattr(model, 'epochs', 1)
         if excl_region is not None:

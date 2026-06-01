@@ -1341,6 +1341,8 @@ def load_smd_concat(machines: Optional[List[str]] = None):
         'dataset_type': 'smd_concat', 'machines': machines, 'n_total': n_total,
         'n_features': num_features, 'train_len': total_train, 'test_len': total_test,
         'train_ratio': train_ratio, 'run_boundaries': run_boundaries,
+        'train_seg_lengths': train_seg_lengths, 'test_seg_lengths': test_seg_lengths,
+        'orig_train_lengths': orig_train_lengths,
         'train_attack_ratio': float(np.mean(all_labels[:total_train])) if total_train else 0.0,
         'test_attack_ratio': float(np.mean(all_labels[total_train:])) if total_test else 0.0,
     }
@@ -1625,6 +1627,7 @@ def load_exathlon_concat(apps: Optional[List[int]] = None):
         'dataset_type': 'exathlon_concat', 'apps': apps, 'n_total': n_total,
         'n_features': num_features, 'train_len': total_train, 'test_len': total_test,
         'train_ratio': train_ratio, 'run_boundaries': run_boundaries,
+        'train_lens': train_lens, 'test_lens': test_lens,
         'train_attack_ratio': float(np.mean(all_labels[:total_train])) if total_train else 0.0,
         'test_attack_ratio': float(np.mean(all_labels[total_train:])) if total_test else 0.0,
     }

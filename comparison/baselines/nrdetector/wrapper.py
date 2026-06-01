@@ -57,11 +57,18 @@ Key fidelity decisions (Phase-1 §06/§07/§10/§12; cite repo file:line):
     the residual gap (official is per-FILE, here test_X concatenates all test
     recordings) is documented in CODE_REWORK_NOTES.md.
   - predict() base point score = the official ACTMAP = per-window min-max of
-    `h = fc(out)` (extractor.py:344-358; assigned to `self.dense_scores`,
-    solver.py:72 "Actually is the act map"; used as `interested_instance`,
-    solver.py:193-210), gated by the (continuous) classifier segment prob — a
-    documented relaxation of the official BINARY window gate (Phase-1 §07).
-    Length == len(test_X). (MM4 fix.)
+    `h = fc(out)` (extractor.py get_dpred `actmap=(h-min)/max`; assigned to
+    `self.dense_scores`, solver.py "Actually is the act map"; used as
+    `interested_instance` → `point_Score` in rank_test), gated by the official
+    BINARY segment decision `seg_prob >= mean(seg_prob) + anomaly_thre*(max-min)`
+    with `anomaly_thre=0` (solver.test:L161-167; main.py default 0.0), computed
+    transductively over the whole test split. Non-flagged windows score 0 — the
+    contract-safe continuous analog of upstream's binary pred=0 on non-flagged
+    windows; the per-window-minmax actmap ranks points WITHIN flagged windows
+    (rank_test global argsort over the flagged pool). HOC top-k binarization is
+    DROPPED (the harness selects the operating point uniformly). Length ==
+    len(test_X). (Binary-gate faithfulness fix 2026-06-01; was continuous
+    `× sigmoid(seg_prob)` relaxation.)
   - device-agnostic (no cuda:N, no import-time CUDA_VISIBLE_DEVICES).
 """
 
@@ -75,6 +82,13 @@ import torch
 import torch.nn as nn
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+# Per-source-FILE leak-free normalization kernel (shared single source of truth).
+# nrdetector keeps its OWN scaler identity (StandardScaler) — the helper only owns
+# the per-file segment looping + leak-free fit-train / transform-test pairing.
+from comparison.baselines._per_file_norm import (
+    fit_transform_train_per_file,
+    transform_test_per_file,
+)
 # soft-DTW kernel REUSED from the already-vendored WETAS copy (MIT, Maghoumi).
 # CPU numba @jit path (use_cuda=False) — NO pip install, NO second vendored copy.
 # Evidence (byte diff vs official NRdetector modules/softdtw_cuda.py): same kernel;
@@ -147,6 +161,7 @@ class NRdetectorBaseline:
         self.encoder: Optional[DilatedCNN] = None
         self.classifier: Optional[Classifier_six_layer] = None
         self.scaler = None                           # per-split StandardScaler (data_loader.py:53-55)
+        self._scalers = None                         # per-source-FILE TRAIN scalers (leak-free test transform)
         self.n_features = 0
         self._h_dim = self.output_size
         self.train_loss_history = []  # classifier-stage epoch-mean BCE+const loss (Stage 2 only).
@@ -426,7 +441,8 @@ class NRdetectorBaseline:
     # ------------------------------------------------------------------
     # fit
     # ------------------------------------------------------------------
-    def fit(self, train_X, train_y=None, epoch_callback=None, train_segments=None) -> 'NRdetectorBaseline':
+    def fit(self, train_X, train_y=None, epoch_callback=None, train_segments=None,
+            norm_train_segs=None) -> 'NRdetectorBaseline':
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
 
@@ -442,10 +458,20 @@ class NRdetectorBaseline:
         # ---- per-split z-score (data_loader.py:50-55): fit on RAW train, store scaler.
         #      Mirrors official `_preprocess`: scaler operates on the un-split (N,F)
         #      array BEFORE windowing. Wrapper now receives RAW data
-        #      (run_baseline SELF_NORMALIZING_WEAK) → re-activated here. ----
+        #      (run_baseline SELF_NORMALIZING_WEAK) → re-activated here.
+        #      PER-SOURCE-FILE leak-free fix: fit one StandardScaler per source file
+        #      on that file's TRAIN slice (multi-file: SMD machine / SMAP-MSL channel
+        #      / Exathlon app). Single-file / norm_train_segs=None → one whole-array
+        #      scaler == legacy behavior. Cache the per-file TRAIN scalers so predict()
+        #      can transform each test file by its OWN train scaler (never fit on test).
+        #      nrdetector's scaler identity = StandardScaler (data_loader.py:53). ----
         from sklearn.preprocessing import StandardScaler
-        self.scaler = StandardScaler()
-        train_X = self.scaler.fit_transform(train_X).astype(np.float32)
+        train_X, self._scalers, _ = fit_transform_train_per_file(
+            train_X, norm_train_segs, lambda: StandardScaler())
+        train_X = train_X.astype(np.float32)
+        # Keep `self.scaler` = the FIRST per-file train scaler (single-file = the only
+        # one) for the checkpoint/save fallback path (data_loader.py:50-55 fallback).
+        self.scaler = self._scalers[0] if self._scalers else None
 
         # ---- window train_X (front-pad, win=100) + wlabel=max ----
         windows, dlabel, wlabel, _ = self._window(train_X, train_y)
@@ -542,46 +568,65 @@ class NRdetectorBaseline:
     # predict — RAW continuous gated score → (N_test,) float32
     # ------------------------------------------------------------------
     @torch.no_grad()
-    def predict(self, test_X) -> np.ndarray:
+    def predict(self, test_X, test_segments=None) -> np.ndarray:
         if self.encoder is None or self.classifier is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
         test_X = np.asarray(test_X, dtype=np.float32)
         n_test = len(test_X)
 
-        # ---- per-split z-score (data_loader.py:50-55): the official fits a FRESH
-        #      StandardScaler on the TEST split's own data. predict() receives only
-        #      test_X (no per-recording boundaries), so we reproduce this with a
-        #      transductive fit on the whole concatenated test split. Falls back to
-        #      the train scaler if the test fit is degenerate. ----
-        from sklearn.preprocessing import StandardScaler
-        try:
-            test_scaler = StandardScaler()
-            test_X = test_scaler.fit_transform(test_X).astype(np.float32)
-        except Exception:
-            if self.scaler is not None:
-                test_X = self.scaler.transform(test_X).astype(np.float32)
+        # ---- per-source-FILE LEAK-FREE z-score (data_loader.py:50-55): the official
+        #      `_preprocess` z-scores EACH source file independently. Previously this
+        #      wrapper fit a FRESH StandardScaler on the WHOLE concatenated test split
+        #      (transductive fit-on-test = LEAK). Fix: transform the i-th test file by
+        #      the i-th cached TRAIN scaler (`.transform` only, never `.fit`). Single-file
+        #      / test_segments=None → the single train scaler over the whole test array
+        #      (still leak-free). nrdetector's scaler identity (StandardScaler) preserved. ----
+        if self._scalers is None:
+            raise RuntimeError("Model not fitted (no per-file scalers). Call fit() first.")
+        test_X = transform_test_per_file(test_X, test_segments, self._scalers).astype(np.float32)
 
         windows, _, _, pad = self._window(test_X, None)   # non-overlapping, front-padded
         self.encoder.eval(); self.classifier.eval()
 
-        point_scores = []
+        # ---- Pass 1: per-window ACTMAP (official) + per-window segment prob.
+        #      official ACTMAP = per-window min-max of raw dense logit h=fc(out)
+        #      (extractor.py get_dpred: actmap=(h-min)/max; assigned to
+        #      self.dense_scores, solver.py "Actually is the act map"; used as
+        #      interested_instance → point_Score in rank_test). Per-window min-max
+        #      is UPSTREAM-FAITHFUL and is preserved verbatim. ----
+        act_chunks = []
+        seg_chunks = []
         for i in range(0, len(windows), 256):
             bx = windows[i:i + 256].to(self.device)
             out = self.encoder.get_scores(bx)
-            # --- official ACTMAP = per-window min-max of raw dense logit h=fc(out)
-            #     (extractor.py:344-358; self.dense_scores, solver.py:72) (MM4) ---
             h = out['dh']                                  # (B, T) raw logit (model.py get_scores)
-            actmin = torch.min(h, dim=1, keepdim=True)[0]  # extractor.py:351-352
+            actmin = torch.min(h, dim=1, keepdim=True)[0]  # extractor.py get_dpred
             act = h - actmin
-            actmax = torch.max(act, dim=1, keepdim=True)[0]  # extractor.py:353-354
+            actmax = torch.max(act, dim=1, keepdim=True)[0]
             act = act / (actmax + 1e-12)                   # per-window min-max → [0,1]
             # classifier features = raw `h` (= out['h']), matching weak_scores
-            #   (extractor.py:142 `wscores.append(out['h'])`, solver.py:70).
-            seg_prob, _ = self.classifier(out['h'])        # (B, 1) classifier segment prob (continuous)
-            seg_prob = seg_prob.view(-1, 1)                # broadcast over the T points
-            gated = act * seg_prob                         # actmap × continuous seg prob (Phase-1 §07)
-            point_scores.append(gated.cpu().numpy())
-        flat = np.concatenate(point_scores, axis=0).reshape(-1)  # (Nw*T,)
+            #   (extractor.py `wscores.append(out['h'])`, solver.py).
+            seg_prob, _ = self.classifier(out['h'])        # (B, 1) classifier segment prob
+            act_chunks.append(act.cpu().numpy())           # (B, T) actmap
+            seg_chunks.append(seg_prob.view(-1).cpu().numpy())  # (B,) seg prob
+        act_all = np.concatenate(act_chunks, axis=0)       # (Nw, T)
+        seg_all = np.concatenate(seg_chunks, axis=0)       # (Nw,)
+
+        # ---- official BINARY segment gate (solver.test):
+        #        threshold = mean(seg) + anomaly_thre*(max-min)   (anomaly_thre=0, main.py)
+        #        flagged_window = seg_prob >= threshold
+        #      computed TRANSDUCTIVELY over the whole test split's segment scores
+        #      (solver.test thresholds over test_outputs[s_index:]). Only flagged
+        #      windows contribute candidate points (interested_instance); the
+        #      per-window min-max actmap ranks points WITHIN flagged windows
+        #      (rank_test global argsort over the flagged pool). Non-flagged
+        #      windows score 0 (= least anomalous), the contract-safe continuous
+        #      analog of upstream's binary pred=0 on non-flagged windows. ----
+        anomaly_thre = float(getattr(self, "anomaly_thre", 0.0))
+        seg_thr = seg_all.mean() + anomaly_thre * (seg_all.max() - seg_all.min())
+        gate = (seg_all >= seg_thr).astype(np.float32).reshape(-1, 1)  # (Nw,1) binary
+        gated = act_all * gate                              # actmap × binary window gate
+        flat = gated.reshape(-1)                            # (Nw*T,)
 
         # drop the leading front-pad so length == len(test_X)
         flat = flat[pad:pad + n_test]

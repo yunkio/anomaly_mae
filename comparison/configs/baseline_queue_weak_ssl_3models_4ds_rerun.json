@@ -1,0 +1,89 @@
+{
+  "description": "7번 re-run: wetas + nrdetector + nrdetector_full × 4 OLD datasets (PSM/SWaT/WaDi A1/A2). Q1 labeled-train, 50ep, resume infra. (재실험 trigger: 2026-06-02)",
+  "experiments": [
+    {
+      "name": "wetas_psm",
+      "experiment": "psm",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_swat",
+      "experiment": "swat_a1a2",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_wadi_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_wadi_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_psm",
+      "experiment": "psm",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_swat",
+      "experiment": "swat_a1a2",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_wadi_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_wadi_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_psm",
+      "experiment": "psm",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_swat",
+      "experiment": "swat_a1a2",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_wadi_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_wadi_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    }
+  ]
+}

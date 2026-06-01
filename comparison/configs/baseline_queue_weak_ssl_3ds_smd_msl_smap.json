@@ -1,0 +1,110 @@
+{
+  "description": "7번 expansion — Weakly-supervised SSL · 5 models × 3 datasets (smd_concat → msl → smap). 15 entries, sota_epochs=50, resume infra. Append to existing 7_20260601_004530_weak_ssl_50ep dir.",
+  "experiments": [
+    {
+      "name": "deepmil_smd",
+      "experiment": "smd_concat",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd",
+      "experiment": "smd_concat",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd",
+      "experiment": "smd_concat",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd",
+      "experiment": "smd_concat",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd",
+      "experiment": "smd_concat",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_msl",
+      "experiment": "msl",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_msl",
+      "experiment": "msl",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_msl",
+      "experiment": "msl",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_msl",
+      "experiment": "msl",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_msl",
+      "experiment": "msl",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smap",
+      "experiment": "smap",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smap",
+      "experiment": "smap",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smap",
+      "experiment": "smap",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smap",
+      "experiment": "smap",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smap",
+      "experiment": "smap",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    }
+  ]
+}

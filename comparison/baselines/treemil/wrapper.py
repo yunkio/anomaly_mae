@@ -27,8 +27,23 @@ Upstream TreeMIL normalizes EACH input FILE with a per-feature z-score
 
 The comparison pipeline classifies TreeMIL as SELF_NORMALIZING_WEAK and now
 hands this wrapper **RAW (un-normalized) data**, so the wrapper applies that
-StandardScaler itself (NOT the external global-minmax). See `predict` for the
-test-side feasibility note (no per-recording boundaries are passed to predict).
+StandardScaler itself (NOT the external global-minmax).
+
+LEAK-FREE per-source-file normalization (2026-06-02 normfix)
+------------------------------------------------------------
+For multi-FILE datasets (SMAP/MSL channels, SMD machines, Exathlon apps) each
+source file (entity) is normalized independently: ``fit`` fits + CACHES one
+``StandardScaler`` per file on that file's TRAIN slice (via the shared kernel
+``comparison.baselines._per_file_norm.fit_transform_train_per_file``), and
+``predict`` transforms each PAIRED test file with the SAME cached TRAIN scaler
+(``transform_test_per_file`` — ``.transform`` only, NEVER fit-on-test). This
+replaces the previous transductive whole-test ``fit_transform`` (a train/eval
+leak). NORM file boundaries (``norm_train_segs`` in fit, ``test_segments`` in
+predict) are a SEPARATE list from the window-safety ``train_segments`` (which
+still keeps windows from crossing run-boundaries — unchanged). On single-file
+data (PSM/SWaT/WaDi/simulation) the per-file loop reduces to one whole-array
+StandardScaler — train side bit-identical to legacy; test side switches from
+fit-on-test to transform-by-train-scaler (the intended leak removal).
 
 GPL-3.0 NOTICE: the vendored model core (model.py) is a GPL-3.0 derivative of
 fly-orange/TreeMIL. This adapter file is original glue code; the package as a
@@ -44,6 +59,10 @@ import torch
 from sklearn.preprocessing import StandardScaler
 
 from .model import Pyramid, PyraMIL
+from comparison.baselines._per_file_norm import (
+    fit_transform_train_per_file,
+    transform_test_per_file,
+)
 
 
 # Upstream effective defaults (train.py construction call + argparse; see 08_).
@@ -102,6 +121,11 @@ class TreeMILBaseline:
         self.loss_fn = PyraMIL()
         self.train_loss_history = []  # populated by fit(); persisted in checkpoint.
 
+        # Per-source-file TRAIN scalers (StandardScaler list), cached by fit() and
+        # reused by predict() to transform the paired test file (leak-free). One
+        # entry per `norm_train_segs` file; a single entry on single-file data.
+        self._train_scalers = []
+
         # Resume infrastructure (2026-05-31, B option — see _checkpoint.py).
         self._resume_checkpoint_path: Optional[Path] = None
         self._checkpoint_dir: Optional[Path] = None
@@ -151,16 +175,30 @@ class TreeMILBaseline:
             scaler = StandardScaler(); scaler.fit(data); data = scaler.transform(data)
         StandardScaler sets scale_=1.0 for zero-variance columns, so this never
         divides by zero (matches sklearn semantics exactly; we use sklearn here).
+
+        RETAINED for backward-compat only. The active train/test normalization now
+        goes through the shared leak-free kernel (``_per_file_norm``): train fits +
+        caches one StandardScaler per source file, and predict transforms each test
+        file by its paired cached TRAIN scaler (no fit-on-test). This helper is no
+        longer on the live path.
         """
         return StandardScaler().fit_transform(X_seg.astype(np.float64)).astype(np.float32)
 
-    def _make_train_windows(self, X, y, train_segments):
+    def _make_train_windows(self, X, y, train_segments, norm_train_segs=None):
         """Non-overlapping windows + weak labels. Matches timeseries.py:53-71.
 
-        - PER-FILE z-score normalization first: each `train_segments` range is
-          one upstream "file" (run-boundary-delimited recording), so a fresh
-          StandardScaler is fit+applied to that RAW slice BEFORE windowing —
-          exactly upstream `_preprocess` (one scaler per file, lines 53-55).
+        - PER-SOURCE-FILE z-score normalization FIRST, done ONCE over the whole
+          RAW `X` via the shared leak-free kernel: each `norm_train_segs` range is
+          one upstream "file" (source entity = SMAP/MSL channel, SMD machine,
+          Exathlon app), so a fresh StandardScaler is fit+applied to that file's
+          RAW train slice — exactly upstream `_preprocess` (one scaler per file,
+          timeseries.py:53-55). The fitted per-file scalers are CACHED on
+          `self._train_scalers` so `predict` can transform the paired test file
+          with the SAME train scaler (leak-free; no fit-on-test). When
+          `norm_train_segs` is None/empty (single-file) the kernel reduces to one
+          whole-array StandardScaler — bit-identical to the legacy behaviour.
+        - Windowing uses the SEPARATE window-safety `train_segments` list (so no
+          window crosses a run-boundary / normal-segment cut) — UNCHANGED.
         - Windows of length split_size, stride == split_size (NON-overlapping).
         - A trailing partial window (len < split_size) is DROPPED at train time
           (upstream head-pads it; for training we simply skip incomplete
@@ -168,18 +206,22 @@ class TreeMILBaseline:
         - wlabel = max(point labels over the window)  [train split only].
         """
         n = X.shape[0]
+        # Per-source-file z-score (leak-free), fit on each file's TRAIN slice; cache
+        # the StandardScalers so predict() transforms the paired test file by them.
+        X_norm, self._train_scalers, _ = fit_transform_train_per_file(
+            X, norm_train_segs, lambda: StandardScaler()
+        )
         win_list, lab_list = [], []
         for (s, e) in self._segment_ranges(n, train_segments):
             seg_len = e - s
             n_full = seg_len // self.split_size
             if n_full == 0:
                 continue
-            X_norm = self._zscore_per_file(X[s:e])     # per-file StandardScaler (raw -> z)
             for w in range(n_full):
-                a = w * self.split_size
+                a = s + w * self.split_size
                 b = a + self.split_size
                 win_list.append(X_norm[a:b])
-                lab_list.append(float(y[s + a:s + b].max()))
+                lab_list.append(float(y[a:b].max()))
         if not win_list:
             return None, None
         windows = np.stack(win_list, axis=0).astype(np.float32)      # (B, T, F)
@@ -187,7 +229,8 @@ class TreeMILBaseline:
         return windows, wlabels
 
     # -------------------------------------------------------------------- fit
-    def fit(self, train_X, train_y=None, epoch_callback=None, train_segments=None):
+    def fit(self, train_X, train_y=None, epoch_callback=None, train_segments=None,
+            norm_train_segs=None):
         train_X = np.asarray(train_X, dtype=np.float32)
         if train_X.ndim != 2:
             raise ValueError(f"TreeMIL expects train_X of shape (N, F); got {train_X.shape}")
@@ -196,7 +239,8 @@ class TreeMILBaseline:
             raise RuntimeError("TreeMIL requires labeled anomalies (Q1 only; Q3 N/A)")
         train_y = np.asarray(train_y).astype(np.float32).reshape(-1)
 
-        windows, wlabels = self._make_train_windows(train_X, train_y, train_segments)
+        windows, wlabels = self._make_train_windows(
+            train_X, train_y, train_segments, norm_train_segs)
         if windows is None:
             raise RuntimeError(
                 "TreeMIL requires labeled anomalies (Q1 only; Q3 N/A): "
@@ -249,22 +293,24 @@ class TreeMILBaseline:
 
     # ---------------------------------------------------------------- predict
     @torch.no_grad()
-    def predict(self, test_X):
+    def predict(self, test_X, test_segments=None):
         """Return (N_test,) float32 RAW continuous per-timestep anomaly scores.
 
-        Normalization (original-paper fidelity + feasibility note)
-        ----------------------------------------------------------
+        Normalization (original-paper fidelity, LEAK-FREE)
+        --------------------------------------------------
         Upstream applies a per-FILE z-score StandardScaler (timeseries.py:53-55),
-        fit on the whole file that contains the test region. The pipeline contract
-        gives `predict` only `test_X` (NO per-recording boundaries), so the most
-        faithful feasible analog is a **transductive per-test-file z-score**: fit
-        one StandardScaler on the ENTIRE `test_X` and transform it. This matches
-        upstream's "scaler fit on the file, applied to its test split" — the only
-        residual gap is that upstream fits per-file while here, lacking the test
-        run-boundaries, we fit ONE scaler over the whole test array (if test_X
-        concatenates several recordings, upstream would fit one scaler each).
-        Train and test scalers are intentionally separate, exactly as upstream
-        (each file gets its own fresh StandardScaler).
+        fit on the whole file that contains the test region. We reproduce that
+        per-source-file granularity LEAK-FREE: each test file is transformed by
+        the SAME StandardScaler that was fit on the PAIRED file's TRAIN slice in
+        `fit()` (cached on `self._train_scalers`) — `.transform` only, NEVER
+        `.fit`/`.fit_transform` on test. This removes the previous transductive
+        whole-test fit-on-test (a train/eval leak). `test_segments` is the per-
+        source-FILE boundary list in test-local coords (i-th test file pairs with
+        the i-th cached train scaler). When `test_segments` is None/empty, or its
+        count does not match the cached scalers (single-file), the shared kernel
+        falls back to the FIRST train scaler over the whole test array — still
+        leak-free. Train and test are normalized by the same per-file scaler
+        identity (StandardScaler), exactly as upstream.
 
         Non-overlapping contiguous windows of length split_size; the LAST window
         is TAIL-padded with zeros to fill split_size (NEVER upstream left/head
@@ -280,9 +326,9 @@ class TreeMILBaseline:
         n = test_X.shape[0]
         T = self.split_size
 
-        # Per-test-file z-score (transductive; closest feasible to upstream
-        # per-file StandardScaler.fit on the test region — see docstring).
-        test_X = self._zscore_per_file(test_X)
+        # Per-source-file z-score, LEAK-FREE: transform each test file by the
+        # paired file's cached TRAIN StandardScaler (.transform only; no fit-on-test).
+        test_X = transform_test_per_file(test_X, test_segments, self._train_scalers)
 
         n_win = (n + T - 1) // T               # ceil
         padded_len = n_win * T

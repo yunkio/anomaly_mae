@@ -50,6 +50,10 @@ from tqdm import tqdm
 
 from .model import NPSR
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._per_file_norm import (
+    fit_transform_train_per_file,
+    transform_test_per_file,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +289,10 @@ class NPSRBaseline:
 
         # Path-B Self-normalization
         self.scaler: Optional[MinMaxScaler] = None
+        # Per-source-FILE leak-free scalers (cached from fit; one MinMaxScaler(-1,1)
+        # per entity). Multi-file -> N scalers; single-file -> 1 (bit-identical to
+        # the legacy whole-array fit). predict() transforms test by these (no test fit).
+        self._scalers: Optional[list] = None
 
         # Cached training data after fit() — used by predict() to recompute θ_N.
         self._train_X_norm: Optional[np.ndarray] = None
@@ -312,17 +320,28 @@ class NPSRBaseline:
             ff_mult=self.ff_mult,
         ).to(self.device)
 
-    def _normalize_train(self, train_X: np.ndarray) -> np.ndarray:
-        self.scaler = MinMaxScaler(feature_range=(-1, 1))
-        self.scaler.fit(train_X)
-        out = self.scaler.transform(train_X).astype(np.float32)
-        return out
+    def _normalize_train(self, train_X: np.ndarray, norm_train_segs=None) -> np.ndarray:
+        # Per-source-FILE leak-free fit/transform (NPSR's OWN scaler identity:
+        # MinMaxScaler(feature_range=(-1, 1)), fit on each file's TRAIN slice).
+        # Multi-file -> one scaler per entity; single-file / None segs -> one
+        # whole-array scaler (bit-identical to the legacy single-fit path).
+        out, scalers, _ = fit_transform_train_per_file(
+            train_X, norm_train_segs, lambda: MinMaxScaler(feature_range=(-1, 1))
+        )
+        self._scalers = scalers
+        # Keep `self.scaler` set for save()/back-compat (last per-file scaler;
+        # for single-file this IS the one-and-only scaler == legacy behavior).
+        self.scaler = scalers[-1] if scalers else None
+        return out.astype(np.float32)
 
-    def _normalize_test(self, test_X: np.ndarray) -> np.ndarray:
-        if self.scaler is None:
+    def _normalize_test(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
+        if not self._scalers:
             raise RuntimeError("scaler not fit. Call fit() first.")
-        out = self.scaler.transform(test_X).astype(np.float32)
-        # reference: clamp test only
+        # LEAK-FREE: i-th test file transformed by i-th cached TRAIN scaler
+        # (.transform only — never fit on test). Single-file / mismatch -> first
+        # train scaler over the whole array (same as legacy transform-by-train).
+        out = transform_test_per_file(test_X, test_segments, self._scalers).astype(np.float32)
+        # reference: clamp test only (global constant; order-safe after per-file transform)
         if self.clamp_max is not None:
             out = np.where(out > self.clamp_max, self.clamp_max, out)
         if self.clamp_min is not None:
@@ -333,9 +352,12 @@ class NPSRBaseline:
     # Train
     # ------------------------------------------------------------------
 
-    def fit(self, train_X: np.ndarray, epoch_callback=None, train_segments=None) -> "NPSRBaseline":
-        # --- Path B normalization (MinMax(-1,1) train-only fit) ---
-        train_X = self._normalize_train(train_X)
+    def fit(self, train_X: np.ndarray, epoch_callback=None, train_segments=None,
+            norm_train_segs=None) -> "NPSRBaseline":
+        # --- Path B normalization (per-source-FILE MinMax(-1,1) train-only fit) ---
+        # `norm_train_segs` (per-file (lo,hi) in TRAIN-LOCAL coords) is SEPARATE from
+        # `train_segments` (window-safety, unchanged below). None -> single whole-array file.
+        train_X = self._normalize_train(train_X, norm_train_segs=norm_train_segs)
         self.n_features = train_X.shape[1]
         self._train_X_norm = train_X  # cached for predict-time θ_N
 
@@ -511,7 +533,7 @@ class NPSRBaseline:
     # Predict
     # ------------------------------------------------------------------
 
-    def predict(self, test_X: np.ndarray) -> np.ndarray:
+    def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
         if self.model is None:
             raise RuntimeError("Model not trained. Call fit() first.")
         T_full = len(test_X)
@@ -519,8 +541,10 @@ class NPSRBaseline:
         if F != self.n_features:
             raise ValueError(f"feature mismatch: test has {F}, fit had {self.n_features}")
 
-        # Path-B normalization on test (with clamp on test only).
-        test_X_n = self._normalize_test(test_X)
+        # Path-B normalization on test (per-source-FILE transform-by-TRAIN-scaler,
+        # leak-free, with clamp on test only). `test_segments` = per-file (lo,hi) in
+        # TEST-LOCAL coords; None -> single whole-array file (legacy behavior).
+        test_X_n = self._normalize_test(test_X, test_segments=test_segments)
 
         # --- training-set reference for θ_N (one-shot per predict; cached if epoch_callback drives it) ---
         train_X = self._train_X_norm
@@ -673,6 +697,11 @@ class NPSRBaseline:
         scaler_path = save_dir / "scaler.pkl"
         if scaler_path.exists():
             self.scaler = joblib.load(scaler_path)
+            # Reconstruct the per-file scaler cache so predict() (which transforms
+            # test via the cached TRAIN scalers, leak-free) works after load().
+            # save() persists only the single (last) scaler, so the restored cache
+            # is length-1 -> transform_test_per_file uses it whole-array (legacy).
+            self._scalers = [self.scaler] if self.scaler is not None else None
         cache_path = save_dir / "train_cache.npz"
         if cache_path.exists():
             self._train_X_norm = np.load(cache_path)["train_X_norm"].astype(np.float32)

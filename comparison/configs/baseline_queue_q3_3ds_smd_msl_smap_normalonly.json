@@ -1,0 +1,467 @@
+{
+  "description": "6번 expansion — Q3 minmax+normalonly+segaware · 22 baselines × 3 datasets (smd_concat → msl → smap). 66 entries total. Append to existing 6_20260526_085028 dir (auto-skip on conflict).",
+  "experiments": [
+    {
+      "name": "random_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "sensor_range_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "pca_error_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "l2_norm_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "nn_distance_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlp_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlpmixer_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "transformer_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "anomaly_transformer_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "usad_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dagmm_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "omnianomaly_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tfmae_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dcdetector_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd",
+      "experiment": "smd_concat_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_msl",
+      "experiment": "msl_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "sensor_range_msl",
+      "experiment": "msl_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "pca_error_msl",
+      "experiment": "msl_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "l2_norm_msl",
+      "experiment": "msl_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "nn_distance_msl",
+      "experiment": "msl_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlp_msl",
+      "experiment": "msl_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlpmixer_msl",
+      "experiment": "msl_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "transformer_msl",
+      "experiment": "msl_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_msl",
+      "experiment": "msl_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "anomaly_transformer_msl",
+      "experiment": "msl_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_msl",
+      "experiment": "msl_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "usad_msl",
+      "experiment": "msl_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dagmm_msl",
+      "experiment": "msl_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_msl",
+      "experiment": "msl_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "omnianomaly_msl",
+      "experiment": "msl_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tfmae_msl",
+      "experiment": "msl_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_msl",
+      "experiment": "msl_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dcdetector_msl",
+      "experiment": "msl_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_msl",
+      "experiment": "msl_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_msl",
+      "experiment": "msl_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_msl",
+      "experiment": "msl_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_msl",
+      "experiment": "msl_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smap",
+      "experiment": "smap_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "sensor_range_smap",
+      "experiment": "smap_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "pca_error_smap",
+      "experiment": "smap_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "l2_norm_smap",
+      "experiment": "smap_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "nn_distance_smap",
+      "experiment": "smap_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlp_smap",
+      "experiment": "smap_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlpmixer_smap",
+      "experiment": "smap_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "transformer_smap",
+      "experiment": "smap_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smap",
+      "experiment": "smap_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "anomaly_transformer_smap",
+      "experiment": "smap_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smap",
+      "experiment": "smap_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "usad_smap",
+      "experiment": "smap_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dagmm_smap",
+      "experiment": "smap_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smap",
+      "experiment": "smap_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "omnianomaly_smap",
+      "experiment": "smap_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tfmae_smap",
+      "experiment": "smap_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smap",
+      "experiment": "smap_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dcdetector_smap",
+      "experiment": "smap_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smap",
+      "experiment": "smap_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_smap",
+      "experiment": "smap_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smap",
+      "experiment": "smap_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smap",
+      "experiment": "smap_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    }
+  ]
+}

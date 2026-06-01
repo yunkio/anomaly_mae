@@ -38,6 +38,10 @@ from tqdm import tqdm
 
 from .model import AnomalyTransformer, my_kl_loss
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._per_file_norm import (
+    fit_transform_train_per_file,
+    transform_test_per_file,
+)
 
 
 def _adjust_learning_rate_type1(optimizer: torch.optim.Optimizer, epoch_one_indexed: int, lr_base: float) -> float:
@@ -121,6 +125,12 @@ class AnomalyTransformerBaseline:
         # internally. Driver passes RAW data when args.model is in SELF_NORMALIZING_SOTA
         # (see comparison/run_baseline.py:~209).
         self.scaler: Optional[StandardScaler] = None
+        # Per-source-FILE leak-free norm (multi-file datasets only). One StandardScaler
+        # per file (entity), fit on that file's TRAIN slice in fit(), cached here, then
+        # applied (.transform) to that file's paired TEST slice in predict(). Single-file
+        # => a single whole-array scaler (bit-identical to legacy). Scaler IDENTITY is
+        # preserved (StandardScaler), matching upstream data_factory/data_loader.py.
+        self._scalers: Optional[list] = None
 
     @property
     def name(self) -> str:
@@ -163,14 +173,23 @@ class AnomalyTransformerBaseline:
             )
         return series_loss / n_layers, prior_loss / n_layers
 
-    def fit(self, train_X: np.ndarray, epoch_callback=None, train_segments=None) -> "AnomalyTransformerBaseline":
+    def fit(self, train_X: np.ndarray, epoch_callback=None, train_segments=None,
+            norm_train_segs=None) -> "AnomalyTransformerBaseline":
         self.n_features = train_X.shape[1]
         self.model = self._build_model()
 
-        # Path B: fit StandardScaler on train (matches upstream data_factory/data_loader.py)
-        self.scaler = StandardScaler()
-        self.scaler.fit(train_X)
-        train_X_scaled = self.scaler.transform(train_X).astype(np.float32, copy=False)
+        # Path B: per-source-FILE StandardScaler, fit on each file's TRAIN slice only
+        # (matches upstream data_factory/data_loader.py StandardScaler, but per-entity
+        # for multi-file datasets — no global blend). `norm_train_segs` is a SEPARATE
+        # per-file segment list (NORM only); it does NOT touch `train_segments`, which
+        # remains the window-safety segmentation. Single-file / None => one whole-array
+        # scaler (bit-identical to legacy global StandardScaler fit-on-train).
+        train_X_scaled, self._scalers, _ = fit_transform_train_per_file(
+            train_X, norm_train_segs, lambda: StandardScaler()
+        )
+        train_X_scaled = train_X_scaled.astype(np.float32, copy=False)
+        # Preserve back-compat attribute: expose the first (single-file: the only) scaler.
+        self.scaler = self._scalers[0] if self._scalers else None
 
         dataset = _SlidingWindowDataset(train_X_scaled, self.win_size, stride=self.train_stride)
         if train_segments is not None:
@@ -242,7 +261,7 @@ class AnomalyTransformerBaseline:
                 self.model.train()
         return self
 
-    def predict(self, test_X: np.ndarray) -> np.ndarray:
+    def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
         """1D anomaly score per timestep — reference-faithful inference.
 
         Per-window: `metric = softmax((-series_loss - prior_loss) * temp, dim=-1) * recon_mse`.
@@ -264,10 +283,16 @@ class AnomalyTransformerBaseline:
         if self.model is None:
             raise RuntimeError("Model not trained. Call fit() first.")
 
-        # Path B: apply train-fit StandardScaler to test (matches upstream
-        # data_factory/data_loader.py SMDSegLoader.__init__ pattern).
-        if self.scaler is not None:
-            test_X = self.scaler.transform(test_X).astype(np.float32, copy=False)
+        # Path B: per-source-FILE leak-free test transform — the i-th test file is
+        # transformed by the i-th cached TRAIN StandardScaler (.transform only, NEVER
+        # fit-on-test), matching upstream data_factory/data_loader.py (scaler fit on
+        # train, .transform applied to test). `test_segments` is the per-file TEST-LOCAL
+        # segment list paired 1:1 with the train files. Single-file / None / mismatch =>
+        # the single train scaler over the whole test array (bit-identical to legacy).
+        if self._scalers:
+            test_X = transform_test_per_file(
+                test_X, test_segments, self._scalers
+            ).astype(np.float32, copy=False)
 
         N_test, n_features = test_X.shape
         if N_test < self.win_size:
@@ -358,6 +383,10 @@ class AnomalyTransformerBaseline:
         # Persist Path B scaler so predict() after load() retains train-fit stats.
         if self.scaler is not None:
             joblib.dump(self.scaler, save_dir / "scaler.pkl")
+        # Persist the per-source-FILE train scaler LIST so a loaded model's predict()
+        # can do leak-free per-file .transform (multi-file). Single-file => 1-elem list.
+        if self._scalers:
+            joblib.dump(self._scalers, save_dir / "scalers.pkl")
 
     def load(self, save_dir: Path) -> "AnomalyTransformerBaseline":
         save_dir = Path(save_dir)
@@ -371,4 +400,11 @@ class AnomalyTransformerBaseline:
         scaler_path = save_dir / "scaler.pkl"
         if scaler_path.exists():
             self.scaler = joblib.load(scaler_path)
+        # Restore the per-source-FILE train scaler list for leak-free per-file predict().
+        scalers_path = save_dir / "scalers.pkl"
+        if scalers_path.exists():
+            self._scalers = joblib.load(scalers_path)
+        elif self.scaler is not None:
+            # Back-compat: older checkpoints only saved the single scaler.
+            self._scalers = [self.scaler]
         return self

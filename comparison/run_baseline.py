@@ -482,6 +482,9 @@ def main():
                     sa_segments = [(s.start, s.end) for s in loader.normal_segments]
                 elif has_run_boundaries:
                     sa_segments = loader.get_boundary_train_segments()
+                # Per-source-FILE NORM segments (SEPARATE from window-safety
+                # sa_segments): multi-file -> per entity; single-file -> whole-array.
+                norm_tr, norm_te = loader.get_file_norm_segments()
                 run_sota_baseline_with_epoch_eval(
                     model, train_X, test_X, test_y, anomaly_regions,
                     model_name, output_dir, experiment_name,
@@ -489,6 +492,8 @@ def main():
                     eval_interval=args.eval_interval,
                     max_eval_workers=args.max_eval_workers,
                     train_segments=sa_segments,
+                    norm_train_segments=norm_tr,
+                    test_segments=norm_te,
                 )
 
             elif model_name in WEAK_SUPERVISED_MODELS and not args.no_epoch_eval:
@@ -503,6 +508,9 @@ def main():
                     sa_segments = [(s.start, s.end) for s in loader.normal_segments]
                 elif has_run_boundaries:
                     sa_segments = loader.get_boundary_train_segments()
+                # Per-source-FILE NORM segments (SEPARATE from window-safety
+                # sa_segments): multi-file -> per entity; single-file -> whole-array.
+                norm_tr, norm_te = loader.get_file_norm_segments()
                 run_weak_sota_baseline_with_epoch_eval(
                     model, train_X, train_y, test_X, test_y, anomaly_regions,
                     model_name, output_dir, experiment_name,
@@ -510,6 +518,8 @@ def main():
                     eval_interval=args.eval_interval,
                     max_eval_workers=args.max_eval_workers,
                     train_segments=sa_segments,
+                    norm_train_segments=norm_tr,
+                    test_segments=norm_te,
                     resume=args.resume,
                 )
 

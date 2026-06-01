@@ -10,13 +10,20 @@ This wrapper re-hosts ONLY the training/inference glue (not vendored): it builds
 derives weak labels, runs the official loss, exposes `epoch_callback`, and reconstructs a
 per-timestep `(N_test,)` continuous score.
 
-NORMALIZATION (2026-05-30 fidelity rework). The pipeline now classifies WETAS as
+NORMALIZATION (2026-06-02 per-source-file leak-free rework). The pipeline classifies WETAS as
 SELF_NORMALIZING_WEAK (run_baseline.py:240): it hands this wrapper RAW, un-normalized data
-(normalize_mode='none'). The wrapper therefore reproduces the ORIGINAL-PAPER normalization
-itself — **per-recording StandardScaler (z-score)**, fit and transformed independently for
-each recording (donalee/WETAS `timeseries.py:35-40`, where `_preprocess` runs once per file
-in the `_load_data` loop at `timeseries.py:21-24`). This replaces the previous (now-removed)
-assumption that the pipeline pre-applied a global MinMax scaler.
+(normalize_mode='none'). The wrapper reproduces the ORIGINAL-PAPER normalization itself —
+**per-SOURCE-FILE StandardScaler (z-score)**, fit and transformed independently for each
+recording (donalee/WETAS `timeseries.py:33-34`, where `_preprocess` runs once per file in the
+`_load_data` loop at `timeseries.py:27-29`; re-verified against live upstream). It routes
+through the shared leak-free kernel `comparison/baselines/_per_file_norm.py`, preserving
+WETAS's own StandardScaler identity.
+
+LEAK-FREE: the per-source-file TRAIN StandardScalers fit at `fit()` are CACHED on
+`self._train_scalers`; `predict()` transforms each PAIRED test recording with its train scaler
+(`.transform` only — NEVER fit-on-test). This REMOVES the previous transductive fit-on-test
+(the old `_normalize_test_per_recording` fit a fresh scaler on each test slice, leaking test
+statistics into normalization).
 
 It deliberately does NOT reuse:
   * upstream valid-F1 early stopping (best-epoch selection is the pipeline's job via epoch_callback);
@@ -24,8 +31,8 @@ It deliberately does NOT reuse:
 
 CONTRACT (mirrors comparison/baselines/tranad/model.py:TranADBaseline):
   WETASBaseline(**hparams)
-  .fit(train_X, train_y=None, epoch_callback=None, train_segments=None) -> self
-  .predict(test_X) -> (N_test,) float32, higher = more anomalous
+  .fit(train_X, train_y=None, epoch_callback=None, train_segments=None, norm_train_segs=None) -> self
+  .predict(test_X, test_segments=None) -> (N_test,) float32, higher = more anomalous
   .save(save_dir) / .load(save_dir)
 
 References to the official code use `file:line` at commit cb149dc.
@@ -45,6 +52,10 @@ from sklearn.preprocessing import StandardScaler  # upstream normalization (time
 from comparison.baselines.wetas.model import DilatedCNN
 from comparison.baselines.wetas.softdtw_cuda import SoftDTW
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._per_file_norm import (
+    fit_transform_train_per_file,
+    transform_test_per_file,
+)
 
 
 class WETASBaseline:
@@ -116,10 +127,13 @@ class WETASBaseline:
         self.model: Optional[DilatedCNN] = None
         self.n_features: int = 0
         self.train_loss_history = []
-        # NOTE wetas does not persist a fitted StandardScaler instance — it
-        # re-runs ``_normalize_per_recording`` from RAW train_X at every fit()
-        # entry (deterministic given identical inputs), so resume only needs
-        # to restore model + optimizer + RNG, not scaler params.
+        # Per-SOURCE-FILE TRAIN StandardScalers, cached at fit() so predict() can
+        # transform each test recording with its PAIRED train scaler (LEAK-FREE).
+        # Replaces the previous transductive fit-on-test at predict time. One scaler
+        # per `norm_train_segs` entry (single whole-train scaler when no segments).
+        # WETAS scaler identity = StandardScaler (donalee/WETAS timeseries.py:33-34),
+        # re-verified against live upstream.
+        self._train_scalers: list = []
 
         # Resume infrastructure (2026-05-31, B option — see _checkpoint.py).
         self._resume_checkpoint_path: Optional[Path] = None
@@ -169,71 +183,73 @@ class WETASBaseline:
         return chunks, pad
 
     # ------------------------------------------------------------------ normalization (timeseries.py:35-40)
-    @staticmethod
-    def _normalize_per_recording(data: np.ndarray, segments) -> np.ndarray:
-        """Per-recording StandardScaler(z-score), faithful to upstream `timeseries.py:35-40`.
+    def _normalize_per_file_train(self, data: np.ndarray, norm_train_segs) -> np.ndarray:
+        """Per-SOURCE-FILE StandardScaler(z-score) on TRAIN, faithful to `timeseries.py:33-34`.
 
-        Upstream `_preprocess` (timeseries.py:35) is invoked once per recording file inside the
-        `_load_data` loop (timeseries.py:21-24); each call does `scaler = StandardScaler();
-        scaler.fit(data); data = scaler.transform(data)` on that recording ALONE. We replicate
-        that by fitting/transforming one StandardScaler per `(start, end)` segment.
+        Upstream `_preprocess` (timeseries.py:33-34, re-verified live) is invoked once per
+        recording file inside the `_load_data` loop (timeseries.py:27-29); each call does
+        `scaler = StandardScaler(); scaler.fit(data); data = scaler.transform(data)` on that
+        recording ALONE. We reproduce that via the SHARED leak-free kernel
+        `fit_transform_train_per_file` with WETAS's OWN scaler identity (StandardScaler), one
+        scaler per `norm_train_segs` (source-FILE) entry.
 
-        `segments` is the pipeline's recording-boundary list in `data`-coordinates
-        (run_baseline.py:434/455 -> loader.normal_segments / get_boundary_train_segments).
-        When `segments` is None/empty the whole array is treated as ONE recording (single
-        StandardScaler.fit on all of `data`), which is exactly upstream behaviour for a
-        single-file split.
+        `norm_train_segs` is the per-source-FILE (lo, hi) list in TRAIN-LOCAL coords (the SEPARATE
+        per-file NORM segment list, distinct from `train_segments` window-safety boundaries). When
+        it is None/empty the whole array is one recording (single StandardScaler over all of
+        `data`) — bit-identical to the legacy single-file train behaviour.
+
+        Side effect: caches the fitted per-file scalers on `self._train_scalers` (entity order),
+        so `predict()` can transform each PAIRED test recording leak-free.
         """
         data = np.asarray(data, dtype=np.float32)
-        out = np.empty_like(data, dtype=np.float32)
-        ranges = None
-        if segments:
-            ranges = [(int(s), int(e)) for (s, e) in segments if int(e) > int(s)]
-        if not ranges:
-            ranges = [(0, len(data))]
-
-        covered = np.zeros(len(data), dtype=bool)
-        for (s, e) in ranges:
-            s = max(0, s)
-            e = min(len(data), e)
-            if e <= s:
-                continue
-            scaler = StandardScaler()                 # timeseries.py:38
-            out[s:e] = scaler.fit_transform(data[s:e]).astype(np.float32)  # timeseries.py:39-40 (per recording)
-            covered[s:e] = True
-        # Any gap not spanned by a segment (defensive; should not happen for contiguous
-        # boundary lists) is z-scored against its own stats so no row is left un-normalized.
-        if not covered.all():
-            scaler = StandardScaler()
-            out[~covered] = scaler.fit_transform(data[~covered]).astype(np.float32)
+        out, scalers, _ = fit_transform_train_per_file(
+            data, norm_train_segs, make_scaler=StandardScaler
+        )  # timeseries.py:33-34 (StandardScaler, fit on this file's TRAIN slice only)
+        self._train_scalers = scalers
         return out
 
-    @staticmethod
-    def _normalize_test_transductive(data: np.ndarray) -> np.ndarray:
-        """Test-time z-score. Upstream also fits a FRESH StandardScaler per *test* recording
-        (test files run through the same `_preprocess`, timeseries.py:35-40). Our `predict`
-        contract receives only `test_X` with NO per-recording boundaries, so per-recording test
-        normalization is infeasible. The most faithful feasible substitute is a TRANSDUCTIVE
-        z-score over the whole `test_X` (fit a fresh StandardScaler on the test array, then
-        transform it). This preserves the upstream principle that test data is standardized by
-        statistics derived from the TEST data itself (never train stats); the only residual gap
-        is granularity (whole-test vs per-recording). See `normalization_approach` in
-        CODE_REWORK_NOTES.md.
+    def _normalize_per_file_test(self, data: np.ndarray, test_segments) -> np.ndarray:
+        """Test-time z-score, LEAK-FREE per-SOURCE-FILE StandardScaler (paired TRAIN scaler).
+
+        Upstream `_preprocess` (timeseries.py:33-34) runs once per recording file. The faithful,
+        LEAK-FREE realization (this audit's target fix) is: each test recording is transformed by
+        the StandardScaler FIT on its PAIRED train recording — NOT a fresh scaler fit on the test
+        slice (the previous behaviour, which was transductive and leaked test statistics into
+        normalization). We route through the SHARED kernel `transform_test_per_file`, which calls
+        ONLY `scaler.transform` (never `.fit`/`.fit_transform`) using `self._train_scalers` cached
+        at fit() time (entity order: i-th test recording <- i-th train scaler).
+
+        `test_segments` is the per-source-FILE (lo, hi) list in TEST-LOCAL coords. When it is
+        None/empty (single-file, or no boundaries passed) the kernel falls back to the FIRST
+        cached train scaler over the whole test array — still leak-free (transform-by-train,
+        never fit-on-test), which is the single-file degenerate path.
         """
         data = np.asarray(data, dtype=np.float32)
         if len(data) == 0:
             return data
-        scaler = StandardScaler()
-        return scaler.fit_transform(data).astype(np.float32)
+        if not self._train_scalers:
+            raise RuntimeError(
+                "WETAS: no train scalers cached — call fit() before predict()."
+            )
+        # LEAK-FREE: transform each test file by its paired TRAIN StandardScaler (.transform only).
+        return transform_test_per_file(data, test_segments, self._train_scalers)
 
     # ------------------------------------------------------------------ fit
-    def fit(self, train_X: np.ndarray, train_y=None, epoch_callback=None, train_segments=None) -> 'WETASBaseline':
+    def fit(self, train_X: np.ndarray, train_y=None, epoch_callback=None, train_segments=None,
+            norm_train_segs=None) -> 'WETASBaseline':
         """Train WETAS on RAW (un-normalized) `train_X`.
 
-        Normalization (timeseries.py:35-40): the wrapper now receives raw data
-        (run_baseline.py SELF_NORMALIZING_WEAK) and applies the ORIGINAL-PAPER per-recording
-        StandardScaler(z-score) itself — one scaler fit/transformed per `train_segments`
-        recording (single scaler over all of `train_X` when no segments are supplied).
+        Normalization (timeseries.py:33-34): the wrapper receives raw data
+        (run_baseline.py SELF_NORMALIZING_WEAK) and applies the ORIGINAL-PAPER per-SOURCE-FILE
+        StandardScaler(z-score) itself — one scaler fit/transformed per `norm_train_segs`
+        source-FILE (single scaler over all of `train_X` when no segments are supplied). The
+        fitted per-file scalers are CACHED on `self._train_scalers` so `predict()` transforms
+        each PAIRED test recording leak-free (no fit-on-test).
+
+        `norm_train_segs` is the SEPARATE per-source-FILE NORM segment list (TRAIN-LOCAL coords);
+        it is DISTINCT from `train_segments`, which stays the window-safety boundary list
+        (`compute_segment_safe_window_indices`) and is NOT weakened by this fix.
+
         Weak labels (leak-free): wlabel = max(train_y over each window)  (timeseries.py:54).
         Loss (train_classifier.py:127-129): BCE(wscore, wlabel) + dtw_loss(output, wlabel).mean(0).
         Optimizer: Adam(lr) (train_classifier.py:113).  No scheduler (upstream has none).
@@ -249,14 +265,15 @@ class WETASBaseline:
                 f"WETAS: train_y length {len(train_y)} != train_X length {len(train_X)}."
             )
 
-        # Original-paper normalization: per-recording StandardScaler (timeseries.py:35-40).
+        # Original-paper normalization: per-SOURCE-FILE StandardScaler (timeseries.py:33-34).
         # Applied to RAW train_X BEFORE windowing so windows + weak labels are built on the
-        # z-scored series exactly as upstream `_preprocess` feeds the model.
-        train_X = self._normalize_per_recording(train_X, train_segments)
+        # z-scored series exactly as upstream `_preprocess` feeds the model. Caches the per-file
+        # train scalers on self for leak-free test transform.
+        train_X = self._normalize_per_file_train(train_X, norm_train_segs)
         if self.verbose:
-            n_rec = len([1 for (s, e) in (train_segments or []) if int(e) > int(s)]) or 1
-            print(f"  Normalization: per-recording StandardScaler (z-score) over {n_rec} recording(s) "
-                  f"[timeseries.py:35-40]")
+            n_rec = len(self._train_scalers) or 1
+            print(f"  Normalization: per-source-file StandardScaler (z-score) over {n_rec} file(s) "
+                  f"[timeseries.py:33-34]")
 
         # Build training windows (sliding with train_stride; default = non-overlapping).
         windows, starts, _ = self._windows_with_stride(train_X, self.train_stride)
@@ -353,14 +370,19 @@ class WETASBaseline:
         return self
 
     # ------------------------------------------------------------------ predict
-    def predict(self, test_X: np.ndarray) -> np.ndarray:
+    def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
         """Per-timestep continuous anomaly score, shape (N_test,), higher = more anomalous.
 
         Uses the continuous dense `dscore` (model.py:134), NOT binary `dpred`/`dscore>=thr`.
-        Normalization: RAW `test_X` is z-scored with a transductive StandardScaler over the
-        whole test array (most faithful feasible substitute for upstream's per-recording test
-        StandardScaler, since the contract provides no test-segment boundaries — see
-        `_normalize_test_transductive`).
+
+        Normalization (timeseries.py:33-34, per-SOURCE-FILE, LEAK-FREE):
+          * `test_segments` GIVEN (per-source-FILE (lo, hi), end-exclusive, TEST-LOCAL coords):
+            each test recording is transformed by the StandardScaler FIT on its PAIRED TRAIN
+            recording (cached at fit() time) — `.transform` only, NEVER fit-on-test. This is the
+            same granularity as the train side and removes the previous transductive leak.
+          * `test_segments` None/empty (single-file, or no boundaries passed): the FIRST cached
+            train scaler transforms the whole test array — still leak-free (transform-by-train),
+            the single-file degenerate path.
         Reconstruction (07_SCORING_AGGREGATION):
           1. Split test_X into non-overlapping split_size chunks with FRONT zero-pad on the
              first chunk (timeseries.py:44).
@@ -373,8 +395,10 @@ class WETASBaseline:
         test_X = np.asarray(test_X, dtype=np.float32)
         n = len(test_X)
 
-        # Original-paper normalization at test time (timeseries.py:35-40, transductive variant).
-        test_X = self._normalize_test_transductive(test_X)
+        # Original-paper normalization at test time (timeseries.py:33-34): per-source-FILE,
+        # LEAK-FREE — each test recording transformed by its PAIRED cached TRAIN StandardScaler
+        # (.transform only). Removes the previous transductive fit-on-test.
+        test_X = self._normalize_per_file_test(test_X, test_segments)
 
         chunks, pad = self._nonoverlap_chunks_leftpad(test_X)   # (n_chunks, L, F), pad
         self.model.eval()

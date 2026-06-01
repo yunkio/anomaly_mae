@@ -54,6 +54,10 @@ from sklearn.preprocessing import StandardScaler
 
 from comparison.segment_utils import compute_segment_safe_window_indices
 from comparison.baselines.deepmil.model import DeepMILModel, mil_ranking_loss
+from comparison.baselines._per_file_norm import (
+    fit_transform_train_per_file,
+    transform_test_per_file,
+)
 
 
 class DeepMILBaseline:
@@ -110,7 +114,12 @@ class DeepMILBaseline:
         self.model: Optional[DeepMILModel] = None
         self.n_features: int = 0
         # WETAS-lineage per-recording StandardScaler, fit on the TRAIN recording (Change 3).
+        # `self.scaler` keeps the single-file (or first-file) StandardScaler for save/load +
+        # resume back-compat (scaler identity unchanged). `self._scalers` is the per-source-FILE
+        # cache of TRAIN-fit StandardScalers (leak-free per-file norm, multi-file datasets);
+        # the i-th cached train scaler transforms the i-th test file in predict().
         self.scaler: Optional[StandardScaler] = None
+        self._scalers: Optional[list] = None
         self.train_loss_history = []
 
         # Resume infrastructure (2026-05-31, B option — epoch-level dynamics).
@@ -144,16 +153,24 @@ class DeepMILBaseline:
             starts = starts[valid]
         return starts
 
-    def fit(self, train_X, train_y=None, epoch_callback=None, train_segments=None) -> 'DeepMILBaseline':
+    def fit(self, train_X, train_y=None, epoch_callback=None, train_segments=None,
+            norm_train_segs=None) -> 'DeepMILBaseline':
         train_X = np.asarray(train_X, dtype=np.float32)
         self.n_features = train_X.shape[1]
 
-        # --- Change 3: WETAS-lineage per-recording StandardScaler on the TRAIN recording.
+        # --- Change 3 (+ per-file leak-free norm): WETAS-lineage StandardScaler.
         # (donalee/WETAS@cb149dc timeseries.py::_preprocess: fresh StandardScaler fit on the
         #  recording's own data.) RAW input now arrives (run_baseline SELF_NORMALIZING_WEAK).
-        self.scaler = StandardScaler()
-        self.scaler.fit(train_X)
-        train_X = self.scaler.transform(train_X).astype(np.float32)
+        # `norm_train_segs` = per-source-FILE (lo,hi) TRAIN slices (multi-file datasets only);
+        # None/single-seg -> one whole-train StandardScaler == legacy behaviour (bit-identical).
+        # FIT on each file's TRAIN slice ONLY (leak-free); cache the per-file train scalers on
+        # self so predict() can transform each test file by its paired train scaler.
+        train_X, self._scalers, _ = fit_transform_train_per_file(
+            train_X, norm_train_segs, StandardScaler)
+        train_X = train_X.astype(np.float32)
+        # Preserve scaler identity for save/load + resume: keep the FIRST (single-file = only)
+        # StandardScaler as self.scaler.
+        self.scaler = self._scalers[0]
 
         if train_y is None:
             raise RuntimeError(
@@ -264,17 +281,18 @@ class DeepMILBaseline:
             print(f"  Training complete: {time.time() - start_time:.1f}s")
         return self
 
-    def predict(self, test_X) -> np.ndarray:
+    def predict(self, test_X, test_segments=None) -> np.ndarray:
         if self.model is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
         test_X = np.asarray(test_X, dtype=np.float32)
 
-        # --- Change 3 (predict scope): per-recording reference is infeasible here (no test
-        # segment boundaries). Most-faithful feasible match to WETAS's "fresh scaler on THIS
-        # recording's data" = transductive StandardScaler fit on test_X itself. Residual gap:
-        # test_X concatenates all test recordings -> single test-wide scaler (vs per-file).
-        test_scaler = StandardScaler()
-        test_X = test_scaler.fit_transform(test_X).astype(np.float32)
+        # --- Per-file LEAK-FREE test normalization (replaces the previous transductive
+        # fit-on-test). `test_segments` = per-source-FILE (lo,hi) TEST slices (multi-file
+        # datasets only). The i-th test file is z-scored by the i-th cached TRAIN scaler via
+        # .transform ONLY (never fit on test). Single-file / None -> the single cached train
+        # scaler transforms the whole test array (leak-free; matches the other self-norm models'
+        # regime — no test-statistic leakage).
+        test_X = transform_test_per_file(test_X, test_segments, self._scalers).astype(np.float32)
 
         n = len(test_X)
         self.model.eval()
@@ -384,6 +402,12 @@ class DeepMILBaseline:
         restored_scaler = dict_to_standard_scaler(ckpt.get('scaler_state'))
         if restored_scaler is not None:
             self.scaler = restored_scaler
+            # Keep the per-file scaler cache consistent on resume. The checkpoint
+            # persists a SINGLE scaler_state (the single-file / first-file scaler),
+            # so only the single-file cache can be safely synced from it; multi-file
+            # per-file scalers were just re-fit (deterministically) above in fit().
+            if self._scalers is not None and len(self._scalers) == 1:
+                self._scalers = [restored_scaler]
         # Wrapper-local NumPy Generator (bag sampling) — torch-global capture
         # does not see it, so we persisted bit_generator.state separately.
         wrapper_state = ckpt.get('rng_wrapper_specific', {}) or {}
