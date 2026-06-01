@@ -53,6 +53,11 @@ class SelfDistillationLoss(nn.Module):
         self.anomaly_loss_weight = config.anomaly_loss_weight
         self.normal_loss_weight = getattr(config, 'normal_loss_weight', 1.0)
 
+        # [신규 2026-06-01] teacher warmup early-stop: ON일 때만 per-sample teacher recon +
+        # label mask를 loss_tensors로 노출 → train_epoch가 epoch 단위 train recon_snr 계산.
+        # OFF면 노출하지 않아 추가 오버헤드/거동 변화 0.
+        self.use_teacher_warmup_early_stop = getattr(config, 'use_teacher_warmup_early_stop', False)
+
         # GRL pos_weight: dataset-level fixed (set by run_base_experiments.py from actual data)
         self.grl_pos_weight = getattr(config, 'grl_pos_weight', 19.0)
         self.grl_balanced_sampling = getattr(config, 'grl_balanced_sampling', False)
@@ -143,6 +148,7 @@ class SelfDistillationLoss(nn.Module):
         teacher_hidden: Optional[torch.Tensor] = None,
         student_hidden: Optional[torch.Tensor] = None,
         scad_z: Optional[torch.Tensor] = None,
+        ema_teacher_output: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, torch.Tensor]]:
         """
         Args:
@@ -206,7 +212,10 @@ class SelfDistillationLoss(nn.Module):
 
         if self.use_discrepancy and not teacher_only:
             # Compute per-position discrepancy: (batch, seq_length, num_features)
-            discrepancy_full = (teacher_output.detach() - student_output) ** 2
+            # [신규 2026-06-01] use_teacher_output_ema=True 이면 표적을 live teacher 대신
+            # EMA로 평탄화한 teacher 출력으로 교체(이미 no_grad/detach 상태). None이면 기존 동작.
+            _disc_target = ema_teacher_output if ema_teacher_output is not None else teacher_output.detach()
+            discrepancy_full = (_disc_target - student_output) ** 2
 
             # Feature-level discrepancy stats (B, L, F) → (F,) — masked positions only
             _disc_masked = discrepancy_full * (1 - mask_expanded)
@@ -467,6 +476,12 @@ class SelfDistillationLoss(nn.Module):
             'reconstruction_loss': reconstruction_loss,
             'fm_loss': fm_loss,
         }
+        # [신규 2026-06-01] early-stop ON일 때만: per-sample teacher recon + label mask 노출
+        # (detach, no-grad). train_epoch가 epoch 단위로 누적해 train recon_snr 계산.
+        if self.use_teacher_warmup_early_stop:
+            loss_tensors['es_teacher_recon_per_sample'] = teacher_recon_per_sample.detach()
+            loss_tensors['es_is_normal_sample'] = is_normal_sample.detach()
+            loss_tensors['es_has_anomaly_sample'] = has_anomaly_sample.detach()
         # Patch-level masks for WDGRL critic (no grad needed)
         if self.patch_level_loss:
             _pll = locals()

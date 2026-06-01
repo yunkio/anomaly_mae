@@ -1,0 +1,16 @@
+{
+    "experiments": [
+        {
+            "name": "exp278_247_adapt_off_w005_ep500",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2",
+                "smd_all"
+            ],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 num_epochs=500 teacher_only_warmup_epochs=250 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 fm_distance_metric=cosine use_grl=True grl_loss_weight=0.05 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=True grl_adaptive_lambda=False"
+        }
+    ]
+}

@@ -1,0 +1,10 @@
+{
+    "experiments": [
+        {
+            "name": "exp197_bal_win_sd1",
+            "set": "C",
+            "dataset": ["simulation", "SWaT_A1A2", "WaDi_A1", "WaDi_A2", "smd_all"],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=1 num_epochs=200 teacher_only_warmup_epochs=100 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 use_grl=True grl_loss_weight=0.2 grl_balanced_sampling=True grl_target_mode=window"
+        }
+    ]
+}

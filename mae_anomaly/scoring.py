@@ -204,54 +204,53 @@ def compute_adaptive_components(
     >>> out = compute_adaptive_components(recon, disc, fm, _Cfg(), force_recon_only=False)
     >>> bool(np.allclose(out['recon_mean'], recon.mean() + 1e-4))
     True
-    >>> # force_recon_only=True drops disc+fm → score == recon exactly.
+    >>> # force_recon_only=True drops the discrepancy term → score == recon.
     >>> out_ro = compute_adaptive_components(recon, disc, fm, _Cfg(), force_recon_only=True)
     >>> bool(np.array_equal(out_ro['score'], recon))
     True
     >>> # scaled_disc preserves disc's variation but rescaled to recon's scale.
-    >>> # Exact mean depends on disc.mean()+eps vs recon.mean()+eps ratio,
-    >>> # so we only check shape and that scaling is bounded.
     >>> out['scaled_disc'].shape == disc.shape
     True
-    >>> # score = recon + 0.5 * scaled_disc + 0.5 * scaled_fm  (w_disc=w_fm=1)
+    >>> # 2026-06-01: FM is dropped from the score (scaled_fm is None) and the
+    >>> # discrepancy is down-weighted to recon:disc = ratio:1 (default 4:1):
+    >>> #   score == recon + scaled_disc / ratio
+    >>> out['scaled_fm'] is None
+    True
     >>> bool(np.allclose(out['score'],
-    ...     recon + 0.5 * out['scaled_disc'] + 0.5 * out['scaled_fm']))
+    ...     recon + out['scaled_disc'] / out['recon_disc_ratio']))
     True
     """
     eps = ADAPTIVE_SCORE_EPSILON
     w_disc, w_fm, fm_active = resolve_score_weights(config)
 
     # Pre-warmup gate: when the caller signals the eval epoch is within the
-    # teacher-only warmup window, drop BOTH the discriminator and FM terms so
-    # student_error == 0 and score == teacher recon (see the no-FM / w_disc<=0
-    # branch below). Zeroing w_disc alone is insufficient — the FM branch would
-    # still leak scaled_fm (2026-05-29 FM-omission class). Both must be off.
+    # teacher-only warmup window, drop the student discrepancy term so
+    # student_error == 0 and score == teacher recon.
     if force_recon_only:
         w_disc = 0.0
-        fm_active = False
+
+    # 2026-06-01 lambda change: FM (feature matching) is NO LONGER part of the
+    # anomaly score. It remains a *training* loss, but the inference score uses
+    # only teacher reconstruction + a down-weighted output discrepancy.
+    # fm_active is forced False and scaled_fm is always None so every downstream
+    # consumer (score-contribution chart, anomaly_threshold viz, NPZ) drops FM.
+    fm_active = False
 
     recon_mean = float(recon.mean()) + eps
     disc_mean = float(disc.mean()) + eps
     scaled_disc = disc * (recon_mean / disc_mean)
 
-    # Include FM only when (a) the config enables FM AND (b) the caller
-    # actually supplied an FM array. Either condition false → FM dropped
-    # and student_error reduces to scaled_disc (or zero if w_disc==0).
-    if fm_active and fm is not None:
-        fm_mean = float(fm.mean()) + eps
-        scaled_fm = fm * (recon_mean / fm_mean)
-        denom = w_disc + w_fm
-        if denom > 0:
-            student_error = (w_disc * scaled_disc + w_fm * scaled_fm) / denom
-        else:
-            student_error = np.zeros_like(recon)
+    # teacher recon : discrepancy = ratio:1 contribution (default 4:1), with the
+    # recon-scale correction kept. The scale correction makes scaled_disc.mean()
+    # ≈ recon_mean (a 1:1 baseline); dividing by `ratio` down-weights the
+    # discrepancy to a 1/ratio mean contribution → recon:disc = ratio:1.
+    ratio = float(_cfg_get(config, 'score_recon_disc_ratio', 4.0))
+    scaled_fm = None
+    if w_disc > 0 and ratio > 0:
+        student_error = scaled_disc / ratio
     else:
-        scaled_fm = None
-        if w_disc > 0:
-            student_error = scaled_disc
-        else:
-            # Both OD disabled and FM unavailable → teacher recon only.
-            student_error = np.zeros_like(recon)
+        # OD disabled or pre-warmup → teacher reconstruction only.
+        student_error = np.zeros_like(recon)
 
     return {
         'score': recon + student_error,
@@ -262,6 +261,7 @@ def compute_adaptive_components(
         'w_disc': w_disc,
         'w_fm': w_fm,
         'fm_active': fm_active,
+        'recon_disc_ratio': ratio,
     }
 
 

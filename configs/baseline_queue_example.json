@@ -1,0 +1,40 @@
+{
+    "description": "Baseline comparison 10ep all datasets",
+    "experiments": [
+        {
+            "name": "sim_10ep",
+            "experiment": "simulation",
+            "model": "all",
+            "neural_epochs": 10,
+            "eval_interval": 1
+        },
+        {
+            "name": "sim_complex_10ep",
+            "experiment": "simulation_complex",
+            "model": "all",
+            "neural_epochs": 10,
+            "eval_interval": 1
+        },
+        {
+            "name": "swat_10ep",
+            "experiment": "swat_a1a2",
+            "model": "all",
+            "neural_epochs": 10,
+            "eval_interval": 1
+        },
+        {
+            "name": "wadi_A1_10ep",
+            "experiment": "wadi_14days_A1",
+            "model": "all",
+            "neural_epochs": 10,
+            "eval_interval": 1
+        },
+        {
+            "name": "wadi_A2_10ep",
+            "experiment": "wadi_14days_A2",
+            "model": "all",
+            "neural_epochs": 10,
+            "eval_interval": 1
+        }
+    ]
+}

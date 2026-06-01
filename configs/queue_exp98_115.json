@@ -1,0 +1,203 @@
+{
+    "description": "Exp 98-115: Discriminator ablation with min-max [0,1] normalization (mirroring exp44-61 but normalize_mode=minmax instead of zscore)",
+    "experiments": [
+        {
+            "name": "exp98_b28_mm_disc_aw02_chS_gAll",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.2 disc_channels=(64,32) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp99_b28_mm_disc_aw02_chL_gAll",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.2 disc_channels=(128,64) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp100_b28_mm_disc_aw05_chS_gAll",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.5 disc_channels=(64,32) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp101_b28_mm_disc_aw05_chL_gAll",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.5 disc_channels=(128,64) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp102_b28_mm_disc_aw10_chS_gAll",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=1.0 disc_channels=(64,32) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp103_b28_mm_disc_aw10_chL_gAll",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=1.0 disc_channels=(128,64) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp104_b28_mm_disc_aw02_chS_gLast",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.2 disc_channels=(64,32) d_grad_student_layers=last force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp105_b28_mm_disc_aw02_chL_gLast",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.2 disc_channels=(128,64) d_grad_student_layers=last force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp106_b28_mm_disc_aw05_chS_gLast",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.5 disc_channels=(64,32) d_grad_student_layers=last force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp107_b28_mm_disc_aw05_chL_gLast",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.5 disc_channels=(128,64) d_grad_student_layers=last force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp108_b28_mm_disc_aw10_chS_gLast",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=1.0 disc_channels=(64,32) d_grad_student_layers=last force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp109_b28_mm_disc_aw10_chL_gLast",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=4 num_student_decoder_layers=2 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=1.0 disc_channels=(128,64) d_grad_student_layers=last force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp110_b29_mm_disc_aw02_chS",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=1 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.2 disc_channels=(64,32) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp111_b29_mm_disc_aw02_chL",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=1 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.2 disc_channels=(128,64) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp112_b29_mm_disc_aw05_chS",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=1 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.5 disc_channels=(64,32) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp113_b29_mm_disc_aw05_chL",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=1 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=0.5 disc_channels=(128,64) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp114_b29_mm_disc_aw10_chS",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=1 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=1.0 disc_channels=(64,32) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        },
+        {
+            "name": "exp115_b29_mm_disc_aw10_chL",
+            "set": "C",
+            "dataset": [
+                "simulation",
+                "SWaT_A1A2",
+                "WaDi_A1",
+                "WaDi_A2"
+            ],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=1 dynamic_margin_k=6 normalize_mode=minmax use_discriminator=True disc_warmup_epochs=10 adaptive_lambda=True disc_lr_ratio=4.0 adv_loss_weight=1.0 disc_channels=(128,64) d_grad_student_layers=all force_mask_anomaly=False epoch_offset=True teacher_only_warmup_epochs=5 num_epochs=50"
+        }
+    ]
+}

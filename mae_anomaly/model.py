@@ -504,6 +504,28 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self.student_mask_token = nn.Parameter(torch.zeros(1, 1, config.d_model))
                 nn.init.normal_(self.student_mask_token, std=0.02)
 
+        # === [신규 2026-06-01] Teacher output EMA modules ===
+        # use_teacher_output_ema=True 일 때만 생성. teacher_decoder + teacher_output_projection
+        # (+ shared_decoder, + teacher mask token) 의 weight-EMA 사본 (encoder 제외). backprop 대상 아님.
+        # student 의 output discrepancy 표적 산출 전용. _ema_active 는 trainer 가 매 epoch 설정
+        # (post-warmup & freeze_teacher_after_warmup=False 일 때만 True → 그때만 ema forward 수행).
+        self._ema_active = False
+        self._ema_teacher_output = None
+        self._has_teacher_output_ema = bool(getattr(config, 'use_teacher_output_ema', False)) and config.use_teacher
+        if self._has_teacher_output_ema:
+            import copy as _copy
+            self.ema_teacher_decoder = _copy.deepcopy(self.teacher_decoder)
+            self.ema_teacher_output_projection = _copy.deepcopy(self.teacher_output_projection)
+            self.ema_shared_decoder = (_copy.deepcopy(self.shared_decoder)
+                                       if getattr(self, 'shared_decoder', None) is not None else None)
+            _src_mask = self.mask_token if self.shared_mask_token else self.teacher_mask_token
+            self.register_buffer('ema_teacher_mask_token', _src_mask.detach().clone())
+            for _m in (self.ema_teacher_decoder, self.ema_teacher_output_projection, self.ema_shared_decoder):
+                if _m is not None:
+                    _m.eval()
+                    for _p in _m.parameters():
+                        _p.requires_grad_(False)
+
         # GRL / WDGRL (use_grl=True일 때만)
         if getattr(config, 'use_grl', False):
             _grl_mode = getattr(config, 'grl_mode', 'classifier')
@@ -836,6 +858,38 @@ class SelfDistilledMAEMultivariate(nn.Module):
 
         return latent_full
 
+    def update_teacher_output_ema(self, momentum: float):
+        """[신규 2026-06-01] EMA teacher 모듈을 live teacher 가중치로 갱신(매 optimizer step 호출).
+        θ_ema ← m·θ_ema + (1−m)·θ_live. 대상: teacher_decoder, teacher_output_projection,
+        (shared_decoder), teacher mask token. encoder는 갱신 안 함(제외). use_teacher_output_ema=False면 no-op."""
+        if not self._has_teacher_output_ema:
+            return
+        m = float(momentum)
+        with torch.no_grad():
+            _pairs = [(self.ema_teacher_decoder, self.teacher_decoder),
+                      (self.ema_teacher_output_projection, self.teacher_output_projection)]
+            if self.ema_shared_decoder is not None and getattr(self, 'shared_decoder', None) is not None:
+                _pairs.append((self.ema_shared_decoder, self.shared_decoder))
+            for _ema_mod, _live_mod in _pairs:
+                for _pe, _pl in zip(_ema_mod.parameters(), _live_mod.parameters()):
+                    _pe.mul_(m).add_(_pl.detach(), alpha=1.0 - m)
+                for _be, _bl in zip(_ema_mod.buffers(), _live_mod.buffers()):
+                    _be.mul_(m).add_(_bl.detach(), alpha=1.0 - m)
+            _live_tok = self.mask_token if self.shared_mask_token else self.teacher_mask_token
+            self.ema_teacher_mask_token.mul_(m).add_(_live_tok.detach(), alpha=1.0 - m)
+
+    def reset_teacher_output_ema(self):
+        """[신규 2026-06-01] EMA 모듈을 현재 live teacher 가중치로 재초기화(early-stop revert 시 사용)."""
+        if not self._has_teacher_output_ema:
+            return
+        with torch.no_grad():
+            self.ema_teacher_decoder.load_state_dict(self.teacher_decoder.state_dict())
+            self.ema_teacher_output_projection.load_state_dict(self.teacher_output_projection.state_dict())
+            if self.ema_shared_decoder is not None and getattr(self, 'shared_decoder', None) is not None:
+                self.ema_shared_decoder.load_state_dict(self.shared_decoder.state_dict())
+            _live_tok = self.mask_token if self.shared_mask_token else self.teacher_mask_token
+            self.ema_teacher_mask_token.copy_(_live_tok.detach())
+
     def forward(
         self,
         x: torch.Tensor,
@@ -1017,6 +1071,46 @@ class SelfDistilledMAEMultivariate(nn.Module):
             # so loss vs original_input and anomaly scoring operate in that consistent space.
             if self.use_revin:
                 teacher_output = self.revin.denormalize(teacher_output)
+
+            # === [신규 2026-06-01] EMA teacher 출력 (student discrepancy 표적 전용) ===
+            # _ema_active(post-warmup & freeze=False, trainer가 매 epoch 설정)이고 teacher_only가
+            # 아닐 때만, EMA 사본 모듈로 한 번 더 decode. encoder latent(latent_visible)는 live 재사용
+            # (encoder 제외). no_grad로 backprop 차단. 결과는 loss의 discrepancy 표적으로만 사용되며
+            # 추론/scoring/dynamic_margin은 live teacher_output을 그대로 쓴다.
+            self._ema_teacher_output = None
+            if (self._has_teacher_output_ema and self._ema_active and not teacher_only
+                    and self.training):
+                with torch.no_grad():
+                    # 부모 model.train()이 자식 EMA 모듈도 train 모드로 되돌리므로, 매 EMA forward
+                    # 직전 eval 재확정 → dropout off의 결정론적 평탄 표적 보장(불안정성 완화 의도).
+                    self.ema_teacher_decoder.eval()
+                    self.ema_teacher_output_projection.eval()
+                    if self.ema_shared_decoder is not None:
+                        self.ema_shared_decoder.eval()
+                    if self.mask_after_encoder:
+                        _ema_latent = self._insert_mask_tokens_and_unshuffle(
+                            latent_visible, ids_restore, seq_len, self.ema_teacher_mask_token)
+                        if self.config.use_transformer_encoder_decoder:
+                            _ema_latent = _ema_latent + self.decoder_pos_encoder.pe[:seq_len]
+                    else:
+                        _ema_latent = latent
+                        if self.config.use_transformer_encoder_decoder:
+                            _ema_latent = _ema_latent + self.decoder_pos_encoder.pe[:seq_len]
+                    if self.ema_shared_decoder is not None:
+                        if self.config.use_transformer_encoder_decoder:
+                            _ema_latent = self.ema_shared_decoder(_ema_latent)
+                        else:
+                            _ema_latent = self.ema_shared_decoder(_ema_latent, latent_visible)
+                    if self.config.use_transformer_encoder_decoder:
+                        _ema_hidden = self.ema_teacher_decoder(_ema_latent)
+                    else:
+                        _ema_hidden = self.ema_teacher_decoder(_ema_latent, latent_visible)
+                    _ema_out = self.ema_teacher_output_projection(_ema_hidden).transpose(0, 1)
+                    if self.use_patch:
+                        _ema_out = self.unpatchify(_ema_out)
+                    if self.use_revin:
+                        _ema_out = self.revin.denormalize(_ema_out)
+                    self._ema_teacher_output = _ema_out
 
         if _profiling:
             torch.cuda.synchronize()

@@ -1,0 +1,10 @@
+{
+    "experiments": [
+        {
+            "name": "scad_sanity_exp307_sim_ep10",
+            "set": "C",
+            "dataset": ["simulation"],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 num_epochs=10 teacher_only_warmup_epochs=5 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=False use_scad=True scad_form=A scad_temperature=0.1 scad_loss_weight=0.5"
+        }
+    ]
+}

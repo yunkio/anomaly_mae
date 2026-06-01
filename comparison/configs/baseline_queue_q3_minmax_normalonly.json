@@ -1,0 +1,278 @@
+{
+  "description": "Baseline minmax_normalonly \u2014 6 base datasets (sim + SWaT + WaDi A1/A2 + PSM + Exathlon 6 apps) + 28 SMD machines = 39 experiments",
+  "experiments": [
+    {
+      "name": "sim_minmax_normalonly",
+      "experiment": "simulation_sim_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "swat_minmax_normalonly",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "wadi_A1_minmax_normalonly",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "wadi_A2_minmax_normalonly",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "psm_minmax_normalonly",
+      "experiment": "psm_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "exathlon_app1_minmax_normalonly",
+      "experiment": "exathlon_app1_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "exathlon_app2_minmax_normalonly",
+      "experiment": "exathlon_app2_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "exathlon_app4_minmax_normalonly",
+      "experiment": "exathlon_app4_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "exathlon_app5_minmax_normalonly",
+      "experiment": "exathlon_app5_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "exathlon_app6_minmax_normalonly",
+      "experiment": "exathlon_app6_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "exathlon_app9_minmax_normalonly",
+      "experiment": "exathlon_app9_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-1-1_minmax_normalonly",
+      "experiment": "smd_machine-1-1_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-1-2_minmax_normalonly",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-1-3_minmax_normalonly",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-1-4_minmax_normalonly",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-1-5_minmax_normalonly",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-1-6_minmax_normalonly",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-1-7_minmax_normalonly",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-1-8_minmax_normalonly",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-2-1_minmax_normalonly",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-2-2_minmax_normalonly",
+      "experiment": "smd_machine-2-2_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-2-3_minmax_normalonly",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-2-4_minmax_normalonly",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-2-5_minmax_normalonly",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-2-6_minmax_normalonly",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-2-7_minmax_normalonly",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-2-8_minmax_normalonly",
+      "experiment": "smd_machine-2-8_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-2-9_minmax_normalonly",
+      "experiment": "smd_machine-2-9_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-1_minmax_normalonly",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-2_minmax_normalonly",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-3_minmax_normalonly",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-4_minmax_normalonly",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-5_minmax_normalonly",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-6_minmax_normalonly",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-7_minmax_normalonly",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-8_minmax_normalonly",
+      "experiment": "smd_machine-3-8_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-9_minmax_normalonly",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-10_minmax_normalonly",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "smd_machine-3-11_minmax_normalonly",
+      "experiment": "smd_machine-3-11_normalonly",
+      "model": "all",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    }
+  ]
+}

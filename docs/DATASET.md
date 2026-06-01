@@ -950,9 +950,12 @@ dataset = SlidingWindowDataset(
 - Individual machine loading via `machines` parameter
 - Constant column removal (z-score normalization handled by SlidingWindowDataset)
 
-**Registry**:
-- `smd`: All 28 machines combined (with run_boundaries)
-- `smd_machine-X-Y`: Individual machine (e.g., `smd_machine-1-1`)
+**Registry** (concat / simple, 2026-06-01):
+- **`SMD_concat`** (`load_smd_concat`): all 28 machines concatenated, **per-machine test-cut** (orig_train + front-50% test → train, back-50% test → test) — matches SMAP/MSL/Exathlon concat. `run_boundaries` mark every machine boundary AND each orig_train/test_front seam.
+- **`SMD_simple_<machine>`** (`load_smd_simple`): one machine = one dataset (test-cut). 28 keys. (run_base `DATASETS` uses these; `results_subdir` stays `SMD/<machine>`.)
+- Legacy: `smd` = all machines with the **ORIGINAL** train/test split (no test-cut); `smd_machine-X-Y` = single machine original split.
+
+Boundary safety (verified): no sliding window crosses a machine boundary, an orig_train/test_front seam, or the train|test split — empirically **0 crossing windows** across train+test (see CHANGELOG 2026-06-01).
 
 ```python
 # Load all 28 machines
@@ -1064,6 +1067,11 @@ Per-app train/test split:
 
 Sliding windows respect `run_boundaries` (trace boundaries within both train and test portions).
 
+**Registry** (concat / simple, 2026-06-01):
+- **`Exathlon_concat`** (`load_exathlon_concat`): all 6 apps concatenated into one stream. Each app is loaded via `load_exathlon(app)`, split into its train/test by `train_ratio`, then re-merged as `[all_app_train | all_app_test]`. `run_boundaries` merge every app's internal **trace** boundaries (mapped into the global train/test blocks) PLUS every app boundary. 19 features (all apps).
+- **`Exathlon_simple_app<N>`** (`load_exathlon`): one app = one dataset. 6 keys. (run_base `DATASETS` uses these; `results_subdir` stays `Exathlon/app<N>`.) Legacy alias `exathlon_app<N>` retained.
+- Boundary safety (verified): no window crosses a trace, app, or train|test boundary — **0 crossing windows** (see CHANGELOG 2026-06-01).
+
 ### Per-app Statistics (after split)
 
 | App | Total Rows | Train Rows | Test Rows | Train Anom% | Test Anom% | #Anomaly Regions | #Train Traces | #Test Traces |
@@ -1141,6 +1149,14 @@ Per channel:
 - `train_portion = orig_train.npy (all normal) + test_front_50%` (chronological)
 - `test_portion  = test_back_50%`
 - 50% split point is pushed outside any anomaly region by ±10 timestamps (`_find_safe_cut_point`, reused from SMD). Verified: **0 boundary-straddling anomalies** across all 54 + 27 channels.
+
+### Runnable dataset keys (registry, 2026-06-01)
+
+`DATASET_LOADERS` (and run_base `--list`/`--dataset`) expose two patterns:
+- **`SMAP_concat` / `MSL_concat`** — all channels time-concatenated into one multivariate stream; `run_boundaries` mark every channel + the train|test seam so windows never cross segments. SMAP=54ch×25feat, MSL=27ch×55feat.
+- **`SMAP_simple_<ch>` / `MSL_simple_<ch>`** — one channel = one dataset (e.g. `SMAP_simple_A-1`, `MSL_simple_C-1`); SMD-style. 54 + 27 = 81 keys.
+
+**Normalization is leakage-free**: `SlidingWindowDataset._minmax_per_feature(signals, train_end)` fits min/max on `signals[:train_end]` (the train portion, `train_end = int(len·train_ratio)`) only, then applies to all; the held-out `test_back_50%` (eval set) never enters the fit. `test_front_50%` is part of train *by design* (chronological prefix), not leakage. Cross-channel pooled fit (one min/max per feature over all channels' train portions). z-score (`_standardize_per_feature`) is identical.
 
 ### Pattern A — all-channels concat (legacy convention)
 

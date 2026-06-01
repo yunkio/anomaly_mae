@@ -1231,6 +1231,128 @@ def load_smd_simple(machine: str):
     return all_signals, all_labels, anomaly_regions, feature_names, train_ratio, data_info
 
 
+def load_smd_concat(machines: Optional[List[str]] = None):
+    """SMD 'concat': ALL machines combined into ONE multivariate stream, each with
+    the same chronological test-cut as ``load_smd_simple``.
+
+    Per machine: ``train_seg = orig_train.txt (all normal) + test_front_50%``,
+    ``test_seg = test_back_50%``. Layout (so ``train_ratio`` splits at the seam):
+
+        [ m1_train | m2_train | ... | mN_train | m1_testback | ... | mN_testback ]
+
+    ``run_boundaries`` mark every machine boundary AND each orig_train/test_front
+    seam, so sliding windows never cross a recording discontinuity. Anomaly
+    regions are computed PER segment (no cross-machine merge). Mirrors
+    ``load_smap_combined`` / ``load_msl_combined`` (Pattern A) for SMD.
+
+    Args:
+        machines: machine IDs (None = all 28).
+    Returns:
+        signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+    """
+    data_dir = os.path.join(PROJECT_ROOT, 'dataset', 'SMD')
+    if machines is None:
+        machines = list(SMD_MACHINE_NAMES)
+    machines = sorted(machines)
+
+    print(f"\n{'='*60}")
+    print(f"Loading SMD concat ({len(machines)} machines, simple test-cut per machine)")
+    print(f"{'='*60}")
+
+    train_sig_parts, train_lab_parts = [], []
+    test_sig_parts, test_lab_parts = [], []
+    train_seg_lengths, test_seg_lengths, orig_train_lengths = [], [], []
+    num_features = None
+
+    for machine_id in machines:
+        train_data = np.loadtxt(os.path.join(data_dir, 'train', f'{machine_id}.txt'),
+                                delimiter=',', dtype=np.float32)
+        test_data = np.loadtxt(os.path.join(data_dir, 'test', f'{machine_id}.txt'),
+                               delimiter=',', dtype=np.float32)
+        test_labels = np.loadtxt(os.path.join(data_dir, 'test_label', f'{machine_id}.txt'),
+                                 dtype=np.int64)
+        if num_features is None:
+            num_features = train_data.shape[1]
+
+        split = len(test_data) // 2  # plain 50/50, same as load_smd_simple
+        test_front, test_front_lab = test_data[:split], test_labels[:split]
+        test_back, test_back_lab = test_data[split:], test_labels[split:]
+
+        m_train = np.concatenate([train_data, test_front], axis=0)
+        m_train_lab = np.concatenate(
+            [np.zeros(len(train_data), dtype=np.int64), test_front_lab], axis=0)
+
+        train_sig_parts.append(m_train); train_lab_parts.append(m_train_lab)
+        test_sig_parts.append(test_back); test_lab_parts.append(test_back_lab)
+        train_seg_lengths.append(len(m_train)); test_seg_lengths.append(len(test_back))
+        orig_train_lengths.append(len(train_data))
+
+    total_train = sum(train_seg_lengths)
+    total_test = sum(test_seg_lengths)
+    n_total = total_train + total_test
+    train_ratio = total_train / n_total
+
+    all_signals = np.concatenate(train_sig_parts + test_sig_parts, axis=0)
+    feature_names = [f'feature_{i}' for i in range(num_features)]
+
+    # ---- Remove constant columns (rows/labels unaffected) ----
+    stds = np.std(all_signals, axis=0)
+    constant_mask = stds == 0
+    if int(np.sum(constant_mask)) > 0:
+        print(f"  Removing {int(np.sum(constant_mask))} constant columns")
+        all_signals = all_signals[:, ~constant_mask]
+        feature_names = [f for f, m in zip(feature_names, constant_mask) if not m]
+        num_features = len(feature_names)
+
+    # ---- Handle NaN ----
+    if int(np.sum(np.isnan(all_signals))) > 0:
+        all_signals = pd.DataFrame(all_signals).ffill().bfill().values.astype(np.float32)
+    all_signals = all_signals.astype(np.float32)
+
+    # ---- Anomaly regions PER segment (offsets follow the concat order) ----
+    anomaly_regions = []
+    offset = 0
+    for lab_part in (train_lab_parts + test_lab_parts):
+        is_atk = (lab_part == 1).astype(int)
+        d = np.diff(is_atk, prepend=0, append=0)
+        for s, e in zip(np.where(d == 1)[0], np.where(d == -1)[0]):
+            anomaly_regions.append(AnomalyRegion(start=int(offset + s),
+                                                 end=int(offset + e), anomaly_type=1))
+        offset += len(lab_part)
+    all_labels = np.concatenate(train_lab_parts + test_lab_parts, axis=0)
+
+    # ---- run_boundaries: orig_train/test_front seam + machine boundaries ----
+    # (skip the train|test split = total_train, and the final end = n_total)
+    run_boundaries = []
+    cum = 0
+    for i, (otl, mtl) in enumerate(zip(orig_train_lengths, train_seg_lengths)):
+        run_boundaries.append(cum + otl)        # orig_train / test_front seam
+        cum += mtl
+        if i < len(train_seg_lengths) - 1:
+            run_boundaries.append(cum)          # machine boundary (train portion)
+    cum = total_train
+    for i, tl in enumerate(test_seg_lengths):
+        cum += tl
+        if i < len(test_seg_lengths) - 1:
+            run_boundaries.append(cum)          # machine boundary (test portion)
+    run_boundaries = sorted({b for b in run_boundaries if 0 < b < n_total and b != total_train})
+
+    data_info = {
+        'dataset_type': 'smd_concat', 'machines': machines, 'n_total': n_total,
+        'n_features': num_features, 'train_len': total_train, 'test_len': total_test,
+        'train_ratio': train_ratio, 'run_boundaries': run_boundaries,
+        'train_attack_ratio': float(np.mean(all_labels[:total_train])) if total_train else 0.0,
+        'test_attack_ratio': float(np.mean(all_labels[total_train:])) if total_test else 0.0,
+    }
+    print(f"  Train: {total_train:,} (orig_train + front-50% test per machine), "
+          f"anomaly {data_info['train_attack_ratio']:.2%}")
+    print(f"  Test:  {total_test:,} (back-50% test per machine), "
+          f"anomaly {data_info['test_attack_ratio']:.2%}")
+    print(f"  train_ratio={train_ratio:.4f} | features={num_features} | "
+          f"regions={len(anomaly_regions)} | run_boundaries={len(run_boundaries)}")
+    return all_signals, all_labels, anomaly_regions, feature_names, train_ratio, data_info
+
+
 # =============================================================================
 # Exathlon (Spark cluster anomaly benchmark — Jacob et al., VLDB 2021)
 # =============================================================================
@@ -1427,6 +1549,89 @@ def load_exathlon(app: int):
     print(f"  Run boundaries: {len(run_boundaries)} (trace boundaries within train + test)")
     print(f"  Features: {all_signals.shape[1]}")
 
+    return all_signals, all_labels, anomaly_regions, feature_names, train_ratio, data_info
+
+
+def load_exathlon_concat(apps: Optional[List[int]] = None):
+    """Exathlon 'concat': ALL apps combined into ONE multivariate stream.
+
+    Each app is loaded via ``load_exathlon(app)`` (per-app trace-based split:
+    undisturbed + first-half disturbed traces → train, rest → test) and split into
+    its train/test portions by ``train_ratio``. Layout (so train_ratio splits at the seam):
+
+        [ app1_train | ... | appK_train | app1_test | ... | appK_test ]
+
+    ``run_boundaries`` merge each app's internal trace boundaries (mapped into the
+    global train / test blocks) PLUS every app boundary, so windows never cross a
+    trace or app boundary. Mirrors SMAP/MSL/SMD concat. (All apps = 19 features.)
+
+    Args:
+        apps: app IDs (None = all in EXATHLON_APP_IDS).
+    Returns:
+        signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+    """
+    if apps is None:
+        apps = list(EXATHLON_APP_IDS)
+    print(f"\n{'='*60}\nLoading Exathlon concat ({len(apps)} apps)\n{'='*60}")
+
+    train_sig, train_lab, test_sig, test_lab = [], [], [], []
+    train_lens, test_lens, train_ib, test_ib = [], [], [], []
+    num_features = None
+    for app in apps:
+        sig, lab, _reg, _fn, tr, info = load_exathlon(app)
+        if num_features is None:
+            num_features = sig.shape[1]
+        te = int(len(sig) * tr)
+        train_sig.append(sig[:te]); train_lab.append(lab[:te])
+        test_sig.append(sig[te:]); test_lab.append(lab[te:])
+        train_lens.append(te); test_lens.append(len(sig) - te)
+        ib = info.get('run_boundaries') or []
+        train_ib.append(sorted(b for b in ib if 0 < b < te))           # app-internal (train block)
+        test_ib.append(sorted(b - te for b in ib if te < b < len(sig)))  # app-internal (test block)
+
+    total_train = sum(train_lens); total_test = sum(test_lens); n_total = total_train + total_test
+    train_ratio = total_train / n_total
+    all_signals = np.concatenate(train_sig + test_sig, axis=0).astype(np.float32)
+    feature_names = [f'feature_{i}' for i in range(num_features)]
+
+    # ---- anomaly regions PER part (no cross-app/trace merge) ----
+    anomaly_regions = []
+    offset = 0
+    for lab_part in (train_lab + test_lab):
+        is_atk = (np.asarray(lab_part) == 1).astype(int)
+        d = np.diff(is_atk, prepend=0, append=0)
+        for s, e in zip(np.where(d == 1)[0], np.where(d == -1)[0]):
+            anomaly_regions.append(AnomalyRegion(start=int(offset + s), end=int(offset + e), anomaly_type=1))
+        offset += len(lab_part)
+    all_labels = np.concatenate(train_lab + test_lab, axis=0).astype(np.int64)
+
+    # ---- run_boundaries: app-internal trace boundaries + app seams (train + test blocks) ----
+    run_boundaries = []
+    cum = 0
+    for i, (tl, ib) in enumerate(zip(train_lens, train_ib)):
+        run_boundaries.extend(cum + b for b in ib)
+        cum += tl
+        if i < len(train_lens) - 1:
+            run_boundaries.append(cum)
+    cum = total_train
+    for i, (tl, ib) in enumerate(zip(test_lens, test_ib)):
+        run_boundaries.extend(cum + b for b in ib)
+        cum += tl
+        if i < len(test_lens) - 1:
+            run_boundaries.append(cum)
+    run_boundaries = sorted({b for b in run_boundaries if 0 < b < n_total and b != total_train})
+
+    data_info = {
+        'dataset_type': 'exathlon_concat', 'apps': apps, 'n_total': n_total,
+        'n_features': num_features, 'train_len': total_train, 'test_len': total_test,
+        'train_ratio': train_ratio, 'run_boundaries': run_boundaries,
+        'train_attack_ratio': float(np.mean(all_labels[:total_train])) if total_train else 0.0,
+        'test_attack_ratio': float(np.mean(all_labels[total_train:])) if total_test else 0.0,
+    }
+    print(f"  Train: {total_train:,} (per-app train) anomaly {data_info['train_attack_ratio']:.2%}")
+    print(f"  Test:  {total_test:,} (per-app test) anomaly {data_info['test_attack_ratio']:.2%}")
+    print(f"  train_ratio={train_ratio:.4f} | features={num_features} | "
+          f"regions={len(anomaly_regions)} | run_boundaries={len(run_boundaries)}")
     return all_signals, all_labels, anomaly_regions, feature_names, train_ratio, data_info
 
 
@@ -2479,9 +2684,17 @@ DATASET_LOADERS = {
     # TEP dataset loaders
     'tep': lambda: load_tep(),
     # SMD dataset loaders
-    'smd': lambda: load_smd(),
+    'smd': lambda: load_smd(),               # legacy: all machines, ORIGINAL train/test split (no test-cut)
+    'SMD_concat': lambda: load_smd_concat(),  # all machines concat, per-machine test-cut (SMAP/MSL-style)
+    'Exathlon_concat': lambda: load_exathlon_concat(),  # all apps concat (per-app trace split merged)
     # PSM dataset loader (Pooled Server Metrics, eBay)
     'PSM': load_psm,
+    # SMAP / MSL (NASA Telemanom) — 'concat': all channels time-concatenated into
+    # one multivariate stream. Per-channel test safe-cut (front→train / back→test),
+    # run_boundaries on every channel + the train|test seam. SMAP=54ch×25feat, MSL=27ch×55feat.
+    # ('simple' per-channel variants are registered dynamically below, like smd_simple.)
+    'SMAP_concat': load_smap_combined,
+    'MSL_concat': load_msl_combined,
 }
 # Add per-fault TEP loaders dynamically (tep_fault1 through tep_fault20)
 for _fn in range(1, 21):
@@ -2504,6 +2717,22 @@ del _mn  # Clean up loop variable
 for _ap in EXATHLON_APP_IDS:
     DATASET_LOADERS[f'exathlon_app{_ap}'] = (lambda ap=_ap: load_exathlon(app=ap))
 del _ap  # Clean up loop variable
+# Consistent 'simple' per-segment aliases (SMD machines / Exathlon apps) — same
+# loaders as smd_simple_<machine> / exathlon_app<N>, just the concat/simple naming.
+for _mn in SMD_MACHINE_NAMES:
+    DATASET_LOADERS[f'SMD_simple_{_mn}'] = (lambda mn=_mn: load_smd_simple(machine=mn))
+del _mn  # Clean up loop variable
+for _ap in EXATHLON_APP_IDS:
+    DATASET_LOADERS[f'Exathlon_simple_app{_ap}'] = (lambda ap=_ap: load_exathlon(app=ap))
+del _ap  # Clean up loop variable
+# Add per-channel SMAP/MSL 'simple' loaders (one channel = one dataset, SMD-style:
+# train.npy + front-50% test → train, back-50% test → test). 'concat' (all channels
+# in one stream) is registered as SMAP_concat / MSL_concat above.
+for _ch in SMAP_CHANNEL_NAMES:
+    DATASET_LOADERS[f'SMAP_simple_{_ch}'] = (lambda ch=_ch: load_smap_simple(ch))
+for _ch in MSL_CHANNEL_NAMES:
+    DATASET_LOADERS[f'MSL_simple_{_ch}'] = (lambda ch=_ch: load_msl_simple(ch))
+del _ch  # Clean up loop variable
 
 
 def get_dataset_loader(dataset_type: str):

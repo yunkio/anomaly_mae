@@ -1,4 +1,11 @@
-# Python
+# ============================================================================
+# Policy (2026-06-01): keep ALL source scripts (.py/.sh) and docs
+# (.md/.txt/.bib/.tex) in git so the two work machines stay consistent.
+# IGNORE only: experiment results, raw datasets, scratch dirs, binaries, caches.
+# temp/ and .trash/ are ALWAYS excluded.
+# ============================================================================
+
+# --- Python caches / build (not source) ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,86 +14,63 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# --- Backups (not canonical scripts) ---
 *.backup
 *.backup_*
 *_backup*.py
 *_option*.py
+*.bak
 
-# Jupyter
+# --- Jupyter / IDE / OS ---
 .ipynb_checkpoints/
 *.ipynb
-
-# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# Results
-results/*/
-!results/archived/
-*.png
-*.jpg
-*.log
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Claude
-.claude/
-CLAUDE.md
+# --- Binaries / images / archives / logs / model weights / arrays (not scripts or docs) ---
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+*.zip
+*.gz
+*.tar
+*.tgz
+*.7z
+*.log
+*.pt
+*.pth
+*.ckpt
+*.npz
+*.npy
+*.bin
+*.csv
+*.parquet
 
-# Visualization (exclude from git - keep only core model)
-mae_anomaly/visualization/
-scripts/visualize_all.py
-
-# Ablation experiments (exclude from git)
-scripts/ablation/
-scripts/run_*.py
-scripts/run_*.sh
-scripts/eval_*.py
-scripts/preprocess_*.py
-scripts/prepare_*.py
-scripts/profile_*.py
-scripts/rerun_*.py
-scripts/rerun_*.sh
-scripts/resume_*.sh
-scripts/retrain_*.sh
-scripts/aggregate_*.py
-scripts/patch_*.py
-scripts/validate_*.py
-
-# Comparison framework (exclude from git)
-comparison/
-
-# Documentation (exclude generated artifacts, keep markdown docs)
-docs/ablation/
-docs/report_images/
-ablation_guideline.md
-
-# Temporary files
+# --- Experiment results / raw data / scratch / external refs / paper (NOT in-repo source) ---
+results/
+dataset/
 temp/
 .trash/
 trash/
-
-# Research proposal (separate from codebase)
-ResearchProposal/
-
-# Reference papers
 references/
-
-# Poe config
+ResearchProposal/
+comparison/results/
+docs/report_images/
+paper/
+.claude/
+CLAUDE.md
 .poe/
-
-# Experiment queue configs (generated per-run)
-configs/
-
-# Backup files
-*.bak
-
-# Dataset files (large binary files)
-dataset/
-
-# Marimo
 __marimo__/
+
+# --- Junk / probe files ---
+$LOG
+.q*check*
+.zzz_probe.txt

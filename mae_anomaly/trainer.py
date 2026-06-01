@@ -312,6 +312,10 @@ class Trainer:
             'train_grl_balanced_acc': [],
             'train_grl_anomaly_acc': [],
             'train_grl_normal_acc': [],
+            # |normal_acc - anomaly_acc| degeneracy gap (2026-06-01): balanced_acc=0.5
+            # is deceptive — it coexists with full degeneracy (normal=0, anomaly=1).
+            # gap=0 → balanced; gap→1 → degenerate. Read WITH balanced_acc, not alone.
+            'train_grl_acc_gap': [],
             'train_grl_lambda': [],
             'train_grl_effective_weight': [],  # lambda * grl_loss_weight = actual multiplier
             # SCAD metrics (populated only when use_scad=True) — mirror GRL pattern
@@ -475,6 +479,13 @@ class Trainer:
         _grad_norm_finite_n = 0
         _grad_nonfinite_n = 0
 
+        # [신규 2026-06-01] teacher warmup early-stop 메트릭: train recon_snr 누적기.
+        # per-sample teacher recon을 normal/anomaly로 나눠 epoch 단위 mean·std → SNR 계산.
+        # GPU 0-dim tensor로 누적 후 epoch 끝에서 1회 .item() (배치별 sync 회피). OFF면 미사용.
+        _es_on = getattr(self.config, 'use_teacher_warmup_early_stop', False)
+        _es_sum_n = _es_sumsq_n = _es_cnt_n = 0.0
+        _es_sum_a = _es_sumsq_a = _es_cnt_a = 0.0
+
         iterator = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{self.config.num_epochs}',
                         disable=not self.verbose, leave=False)
 
@@ -538,12 +549,28 @@ class Trainer:
                 # SCAD projection embedding (None if use_scad=False or teacher_only)
                 _scad_z = getattr(self.model, '_scad_z', None)
 
+                # [신규 2026-06-01] EMA teacher 출력(있으면) — student discrepancy 표적으로 전달.
+                # _ema_active가 아니면 model이 None으로 두므로 loss는 기존(live teacher) 동작.
+                _ema_t_out = getattr(self.model, '_ema_teacher_output', None)
                 loss, loss_dict, loss_tensors = self.criterion(
                     teacher_output, student_output, sequences, mask, point_labels, warmup_factor,
                     teacher_only=teacher_only, grl_cls_logits=_grl_logits,
                     teacher_hidden=_t_hidden, student_hidden=_s_hidden,
-                    scad_z=_scad_z
+                    scad_z=_scad_z, ema_teacher_output=_ema_t_out
                 )
+
+            # [신규 2026-06-01] early-stop용 train recon_snr 누적 (GPU 0-dim, no-grad).
+            # warmup(teacher_only) 중에만 누적 — 메트릭은 warmup 동안만 소비되므로 post-warmup 낭비 방지.
+            if _es_on and teacher_only and 'es_teacher_recon_per_sample' in loss_tensors:
+                _r = loss_tensors['es_teacher_recon_per_sample']
+                _isn = loss_tensors['es_is_normal_sample']
+                _isa = loss_tensors['es_has_anomaly_sample']
+                _es_sum_n = _es_sum_n + (_r * _isn).sum()
+                _es_sumsq_n = _es_sumsq_n + (_r * _r * _isn).sum()
+                _es_cnt_n = _es_cnt_n + _isn.sum()
+                _es_sum_a = _es_sum_a + (_r * _isa).sum()
+                _es_sumsq_a = _es_sumsq_a + (_r * _r * _isa).sum()
+                _es_cnt_a = _es_cnt_a + _isa.sum()
 
             if do_profile:
                 torch.cuda.synchronize()
@@ -849,6 +876,12 @@ class Trainer:
                         f"{_gnorm.item():.3e} — optimizer.step skipped"
                     )
 
+            # [신규 2026-06-01] EMA teacher 갱신 (use_teacher_output_ema=False면 내부 no-op).
+            # 매 optimizer step 호출 → warmup 도중부터 누적되어 warmup 종료 시 평탄한 표적 제공.
+            if getattr(self.config, 'use_teacher_output_ema', False):
+                self.model.update_teacher_output_ema(
+                    getattr(self.config, 'teacher_output_ema_momentum', 0.996))
+
             # Track grad health (no extra CUDA work; clip_grad_norm_ already computed norm)
             _g = _gnorm.item()
             if _g == _g and _g != float('inf') and _g != float('-inf'):  # fast finite check
@@ -902,6 +935,22 @@ class Trainer:
 
         for key in epoch_losses.keys():
             epoch_losses[key] /= len(self.train_loader)
+
+        # [신규 2026-06-01] early-stop용 epoch 단위 train recon_snr (division loop 뒤에서
+        # '_' 접두 키로 추가 → 위 평균화에 영향 없음). 공식: (mean_a − mean_n)/(σ_a + σ_n + ε),
+        # TEST recon_SNR(run_ablation.py:616)과 동일한 Cohen's-d 형 분리도를 train data로 계산.
+        if _es_on and torch.is_tensor(_es_cnt_n):
+            _cn = _es_cnt_n.item(); _ca = _es_cnt_a.item()
+            if _cn > 0 and _ca > 0:
+                _mn = _es_sum_n.item() / _cn
+                _ma = _es_sum_a.item() / _ca
+                _vn = max(_es_sumsq_n.item() / _cn - _mn * _mn, 0.0)
+                _va = max(_es_sumsq_a.item() / _ca - _ma * _ma, 0.0)
+                _sn = _vn ** 0.5; _sa = _va ** 0.5
+                epoch_losses['_train_recon_snr'] = (_ma - _mn) / (_sa + _sn + 1e-8)
+            else:
+                # anomaly 또는 normal 표본이 epoch 내 전무 → SNR 미정의. None 표식.
+                epoch_losses['_train_recon_snr'] = None
 
         # Feature-level epoch averages → epoch_losses (for history recording in train())
         if _feature_batch_count > 0 and _feature_accum['recon_mean'] is not None:
@@ -1039,6 +1088,32 @@ class Trainer:
                               history (2026-05-30 score-contribution off-by-one fix).
         """
         teacher_warmup = self.config.teacher_only_warmup_epochs
+
+        # [신규 2026-06-01] === teacher warmup early-stop 상태 (train recon_snr plateau) ===
+        # warmup 중 train recon_snr를 strict-max 추적하다 patience 초과 + min_epochs 도달 시,
+        # best epoch의 model+optimizer+scheduler로 full revert + warmup 동적 종료.
+        # teacher_only_warmup_epochs는 상한(early-stop은 단축만). default OFF면 전 구간 no-op.
+        _es_enabled = getattr(self.config, 'use_teacher_warmup_early_stop', False)
+        _es_patience = int(getattr(self.config, 'teacher_warmup_early_stop_patience', 10))
+        _es_min_epochs = int(getattr(self.config, 'teacher_warmup_early_stop_min_epochs', 50))
+        _es_best_snr = None
+        _es_best_epoch = -1
+        _es_best_snapshot = None
+        _es_triggered = False
+        import copy as _es_copy
+
+        def _es_clone_state(_obj):
+            """state_dict 재귀 deep-clone (tensor는 현재 device 유지; revert 안전)."""
+            if torch.is_tensor(_obj):
+                return _obj.detach().clone()
+            if isinstance(_obj, dict):
+                return {_k: _es_clone_state(_v) for _k, _v in _obj.items()}
+            if isinstance(_obj, list):
+                return [_es_clone_state(_v) for _v in _obj]
+            if isinstance(_obj, tuple):
+                return tuple(_es_clone_state(_v) for _v in _obj)
+            return _es_copy.deepcopy(_obj)
+
         # Epoch offset: deterministic per-cycle permutation (was stateful pool — broke resume).
         # Same set of offsets per cycle as before; the assignment of position-within-cycle to
         # epoch is also deterministic by (cycle_idx, position). Replaced 2026-05-28.
@@ -1137,6 +1212,15 @@ class Trainer:
 
             # First N epochs are warm-up: train teacher only (no discrepancy/student loss)
             teacher_only = (epoch < teacher_warmup)
+            # [신규 2026-06-01] EMA teacher 출력 표적 활성 게이트.
+            #   조건: (1) flag ON  (2) post-warmup(teacher_only=False)  (3) teacher가 계속 학습(freeze=False).
+            #   freeze 시에는 live teacher가 고정이므로 EMA가 무의미 → 비활성(상호배타). 비활성이면
+            #   model.forward가 _ema_teacher_output=None을 두어 loss는 기존 live-teacher 동작 유지.
+            self.model._ema_active = (
+                getattr(self.config, 'use_teacher_output_ema', False)
+                and (not teacher_only)
+                and (not getattr(self.config, 'freeze_teacher_after_warmup', False))
+            )
             # Profile only on epoch 0
             pb = profile_n_batches if epoch == 0 else 0
             epoch_losses = self.train_epoch(epoch, teacher_only=teacher_only, profile_batches=pb)
@@ -1187,6 +1271,11 @@ class Trainer:
                 self.history['train_grl_balanced_acc'].append(epoch_losses['grl_balanced_acc'])
                 self.history['train_grl_anomaly_acc'].append(epoch_losses.get('grl_anomaly_acc', 0.0))
                 self.history['train_grl_normal_acc'].append(epoch_losses.get('grl_normal_acc', 0.0))
+                # Degeneracy gap derived from the same stored (epoch-mean) accuracies →
+                # exactly comparable to balanced_acc, works for every GRL variant without
+                # touching their compute paths. (WGAN/WDGRL path leaves these as scores.)
+                self.history['train_grl_acc_gap'].append(
+                    abs(epoch_losses.get('grl_normal_acc', 0.0) - epoch_losses.get('grl_anomaly_acc', 0.0)))
                 self.history['train_grl_lambda'].append(epoch_losses['grl_lambda'])
                 self.history['train_grl_effective_weight'].append(epoch_losses.get('grl_effective_weight', 0.0))
                 # _grl_lambda is now set BEFORE train_epoch (see above), no post-epoch update needed
@@ -1215,6 +1304,45 @@ class Trainer:
             _grl_l = epoch_losses.get('grl_lambda', 0.0)
             if _grl_l > 0:
                 self._prev_epoch_grl_lambda = _grl_l
+
+            # [신규 2026-06-01] === teacher warmup early-stop: best 추적 + 트리거/revert ===
+            # 위치: history append 후, epoch_callback(아래 GPU eval) 전. revert가 eval/checkpoint
+            # 보다 먼저 일어나야 둘 다 reverted 가중치를 반영(record-consistency 보존).
+            # warmup 중(teacher_only=True)에만 동작. 미트리거 상태에서만 평가.
+            if _es_enabled and not _es_triggered and teacher_only:
+                _snr = epoch_losses.get('_train_recon_snr', None)
+                if _snr is not None:
+                    if _es_best_snr is None or _snr > _es_best_snr:  # strict-max (no min_delta)
+                        _es_best_snr = _snr
+                        _es_best_epoch = epoch
+                        # best epoch 상태 스냅샷 (scheduler.step 이후라 epoch-end 상태와 일치)
+                        _es_best_snapshot = {
+                            'model': _es_clone_state(self.model.state_dict()),
+                            'optim': _es_clone_state(self.optimizer.state_dict()),
+                            'sched': _es_clone_state(self.scheduler.state_dict()),
+                            'epoch': epoch,
+                        }
+                    elif ((epoch - _es_best_epoch) >= _es_patience
+                            and (epoch + 1) >= _es_min_epochs
+                            and _es_best_snapshot is not None):
+                        # === 트리거: best recon_snr epoch으로 full revert ===
+                        # model state_dict는 EMA 모듈(ema_*)도 포함 → best epoch B의 '누적된'
+                        # EMA가 그대로 복원됨(reset 호출 금지: 누적 평활을 버리면 사용자 의도 위배).
+                        self.model.load_state_dict(_es_best_snapshot['model'])
+                        self.optimizer.load_state_dict(_es_best_snapshot['optim'])
+                        self.scheduler.load_state_dict(_es_best_snapshot['sched'])
+                        _new_warmup = epoch + 1
+                        teacher_warmup = _new_warmup                       # local: teacher_only/freeze/anneal
+                        self.config.teacher_only_warmup_epochs = _new_warmup  # config: GRL _student_start/SCAD ramp
+                        self._early_stopped_warmup_end = _new_warmup       # run_base가 checkpoint에 persist
+                        _es_triggered = True
+                        _es_best_snapshot = None                           # GPU 메모리 해제
+                        if self.verbose:
+                            print(f"  [WarmupEarlyStop] ep{epoch+1}: train recon_snr plateau "
+                                  f"(best={_es_best_snr:.4f} @ ep{_es_best_epoch+1}, "
+                                  f"patience={_es_patience}, min_epochs={_es_min_epochs}). "
+                                  f"Full-reverted to best; warmup ends now → "
+                                  f"teacher_only_warmup_epochs={_new_warmup}.")
 
             # Epoch callback (epoch-wise test evaluation + contrib ratio computation)
             # Callback computes contrib ratios from its GPU inference data (no extra inference).

@@ -214,7 +214,13 @@ class Config:
 
     # Inference scoring weight override (-1 = use training weight)
     eval_disc_weight: float = -1.0  # Disc weight at inference (-1 → 1.0)
-    eval_fm_weight: float = -1.0    # FM weight at inference (-1 → fm_loss_weight)
+    eval_fm_weight: float = -1.0    # FM weight at inference (-1 → fm_loss_weight) — UNUSED in score since 2026-06-01
+
+    # 2026-06-01 lambda change: adaptive anomaly score uses teacher recon :
+    # output-discrepancy = score_recon_disc_ratio : 1 (default 4:1), with the
+    # recon-scale correction kept. FM is NOT part of the anomaly score (it stays
+    # a training loss only). See mae_anomaly/scoring.compute_adaptive_components.
+    score_recon_disc_ratio: float = 4.0
 
     # Inference: Complementary Masking
     eval_complementary_masking: bool = False  # Use K-group complementary masking at inference
@@ -260,6 +266,28 @@ class Config:
     weight_decay: float = 1e-3
     warmup_epochs: int = 10
     teacher_only_warmup_epochs: int = -1  # First N epochs train teacher only (-1 = auto: num_epochs // 2)
+
+    # === [신규 2026-06-01] Teacher output EMA ===
+    # student의 output discrepancy 표적을 live teacher 대신 weight-EMA로 평탄화한 teacher 출력으로 교체해
+    # student가 매 epoch 움직이는 teacher를 쫓을 때의 불안정성을 완화. 활성 조건: post-warmup(epoch>warmup)
+    # AND freeze_teacher_after_warmup=False (teacher가 계속 학습되는 경우)에만. 적용 채널: output discrepancy만
+    # (feature matching 제외). EMA 대상 모듈: teacher_decoder + teacher_output_projection (+ teacher_mask_token);
+    # encoder 제외. 추론/anomaly score(scoring.py)·dynamic_margin은 live teacher 사용(EMA는 student 학습 표적 전용).
+    # 기본 False → 271 등 기존 동작 불변.
+    use_teacher_output_ema: bool = False
+    teacher_output_ema_momentum: float = 0.996  # step별 EMA: θ_ema ← m·θ_ema + (1−m)·θ_teacher. 유효 평균창 ≈ 1/(1−m) step.
+
+    # === [신규 2026-06-01] Teacher warmup early-stop (recon_snr 기반 동적 단축) ===
+    # warmup 길이를 고정값이 아니라 teacher의 (학습 데이터 대상) recon_snr plateau에 따라 동적으로 조기 종료.
+    # warmup 중 매 epoch train recon_snr을 추적하여 patience epoch 동안 최고치 갱신이 없으면(strict) 거기서
+    # warmup을 종료하고, model+optimizer를 recon_snr 최고 epoch 시점으로 revert한 뒤 student 학습을 시작한다.
+    # teacher_only_warmup_epochs는 이때 상한(upper bound)으로 작동(plateau가 안 오면 기존처럼 그 값에서 종료).
+    # 기본 False → 기존 고정 warmup 동작 그대로.
+    use_teacher_warmup_early_stop: bool = False
+    teacher_warmup_early_stop_patience: int = 10    # recon_snr 무갱신 epoch 수 → 트리거
+    teacher_warmup_early_stop_min_epochs: int = 50  # 이 epoch 이전엔 트리거 금지(최소 warmup floor)
+    teacher_warmup_early_stop_metric: str = 'recon_snr'  # 판정 기준 metric (학습 데이터 대상 recon_snr)
+
     best_epoch_metric: str = 'pak_auc_f1'  # Metric for best epoch selection
     # - 'pak_auc_f1': PA%K AUC of F1 with per-K threshold re-optimization (best_f1_w_pa, recommended)
     #   Per-K threshold sweep after PA%K segment adjustment (Kim et al., AAAI 2022 tadpak method)

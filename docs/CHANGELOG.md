@@ -1,5 +1,89 @@
 # Changelog
 
+## 2026-06-01: 멀티-세그먼트 데이터셋 `concat` / `simple` 등록 (SMAP·MSL·SMD·Exathlon)
+
+채널/머신/app 으로 나뉜 4개 데이터셋을 일관된 **`<DS>_concat`**(전 세그먼트를 한 스트림으로) /
+**`<DS>_simple_<seg>`**(세그먼트 1개 = 1 데이터셋) 네이밍으로 정리·등록.
+
+- **`SMAP_concat` / `MSL_concat`** — 전 채널 time-concat. 채널별 test safe-cut(front→train / back→test).
+  SMAP=54ch×25feat, MSL=27ch×55feat. (로더는 있었으나 `DATASET_LOADERS` 미등록이라 실행 불가했던 것 등록)
+- **`SMD_concat`** (신규 `load_smd_concat`) — 전 28머신 concat, 머신별 test-cut(orig_train + front50%test → train,
+  back50%test → test). 38feat. (기존 `'smd'`는 원본 split 유지=legacy)
+- **`Exathlon_concat`** (신규 `load_exathlon_concat`) — 전 app concat. app별 `load_exathlon` 결과를 train_ratio로
+  분리 후 `[all_train | all_test]` 재병합. 19feat.
+- **`SMAP_simple_<ch>` / `MSL_simple_<ch>` / `SMD_simple_<machine>` / `Exathlon_simple_app<N>`** — per-segment
+  (test-cut/원-split). SMD/Exathlon run_base `DATASETS` 키도 이 일관 이름으로 변경(`results_subdir` 유지 →
+  집계·기존 결과 dir·`smd_all` 자동 호환).
+
+**경계 차단 검증(채널/머신/app/trace/orig-train·test-front seam + train|test)**: `run_boundaries`가 모든
+세그먼트 불연속을 기록하고, `SlidingWindowDataset._extract_windows`가 윈도우 `[start,end)` 안에 경계 b가
+`start<b<end`면 스킵. train|test 경계는 split을 별도 인스턴스(`signals[:train_end]`/`[train_end:]`)로 분리해
+inherently 차단. 실측: 4 concat × (train+test) **총 ~72,000 윈도우 중 경계 교차 0건** (SMD 27501·MSL 1835·
+SMAP 9864·Exathlon 33247). run_base는 train·test 양쪽 dataset 모두에 `run_boundaries` 전달.
+
+**minmax leakage 없음**: `_minmax_per_feature(signals, train_end)`가 `signals[:train_end]`(train, train_ratio
+경계)에서만 min/max fit 후 전체 적용 — test 부분(평가셋)은 fit 제외. test-front는 설계상 train(chronological
+prefix)이라 누설 아님. z-score 동일.
+
+등록 위치: `mae_anomaly/datasets/loaders.py`(`DATASET_LOADERS` + 동적 루프, `load_smd_concat`/`load_exathlon_concat` 신규),
+`scripts/run_base_experiments.py`(`DATASETS` concat 4 + `SMAP_MSL_SIMPLE_DATASETS` + `SMD_DATASETS`/`EXATHLON_DATASETS` 일관 키).
+
+## 2026-06-01: GRL `balanced_acc=0.5` 기만 — degeneracy gap `grl_acc_gap` 추가
+
+### Problem
+`grl_balanced_acc = (anomaly_acc + normal_acc)/2` 는 **완전 퇴화**(분류기가 모든 패치를
+anomaly 로 → `anomaly_acc=1, normal_acc=0`)에서도 **0.50** 을 내어 "random 정상"으로
+오독된다. exp287_unmask SWaT ep~340+ 에서 실제 발생.
+
+### Fix (live pipeline)
+- **수집(단일 파생점):** `trainer.py` history `train_grl_acc_gap` += `|normal−anomaly|`
+  (이미 저장되는 epoch-mean 정확도에서 파생 — WGAN/WDGRL 계산 경로 미변경).
+  `run_base_experiments.py` `cb_metrics['grl_acc_gap']` 파생 + excl22 복사 목록에 추가.
+- **시각화:** `epoch_grl.png`(plot_epoch_metrics) + `GRL_contribution_trend.png`(C, best_model_visualizer)
+  두 패널에 gap 곡선 + `gap≥0.8` 퇴화 음영. balanced_acc 는 유지(쌍으로 읽어야 degeneracy 판정).
+- **백필:** 9 GRL-active run × 전 cell(45 파일, ~4490 ep) `epoch_metrics.json` 에 grl_acc_gap
+  파생 추가 — 안전게이트(백업→검증→쓰기→재대조), bad=0.
+- **재시각화:** `scripts/reviz_grl_gap.py` — epoch_grl 45/45 + GRL_contribution 45/45, 오류 0.
+
+### 미변경 (의도)
+WGAN/WDGRL 경로(score 기반), 과거 동결 ES 분석 스크립트(`early_stopping_analysis_v*`,
+`build_es_notion_*` — balanced_acc 를 ES 신호로 사용; 기만 위험 post-mortem 에 기록만).
+백업: 코드 `./.trash/0601/grl_gap_code/`, 데이터 `./.trash/0601/grl_gap_backfill/`,
+PNG `./.trash/0601/grl_gap_viz_backup/`. 상세: `docs/POST_MORTEMS/2026-06-01_grl_balanced_acc_deceptive_degeneracy_gap.md`.
+
+## 2026-06-01: SWaT excl22 epoch_metrics `recon_snr` + `fm_loss` always None (copy-list omission)
+
+### Problem (관측됨)
+SWaT/A1A2_excl22 의 `epoch_metrics.json` 에서 `recon_snr` 와 `fm_loss` 가 **100개 eval 전부
+None**. 같은 자리의 `disc_snr` 는 full-SWaT 값이 byte 단위로 그대로 들어 있어, excl22 대상
+recon/fm 분석이 조용히 None 을 읽었다 (6 모델 + 285/286/287 excl22 전부 해당).
+full↔excl22 키셋 전수 비교로 dataset-wide 진단 누락은 이 둘 뿐임을 확인 (나머지 full-only
+키는 excl22_* prefix 중복 / excl22-종속 counts / disturbing detection / 내부 _* viz 배열).
+
+### Root cause (코드 단위)
+excl22 worker (`run_base_experiments.py`, swat_eval_mode='excl22') 는 detection 지표를
+`compute_metrics_with_exclusion` 로 계산하고(SNR 미포함), test-region 무관한 dataset-wide
+진단(`disc_snr`, `d_*`, `grl_*`)만 full-SWaT epoch_metrics 에서 per-eval 복사한다.
+`recon_snr` 은 2026-05-29 신규 추가 필드인데 이 **복사 목록(L1928)에 추가되지 않아** 누락
+→ excl22 epoch_metrics 에 키 자체가 없어 None. (recon_snr 은 disc_snr 과 동일 성격의
+dataset-wide 값 → 복사가 올바른 동작.)
+
+### Fix
+- **[run_base_experiments.py L1928]** excl22 per-epoch 복사 목록 맨 앞에 `recon_snr`, `fm_loss`
+  추가 (`['disc_snr', 'recon_snr', 'fm_loss', 'd_loss', ...]`). `if key in full_epoch_data[ep_num]`
+  가드로 legacy 안전. excl22 epoch_metrics.json 에만 영향 — disc_snr·detection·best-epoch 선정 불변.
+  (`fm_loss` 도 dataset-wide 학습 진단 — 9 run 중 8 run 에서 post-warmup non-zero, max 0.10~0.43.)
+
+### Verification
+- py_compile OK. full-SWaT epoch_metrics 로 복사 로직 재현: recon_snr **100/100**, fm_loss
+  **100/100 복사**(수정 전 0), disc_snr **100/100 무회귀**, mismatch 0. full↔excl22 키셋 전수
+  비교로 copy-class 누락이 recon_snr·fm_loss 둘뿐임 확정. 원본 백업 `./.trash/0601/`.
+
+### Note
+forward-only fix. **이미 완료된 excl22 epoch_metrics 의 None 은 미수정** — 필요 시 대응
+full-SWaT epoch_metrics 의 recon_snr 을 epoch 단위로 복사하는 backfill 로 보정 가능
+(사용자 확인 후). 상세: `docs/POST_MORTEMS/2026-06-01_excl22_recon_snr_copy_omission.md`.
+
 ## 2026-06-01: Pre-warmup recon-only anomaly score (frozen-student disc/FM leak fix)
 
 ### Problem (관측됨)

@@ -1,0 +1,20 @@
+{
+    "experiments": [
+        {
+            "name": "baseline_setC",
+            "set": "C",
+            "config_override": "num_epochs=50"
+        },
+        {
+            "name": "disc_setC",
+            "set": "C",
+            "config_override": "num_epochs=50 use_discriminator=True disc_warmup_epochs=10"
+        },
+        {
+            "name": "baseline_setC_sim_only",
+            "set": "C",
+            "dataset": ["simulation"],
+            "config_override": "num_epochs=10"
+        }
+    ]
+}
