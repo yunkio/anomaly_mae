@@ -66,6 +66,29 @@ from .catch import CATCHBaseline
 # Phase 1: NPSR (point + sequence reconstruction with nominality score)
 from .npsr import NPSRBaseline
 
+# === Weakly-supervised baselines (2026-05-29/30 SSL official-repo porting) ===
+# Q1-only (require train_y); additive + import-isolated (a failure here must NOT
+# break the 22 existing baselines, matching the anomaly_transformer isolation pattern).
+# Official sources verified in Phase 1: WETAS (donalee/WETAS GPL-3.0), TreeMIL
+# (fly-orange/TreeMIL GPL-3.0), NRdetector (UCSC-REAL/NRdetector MIT), DeepMIL
+# (Sultani CVPR'18 — clean-room reimpl of head+loss, official repo unlicensed/non-runnable).
+try:
+    from .wetas import WETASBaseline
+except ImportError:
+    WETASBaseline = None
+try:
+    from .treemil import TreeMILBaseline
+except ImportError:
+    TreeMILBaseline = None
+try:
+    from .nrdetector import NRdetectorBaseline
+except ImportError:
+    NRdetectorBaseline = None
+try:
+    from .deepmil import DeepMILBaseline
+except ImportError:
+    DeepMILBaseline = None
+
 # Evaluator: DEPRECATED — use mae_anomaly.evaluator directly
 # from .evaluator import ...  # Removed: all metric computation now uses mae_anomaly.evaluator
 
@@ -96,4 +119,9 @@ __all__ = [
     'ModernTCNBaseline',
     'CATCHBaseline',
     'NPSRBaseline',
+    # Weakly-supervised (Q1-only)
+    'WETASBaseline',
+    'TreeMILBaseline',
+    'NRdetectorBaseline',
+    'DeepMILBaseline',
 ]

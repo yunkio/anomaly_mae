@@ -12,6 +12,7 @@ Contains:
 - Model factory (create_model with per-experiment hyperparameters)
 """
 
+import os
 import sys
 import json
 import time
@@ -34,10 +35,8 @@ from mae_anomaly.evaluator import (
     compute_pa_k_auc,
     find_swat_largest_region,
     compute_metrics_with_exclusion,
-    # Single-source metric pipeline (2026-05-27): any metric added to MAE
-    # auto-flows to comparison baselines through these imports — no duplication.
-    compute_full_metric_set,
-    _zero_metric_set,
+    compute_extra_metrics,
+    compute_ar_threshold_metric_set,
     EXTRA_METRIC_KEYS,
 )
 from sklearn.metrics import (
@@ -142,6 +141,36 @@ try:
 except ImportError:
     HAS_NPSR = False
 
+# --- 2026-05-29/30 weakly-supervised batch (4 models, Q1-only, additive) ---
+# Import-isolated: a failure here leaves the 22 unsupervised baselines unaffected.
+try:
+    from comparison.baselines import WETASBaseline
+    HAS_WETAS = WETASBaseline is not None
+except ImportError:
+    WETASBaseline = None
+    HAS_WETAS = False
+
+try:
+    from comparison.baselines import TreeMILBaseline
+    HAS_TREEMIL = TreeMILBaseline is not None
+except ImportError:
+    TreeMILBaseline = None
+    HAS_TREEMIL = False
+
+try:
+    from comparison.baselines import NRdetectorBaseline
+    HAS_NRDETECTOR = NRdetectorBaseline is not None
+except ImportError:
+    NRdetectorBaseline = None
+    HAS_NRDETECTOR = False
+
+try:
+    from comparison.baselines import DeepMILBaseline
+    HAS_DEEPMIL = DeepMILBaseline is not None
+except ImportError:
+    DeepMILBaseline = None
+    HAS_DEEPMIL = False
+
 
 # ============================================================
 # Constants
@@ -182,6 +211,25 @@ SOTA_AVAILABILITY = {
     'catch': HAS_CATCH,
     'npsr': HAS_NPSR,
 }
+
+# ============================================================
+# Weakly-supervised models (2026-05-29/30 SSL porting) — ADDITIVE / ISOLATED.
+# These consume train_y (weak window/bag labels) and run via the dedicated
+# `run_weak_sota_baseline_with_epoch_eval` path. They are NOT in BASELINE_MODELS /
+# SOTA_MODELS, so the 22 existing baselines and their execution paths are untouched.
+# Q1-only: each wrapper raises RuntimeError under normal-only (Q3) — see model wrappers.
+# ============================================================
+WEAK_SUPERVISED_MODELS = ['wetas', 'treemil', 'nrdetector', 'nrdetector_full', 'deepmil']
+
+WEAK_SUPERVISED_AVAILABILITY = {
+    'wetas': HAS_WETAS,
+    'treemil': HAS_TREEMIL,
+    'nrdetector': HAS_NRDETECTOR,
+    'nrdetector_full': HAS_NRDETECTOR,  # noisy_rate=1.0 ablation variant (same wrapper)
+    'deepmil': HAS_DEEPMIL,
+}
+# Expose weak-model availability through the same dict the runner already consults.
+SOTA_AVAILABILITY.update(WEAK_SUPERVISED_AVAILABILITY)
 
 # MAE-only metric keys that baselines set to null
 _MAE_ONLY_KEYS = [
@@ -270,6 +318,68 @@ def _get_default_model_params():
             'nf_layers': 20, 'std_epsilon': 1e-4,
             'beta': 1.0, 'n_mc_samples': 1, 'l2_reg': 1e-4,
             'train_stride': 1, 'epochs': 10, 'batch_size': 50,
+        },
+        # === Weakly-supervised batch (2026-05-29/30 SSL porting) — Q1-only ===
+        # Values are official-config-sourced (see phase2_implementation/models/<M>/07_*).
+        # WETAS — donalee/WETAS@cb149dc train_classifier.py:218-242 (epochs upstream=200; pipeline may
+        #   override via --sota-epochs). split_size=window; output_size MUST equal hidden_size (fc quirk).
+        'wetas': {
+            'hidden_size': 128, 'output_size': 128, 'kernel_size': 2, 'n_layers': 7,
+            'pooling_type': 'avg', 'local_threshold': 0.3, 'granularity': 4,
+            'beta': 0.1, 'gamma': 0.1, 'split_size': 500,
+            'batch_size': 32, 'lr': 1e-4, 'epochs': 200, 'train_stride': 500,
+        },
+        # TreeMIL — fly-orange/TreeMIL@16f166c train.py argparse (BCE-only active loss; DTW dropped as dead code).
+        'treemil': {
+            'split_size': 500, 'epochs': 200, 'batch_size': 32, 'lr': 1e-4,
+            'ary_size': 2, 'inner_size': 3, 'd_model': 128, 'd_k': 128, 'd_v': 128,
+            'd_inner_hid': 32, 'n_head': 5, 'n_layer': 2, 'dropout': 0.5,
+            'agg_type': 'max', 'pooling_type': 'max', 'train_stride': 1,
+        },
+        # NRdetector — UCSC-REAL/NRdetector@bd5592b main.py/solver.py (PU; HOC+softDTW dropped).
+        #   win_size=100 kept (NOT pipeline 500).
+        #   prior=None → estimated dynamically from train wlabel rate (PU class prior = intrinsic
+        #     anomaly ratio; dataset-dependent → must be estimated, NOT a fixed constant).
+        #   noisy_rate=0.4 = experimenter-imposed REVEAL fraction (keep first 40% of positive
+        #     segments as labeled-P, demote rest to unlabeled; selector.py:31-39). NOT a dataset
+        #     property → kept as a fixed parameter (estimation would be a category error).
+        #   normalization: original = per-split z-score StandardScaler (paper §5.2 "following Xu 2021";
+        #     data_loader.py:50-53). Applied inside the wrapper on raw data (run_baseline SELF_NORMALIZING_WEAK).
+        #   encoder_epochs/encoder_lr = IMPL-INVENTED (official loads pretrained .pth, no training recipe).
+        'nrdetector': {
+            'win_size': 100, 'noisy_rate': 0.4, 'prior': None,
+            'hidden_size': 64, 'output_size': 64, 'kernel_size': 2, 'n_layers': 7, 'd_model': 64,
+            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 200, 'encoder_epochs': 50,
+            'encoder_lr': 1e-3,  # IMPL-INVENTED (parameterized 2026-05-30; no official recipe)
+            'lr': 1e-5, 'knn_k': 5, 'seed': 0, 'train_stride': 1,
+        },
+        # NRdetector full-reveal ablation variant (2026-05-31). Same wrapper, same preset
+        # EXCEPT noisy_rate=1.0 — all positive train segments kept as labeled-P (no demotion to
+        # unlabeled). Negative samples remain unlabeled (PU learning invariant). Produces a
+        # separate output directory (model_name='nrdetector_full') so results don't collide
+        # with the paper-default noisy_rate=0.4 run.
+        'nrdetector_full': {
+            'win_size': 100, 'noisy_rate': 1.0, 'prior': None,
+            'hidden_size': 64, 'output_size': 64, 'kernel_size': 2, 'n_layers': 7, 'd_model': 64,
+            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 200, 'encoder_epochs': 50,
+            'encoder_lr': 1e-3,
+            'lr': 1e-5, 'knn_k': 5, 'seed': 0, 'train_stride': 1,
+        },
+        # DeepMIL — Sultani CVPR'18 MIL ranking head+loss (code-sourced, FAITHFUL) on the
+        #   WETAS DiCNN encoder (DERIVATIVE_CITED, WETAS ICCV'21 p.7360 "DeepMIL ... = DiCNN").
+        #   optimizer = Adam lr=1e-4 (WETAS train_classifier.py:234, the encoder's OWN optimizer):
+        #   Sultani's Adagrad lr=0.01 (frozen-C3D shallow head) DIVERGES with the deep trainable
+        #   DiCNN encoder (logits→-200/-440, score collapse). head/loss stay Sultani; only the
+        #   optimizer follows the encoder source. (60 bags/batch = 30 pos + 30 neg.)
+        #   normalization = per-recording StandardScaler (WETAS-lineage; wrapper applies on raw).
+        #   n_segments vestigial (config back-compat; dense per-timestep MIL, not 32-seg).
+        'deepmil': {
+            'n_segments': 32, 'dropout': 0.6, 'ranking_margin': 1.0,
+            'lambda_smooth': 8e-5, 'lambda_sparse': 8e-5, 'l2_reg': 0.001,
+            'optimizer': 'adam', 'lr': 1e-4,  # WETAS-sourced (Adagrad 0.01 diverges w/ deep DiCNN)
+            'bags_per_batch': 60, 'seq_len': 128, 'encoder_dim': 128,
+            'test_stride': 1, 'aggregation': 'mean', 'epochs': 10,
+            'iters_per_epoch': 50, 'train_stride': 1,
         },
         # === 2026-05-19 batch (10 SOTA additions) ===
         # Phase 1: TFMAE — MAE-direct competitor (ICDE 2024)
@@ -378,7 +488,7 @@ def _get_default_model_params():
             'mlr_ratio': 0.1,                     # Mlr = lr × 0.1 (paper Mlr=1e-5 vs lr=1e-4)
             'pct_start': 0.3,                     # OneCycleLR pct_start (paper default)
             'lr': 1e-4,
-            'train_stride': 1, 'epochs': 10, 'batch_size': 128,
+            'train_stride': 1, 'epochs': 3, 'batch_size': 128,
         },
         # NPSR — Nominality Score Conditioned Anomaly Detection (NeurIPS 2023)
         # Paper-faithful preset (clean reimpl, 2026-05-24):
@@ -450,16 +560,73 @@ def compute_all_metrics(
     if eval_mask is None:
         eval_mask = np.ones(len(point_labels), dtype=bool)
 
-    # Single source of truth: MAE evaluator's compute_full_metric_set.
-    # Any metric added to MAE auto-flows here (no duplication needed).
-    # Returns ~146 keys: base + per-K PA%K + PA%K AUC + VUS/Aff/RF1 + AR variants.
-    raw = compute_full_metric_set(point_scores, point_labels, anomaly_regions, eval_mask)
+    # Zero results template
+    results = _zero_metrics()
 
-    # Filter out _per_k_* diagnostic arrays (not used by baseline plots).
-    results = {k: v for k, v in raw.items() if not k.startswith('_')}
+    # Check for degenerate cases
+    if len(np.unique(point_labels[eval_mask])) <= 1:
+        return results
 
-    # MAE-only keys (teacher_*, disc_snr, disturbing_*, n_*) — baselines have no
-    # source for these — explicit null.
+    # Base metrics: ROC-AUC, PRC-AUC
+    masked_scores = point_scores[eval_mask]
+    masked_labels = point_labels[eval_mask]
+
+    results['roc_auc'] = float(roc_auc_score(masked_labels, masked_scores))
+    results['prc_auc'] = float(average_precision_score(masked_labels, masked_scores))
+
+    # Optimal threshold via ROC curve
+    fpr, tpr, thresholds = roc_curve(masked_labels, masked_scores)
+    optimal_idx = find_f1_optimal_idx(fpr, tpr, masked_labels)
+    threshold = float(thresholds[optimal_idx])
+    results['optimal_threshold'] = threshold
+
+    # Point-level precision/recall/F1 at optimal threshold
+    predictions = (masked_scores > threshold).astype(int)
+    results['precision'] = float(precision_score(masked_labels, predictions, zero_division=0))
+    results['recall'] = float(recall_score(masked_labels, predictions, zero_division=0))
+    results['f1_score'] = float(sklearn_f1_score(masked_labels, predictions, zero_division=0))
+
+    # F1_T (time-series F1)
+    f1_t, prec_t, rec_t = compute_f1_t_at_threshold(point_labels, point_scores, threshold)
+    results['f1_t'] = float(f1_t)
+    results['precision_t'] = float(prec_t)
+    results['recall_t'] = float(rec_t)
+
+    # PA%K metrics per K value
+    for k in PA_K_VALUES:
+        pa_metrics = compute_pa_k_metrics_from_mean_scores(
+            point_scores, point_labels, anomaly_regions, threshold, k, eval_mask
+        )
+        results[f'pa_{k}_f1'] = float(pa_metrics['f1'])
+        results[f'pa_{k}_precision'] = float(pa_metrics['precision'])
+        results[f'pa_{k}_recall'] = float(pa_metrics['recall'])
+
+        pa_roc_prc = compute_pa_k_roc_prc_from_mean_scores(
+            point_scores, point_labels, anomaly_regions, k, eval_mask
+        )
+        results[f'pa_{k}_roc_auc'] = float(pa_roc_prc['roc_auc'])
+        results[f'pa_{k}_prc_auc'] = float(pa_roc_prc['prc_auc'])
+
+    # PAK_AUC integrated
+    pak_auc = compute_pa_k_auc(
+        point_scores, point_labels, anomaly_regions, threshold, eval_mask
+    )
+    # Filter out _per_k_* arrays (evaluator exposes these as lists for bulk-recompute
+    # scripts; they're not scalar metrics and should not be float()-converted here).
+    results.update({k: float(v) for k, v in pak_auc.items() if not k.startswith('_')})
+
+    # Extra metrics (vus_roc/vus_pr/affiliation_f1/r_based_f1) at F1-optimal threshold.
+    # Operates on masked arrays so eval region is respected.
+    results.update(compute_extra_metrics(masked_scores, masked_labels, threshold))
+
+    # AR-threshold variants (prevalence-threshold; suffix _ar).
+    results.update(compute_ar_threshold_metric_set(masked_scores, masked_labels))
+
+    # Convenience aliases matching exp-monitor SKILL.md column names.
+    results['aff_f1'] = float(results.get('affiliation_f1', 0.0))
+    results['r_f1']   = float(results.get('r_based_f1', 0.0))
+
+    # MAE-only keys: null
     for key in _MAE_ONLY_KEYS:
         results[key] = None
 
@@ -484,16 +651,38 @@ def compute_all_metrics_with_excl(
 
 
 def _zero_metrics() -> dict:
-    """Return zero-initialized metrics dict matching MAE format.
+    """Return zero-initialized metrics dict matching MAE format."""
+    results = {
+        'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
+        'f1_score': 0.0, 'optimal_threshold': 0.0,
+        'f1_t': 0.0, 'precision_t': 0.0, 'recall_t': 0.0,
+    }
+    for k in PA_K_VALUES:
+        results[f'pa_{k}_f1'] = 0.0
+        results[f'pa_{k}_precision'] = 0.0
+        results[f'pa_{k}_recall'] = 0.0
+        results[f'pa_{k}_roc_auc'] = 0.0
+        results[f'pa_{k}_prc_auc'] = 0.0
 
-    Delegates to MAE evaluator's _zero_metric_set() — any new metric added to MAE
-    auto-appears here (e.g., VUS-PR/ROC, Affiliation-F1, R-based F1, AR variants
-    added 2026-05-27).
-    """
-    results = dict(_zero_metric_set())
-    # MAE-only keys (teacher_*, disc_snr, disturbing_*, n_*) — baselines have no source.
+    # Zero-fill extra metrics (vus/aff/r-based + AR variants) — same keys EXTRA_METRIC_KEYS.
+    for k in EXTRA_METRIC_KEYS:
+        results[k] = 0.0
+    # Aliases matching SKILL.md column names.
+    results['aff_f1'] = 0.0
+    results['r_f1']   = 0.0
+
+    pak_auc_keys = [
+        'pak_auc_prc_auc', 'pak_auc_roc_auc', 'pak_auc_f1',
+        'pak_auc_f1_t', 'pak_auc_precision', 'pak_auc_recall',
+        'pak_auc_f1_raw', 'pak_auc_f1_t_raw',
+        'pak_auc_precision_raw', 'pak_auc_recall_raw',
+    ]
+    for k in pak_auc_keys:
+        results[k] = 0.0
+
     for key in _MAE_ONLY_KEYS:
         results[key] = None
+
     return results
 
 
@@ -519,9 +708,21 @@ def save_epoch_scores_npz(epoch_scores_dir: Path, epoch: int, scores: np.ndarray
 
 
 def save_epoch_metrics(output_dir: Path, epoch_metrics_list: list, eval_interval: int = 1):
-    """Save epoch_metrics.json in MAE format."""
-    with open(output_dir / 'epoch_metrics.json', 'w') as f:
+    """Save epoch_metrics.json in MAE format (atomic write).
+
+    Atomicity matters because the resume path (2026-05-31) now calls this
+    function after EVERY epoch (was: once at end-of-fit). A `kill -9` mid-write
+    on the old `open('w')` truncated path would leave a zero-byte or partial
+    json that breaks the resume reconciliation. Mirror the same write-tmp +
+    os.replace pattern as ``_checkpoint.atomic_save`` to make the swap
+    POSIX-atomic.
+    """
+    target = output_dir / 'epoch_metrics.json'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix('.json.tmp')
+    with open(tmp, 'w') as f:
         json.dump({'eval_interval': eval_interval, 'epochs': epoch_metrics_list}, f, indent=2)
+    os.replace(tmp, target)
 
 
 def save_metadata(output_dir: Path, model_name: str, experiment_name: str,
@@ -1069,6 +1270,225 @@ def run_sota_baseline_with_epoch_eval(
     return final_metrics
 
 
+def run_weak_sota_baseline_with_epoch_eval(
+    model,
+    train_X: np.ndarray,
+    train_y: np.ndarray,
+    test_X: np.ndarray,
+    test_y: np.ndarray,
+    anomaly_regions: list,
+    model_name: str,
+    output_dir: Path,
+    experiment_name: str,
+    excl_region=None,
+    eval_interval: int = 1,
+    max_eval_workers: int = 10,
+    train_segments=None,
+    resume: bool = False,
+) -> dict:
+    """Weakly-supervised SOTA execution path (2026-05-29/30 SSL porting).
+
+    Byte-for-byte identical to ``run_sota_baseline_with_epoch_eval`` EXCEPT it
+    forwards ``train_y`` (point labels for the train split, from
+    ``loader.get_train_data()[1]``) into ``model.fit(..., train_y=train_y)``.
+    The wrapper derives its own weak window/bag labels (``max(train_y over
+    window)``) internally — leak-free, train-split-only.
+
+    Kept as a SEPARATE function so the 22 unsupervised baselines' SOTA path
+    (``run_sota_baseline_with_epoch_eval``) is NOT modified. Per-epoch eval,
+    best-epoch-by-``pak_auc_f1`` selection, ``scores.npz`` (= best epoch),
+    ``epoch_metrics.json``, ``metadata.json`` and viz all reuse the SAME logic
+    and the SAME (frozen) metric layer as every other model — so results are
+    directly comparable. Q1-only: the wrapper raises RuntimeError under Q3.
+    """
+    import json
+    import shutil
+    import torch
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    epoch_scores_dir = output_dir / 'epoch_scores'
+    epoch_scores_dir.mkdir(parents=True, exist_ok=True)
+    # Checkpoint directory (resume infrastructure, 2026-05-31). Wrappers write
+    # ``last.pt`` here at the end of every visible epoch; we mirror it to
+    # ``best.pt`` whenever pak_auc_f1 improves. Pre-create unconditionally so
+    # the directory exists for the first save without an extra mkdir round-trip.
+    ckpt_dir = output_dir / 'checkpoints'
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n{'='*60}")
+    print(f"Running {model_name} (WEAK-SUPERVISED with epoch eval)")
+    print(f"{'='*60}")
+    print(f"  Device: {getattr(model, 'device', 'cpu')}")
+    print(f"  Train shape: {train_X.shape}  (train_y anomaly ratio: {float(np.mean(train_y)) if train_y is not None and len(train_y) else 0.0:.4%})")
+    print(f"  Test shape: {test_X.shape}")
+    print(f"  Epochs: {getattr(model, 'epochs', '?')}")
+    print(f"  Eval interval: {eval_interval}")
+    print(f"  Resume: {resume}")
+
+    # --- Resume bookkeeping ---------------------------------------------------
+    # We need to (a) seed `epoch_metrics_list` with all previously-saved epochs
+    # so the appended json stays a continuous 1..target range, and (b) re-derive
+    # `best_pak_f1` from those entries so the in-loop "is this a new best?"
+    # check is correct on resume. The wrapper handles model/optimizer/RNG
+    # restore via set_resume()/_maybe_resume(); this block only handles the
+    # eval-side state that lives outside the wrapper.
+    epoch_metrics_list: list = []
+    best_pak_f1 = 0.0
+    resume_start_epoch = 0
+    metrics_file = output_dir / 'epoch_metrics.json'
+    last_ckpt = ckpt_dir / 'last.pt'
+    if resume and metrics_file.exists():
+        try:
+            with open(metrics_file, 'r') as f:
+                existing = json.load(f)
+            epoch_metrics_list = list(existing.get('epochs', []))
+            # Reconcile json ↔ last.pt: if json is AHEAD of last.pt (json had
+            # ep K logged but the wrapper crashed before saving last.pt for
+            # ep K), drop the ghost entries so the appended training starts
+            # from the SAME epoch the wrapper resumes from — otherwise the
+            # final json would have a "double ep K" or skipped epoch. If json
+            # is BEHIND last.pt (json save was killed mid-write before this
+            # commit added atomic write; or older runs), warn explicitly so
+            # the user knows ep N→last.pt's epoch are forever missing.
+            ck_epoch = 0
+            if last_ckpt.exists():
+                try:
+                    import torch as _torch
+                    ck_epoch = int(_torch.load(last_ckpt, map_location='cpu').get('epoch', 0))
+                except Exception as _ck_e:
+                    print(f"  [RESUME] could not read last.pt for reconciliation: {_ck_e}")
+            json_max_epoch = max(((e.get('epoch') or 0) for e in epoch_metrics_list), default=0)
+            if ck_epoch and json_max_epoch > ck_epoch:
+                # JSON has phantom entries beyond ck_epoch → drop them.
+                dropped = [e for e in epoch_metrics_list if (e.get('epoch') or 0) > ck_epoch]
+                epoch_metrics_list = [e for e in epoch_metrics_list if (e.get('epoch') or 0) <= ck_epoch]
+                print(f"  [RESUME] dropped {len(dropped)} ghost epoch entries beyond last.pt epoch={ck_epoch}")
+            elif ck_epoch and json_max_epoch < ck_epoch:
+                # last.pt has trained past json's last entry → ep (json_max+1)..ck_epoch
+                # have NO metrics saved. They cannot be recovered (eval would
+                # need predictions from those specific snapshots) — warn loudly.
+                missing = list(range(json_max_epoch + 1, ck_epoch + 1))
+                print(f"  [RESUME] WARNING: epochs {missing[0]}..{missing[-1]} have no eval metrics "
+                      f"in json (likely a pre-atomic-write crash). These epochs will be missing "
+                      f"from the final epoch_metrics.json. Training continues from ep {ck_epoch + 1}.")
+            if epoch_metrics_list:
+                best_pak_f1 = max(
+                    (e.get('pak_auc_f1', 0) or 0) for e in epoch_metrics_list
+                )
+                resume_start_epoch = max(
+                    (e.get('epoch', 0) or 0) for e in epoch_metrics_list
+                )
+                print(f"  [RESUME] loaded {len(epoch_metrics_list)} prior epochs from {metrics_file.name}; "
+                      f"best_pak_f1={best_pak_f1:.4f} at epoch≤{resume_start_epoch}")
+        except Exception as e:
+            print(f"  [RESUME] could not parse {metrics_file}: {e} — treating as fresh run")
+            epoch_metrics_list = []
+            best_pak_f1 = 0.0
+            resume_start_epoch = 0
+    # Hand the wrapper the resume + per-epoch save hooks. ``set_resume`` is a
+    # no-op when ``resume=False`` (we still need to call ``set_checkpoint_dir``
+    # so the wrapper writes last.pt going forward).
+    if resume:
+        if last_ckpt.exists() and hasattr(model, 'set_resume'):
+            model.set_resume(last_ckpt)
+    if hasattr(model, 'set_checkpoint_dir'):
+        model.set_checkpoint_dir(ckpt_dir)
+
+    def epoch_callback(model_instance, ep):
+        """Called by model.fit() after each epoch. Synchronous eval (same as SOTA path)."""
+        nonlocal best_pak_f1
+        should_eval = (ep % eval_interval == 0) or (ep == model_instance.epochs)
+        if not should_eval:
+            return
+        scores = model_instance.predict(test_X)
+        try:
+            eval_start = time.time()
+            ep_metrics = compute_all_metrics(scores, test_y, anomaly_regions)
+            ep_metrics['_eval_time'] = time.time() - eval_start
+            ep_metrics['epoch'] = ep
+            if excl_region is not None:
+                excl = compute_all_metrics_with_excl(scores, test_y, anomaly_regions, excl_region)
+                ep_metrics.update(excl)
+            save_epoch_scores_npz(epoch_scores_dir, ep, scores)
+            epoch_metrics_list.append(ep_metrics)
+            # Persist epoch_metrics.json incrementally so an interrupted run
+            # is resumable from THIS epoch (otherwise the last 50 ep of data
+            # would be lost on crash because of the end-of-fit() one-shot save).
+            save_epoch_metrics(output_dir, epoch_metrics_list, eval_interval=eval_interval)
+            pak_f1 = ep_metrics.get('pak_auc_f1', 0)
+            prc = ep_metrics.get('prc_auc', 0)
+            best_marker = ""
+            if pak_f1 > best_pak_f1:
+                best_pak_f1 = pak_f1
+                best_marker = " ★"
+                # Mirror this epoch's wrapper-saved last.pt → best.pt. The
+                # wrapper writes last.pt BEFORE epoch_callback (see each
+                # wrapper's fit() loop) so the file is guaranteed to be on
+                # disk with the just-finished epoch's state.
+                last_ckpt = ckpt_dir / 'last.pt'
+                if last_ckpt.exists():
+                    try:
+                        shutil.copy2(last_ckpt, ckpt_dir / 'best.pt')
+                    except Exception as cp_e:
+                        print(f"  [WARN] best.pt copy failed: {cp_e}")
+            print(f"\n  [Epoch {ep:>2}] PRC={prc:.4f} PAK_F1={pak_f1:.4f} "
+                  f"(eval={ep_metrics.get('_eval_time', 0):.1f}s){best_marker}")
+        except Exception as e:
+            print(f"\n  [Epoch {ep}] EVAL ERROR: {e}")
+
+    # ---- Train with callback — ONLY behavioral delta vs SOTA path: forward train_y ----
+    start_time = time.time()
+    if train_segments is not None:
+        model.fit(train_X, train_y=train_y, epoch_callback=epoch_callback, train_segments=train_segments)
+    else:
+        model.fit(train_X, train_y=train_y, epoch_callback=epoch_callback)
+    train_time = time.time() - start_time
+
+    print(f"\n  Training complete: {train_time:.1f}s")
+
+    # Final scores = BEST epoch (by pak_auc_f1) — identical to SOTA path.
+    if epoch_metrics_list:
+        best_idx = max(
+            range(len(epoch_metrics_list)),
+            key=lambda i: epoch_metrics_list[i].get('pak_auc_f1', 0) or 0,
+        )
+        final_metrics = epoch_metrics_list[best_idx]
+        best_ep_num = final_metrics.get('epoch', best_idx + 1)
+        best_scores_file = output_dir / 'epoch_scores' / f'epoch_{best_ep_num:03d}_scores.npz'
+        if best_scores_file.exists():
+            final_scores = np.load(best_scores_file)['anomaly_score']
+        else:
+            final_scores = model.predict(test_X)
+    else:
+        final_scores = model.predict(test_X)
+        final_metrics = compute_all_metrics(final_scores, test_y, anomaly_regions)
+        final_metrics['epoch'] = getattr(model, 'epochs', 1)
+        if excl_region is not None:
+            excl = compute_all_metrics_with_excl(final_scores, test_y, anomaly_regions, excl_region)
+            final_metrics.update(excl)
+        epoch_metrics_list = [final_metrics]
+
+    final_metrics['_inference_time'] = 0
+
+    save_scores_npz(output_dir, final_scores)
+    save_epoch_metrics(output_dir, epoch_metrics_list, eval_interval=eval_interval)
+    save_metadata(output_dir, model_name, experiment_name, train_time,
+                  final_metrics.get('_inference_time', 0))
+
+    if hasattr(model, 'save'):
+        try:
+            model.save(output_dir / "model")
+        except Exception as e:
+            print(f"  Warning: Could not save model: {e}")
+
+    _print_metrics(final_metrics, excl_region is not None)
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return final_metrics
+
+
 # ============================================================
 # Segment-Aware Training (normalonly variant)
 # ============================================================
@@ -1430,6 +1850,38 @@ def create_model(
             params['epochs'] = sota_epochs
         params['verbose'] = True
         return NPSRBaseline(**params)
+
+    # === Weakly-supervised models (Q1-only) — instantiated like SOTA; train_y is
+    # supplied later via run_weak_sota_baseline_with_epoch_eval. n_features is
+    # re-derived from train_X inside each wrapper's fit(), so it is not passed here. ===
+    elif model_name == 'wetas':
+        if not HAS_WETAS:
+            raise ValueError("WETASBaseline not available")
+        if sota_epochs is not None:
+            params['epochs'] = sota_epochs
+        params['verbose'] = True
+        return WETASBaseline(**params)
+    elif model_name == 'treemil':
+        if not HAS_TREEMIL:
+            raise ValueError("TreeMILBaseline not available")
+        if sota_epochs is not None:
+            params['epochs'] = sota_epochs
+        params['verbose'] = True
+        return TreeMILBaseline(**params)
+    elif model_name in ('nrdetector', 'nrdetector_full'):
+        if not HAS_NRDETECTOR:
+            raise ValueError("NRdetectorBaseline not available")
+        if sota_epochs is not None:
+            params['epochs'] = sota_epochs
+        params['verbose'] = True
+        return NRdetectorBaseline(**params)
+    elif model_name == 'deepmil':
+        if not HAS_DEEPMIL:
+            raise ValueError("DeepMILBaseline not available")
+        if sota_epochs is not None:
+            params['epochs'] = sota_epochs
+        params['verbose'] = True
+        return DeepMILBaseline(**params)
 
     else:
         raise ValueError(f"Unknown model: {model_name}")

@@ -193,6 +193,11 @@ class BaselineExperimentRunner:
         # Other
         if self.config.get('force'):
             cmd += ['--force']
+        # Resume forwarding (2026-06-01) — injected by main() when --resume is
+        # passed to the queue runner. Per-entry override via "resume": true in
+        # the queue json is also honored.
+        if self.config.get('resume'):
+            cmd += ['--resume']
         if 'nn_subsample' in self.config:
             cmd += ['--nn-subsample', str(self.config['nn_subsample'])]
 
@@ -529,6 +534,11 @@ Examples:
                         help='Show commands without executing')
     parser.add_argument('--monitor', action='store_true',
                         help='Resource monitor mode (no experiments)')
+    parser.add_argument('--resume', action='store_true',
+                        help=('Forward --resume to every subprocess call of run_baseline.py. '
+                              'Only weak SSL models (deepmil/wetas/treemil/nrdetector/'
+                              'nrdetector_full) honor it; others SKIP with an explicit '
+                              '"resume not applicable" message. See GUIDE_SSL.md §4.4.'))
 
     args = parser.parse_args()
 
@@ -553,13 +563,18 @@ Examples:
         print("Error: no experiments in queue file")
         return
 
-    # Validate experiments
+    # Validate experiments + inject global flags into per-entry config
     for i, exp in enumerate(experiments):
         if 'experiment' not in exp:
             print(f"Error: experiment {i} missing 'experiment' field: {exp}")
             return
         if 'name' not in exp:
             exp['name'] = f"{exp['experiment']}_{i}"
+        # Global --resume applies to every entry. Each entry's wrapper will
+        # detect last.pt independently; non-SSL entries print "resume not
+        # applicable" and skip cleanly (see run_baseline.py auto-skip path).
+        if args.resume:
+            exp['resume'] = True
 
     # Determine output base
     if args.output_base:

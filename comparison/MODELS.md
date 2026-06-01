@@ -36,7 +36,7 @@
 
 Sources: [QuoVadisTAD](https://arxiv.org/abs/2405.02678) (ICML 2024 Position Paper, 9 baselines — covers all simple/neural-simple + GCN-LSTM), **6 standalone legacy SOTA papers** (2018-2022), and **7 active new SOTA papers (2023-2025)** integrated 2026-05-19: TFMAE (ICDE'24), NPSR (NeurIPS'23), TimesNet (ICLR'23), DCdetector (KDD'23), MEMTO (NeurIPS'23), ModernTCN (ICLR'24 Spot), CATCH (ICLR'25). GCN-LSTM is grouped under **SOTA** in this guide because it uses an internal training loop with per-epoch callback (same execution interface as the other SOTA models), even though QuoVadisTAD provides its configuration.
 
-Datasets covered (7): Simulation, SWaT A1+A2, WaDi A1, WaDi A2, SMD (28 machines), PSM, Exathlon (6 apps {1,2,4,5,6,9}). All 22 active models are evaluated on each dataset under Q1 (minmax full) and Q3 (minmax normalonly) conditions.
+Datasets covered (9): Simulation, SWaT A1+A2, WaDi A1, WaDi A2, SMD (28 machines), PSM, Exathlon (6 apps {1,2,4,5,6,9}), SMAP (54 channels), MSL (27 channels). (SMAP/MSL = NASA Telemanom, Hundman et al. KDD 2018, 2026-05-26 통합; Pattern A whole + Pattern B per-channel — `docs/DATASET.md` 참조.) All 22 active models are evaluated on each dataset under Q1 (minmax full) and Q3 (minmax normalonly) conditions.
 
 ---
 
@@ -742,9 +742,9 @@ Input: (win_size × n_features)
 
 ## Reference-only Models (코드는 유지, 실험 queue에서 제외)
 
-다음 3개 모델은 모델 코드와 wrapper, `MODEL_PRESETS` 진입점, `create_model()` 분기까지 모두 유지되어 있다. **실험 queue (`BASELINE_MODELS` / `NEW_SOTA_MODELS`)에서만 제외되어** 표준 파이프라인은 자동으로 학습을 건너뛴다. 직접 import해서 호출하는 것은 그대로 가능.
+> **2026-05-30 정정 (final audit rework)**: 이 섹션은 더 이상 유효하지 않다. 과거 2026-05-19 batch의 reference-only 후보 3개 모델은 **2026-05-26에 코드/wrapper/디렉토리까지 완전히 제거**되었으며 (`comparison/baselines/` 에 해당 dir 없음), 활성 모델은 `BASELINE_MODELS` (22개) 가 단일 source of truth이다. 이전 본문이 참조하던 `NEW_SOTA_MODELS` 심볼은 현재 코드에 **존재하지 않는다**. (제거 사유: 단일 (dataset, model) 작업당 3-37시간 소요로 39 데이터셋 pipeline에 비현실적인 timing outlier.)
 
-공통 제외 사유: 단일 (dataset, model) 작업당 3-37시간 소요로 39 데이터셋 pipeline에 비현실적인 timing outlier.
+원본(stale) 기술: ~~다음 3개 모델은 모델 코드와 wrapper, `MODEL_PRESETS` 진입점, `create_model()` 분기까지 모두 유지되어 실험 queue에서만 제외~~ — 위 정정으로 대체됨.
 
 ---
 
@@ -905,3 +905,103 @@ from .new_model import NewModelBaseline
 
 9. **MLPMixer:** Tolstikhin et al., "MLP-Mixer: An all-MLP Architecture for Vision", NeurIPS 2021
     - Paper: https://arxiv.org/abs/2105.01601
+
+---
+
+## Weakly Supervised Baselines (2026-05-30 통합 — Q1-only, GPU 미실행)
+
+기존 22개와 달리 학습 시 `train_y` 사용. 약 label = `max(train_y over window)` (train split 한정, leak-free). 전용 실행 경로 `run_weak_sota_baseline_with_epoch_eval`. **Q1-only (Q3 = N/A — `train_y` 전부 0 → positive bag 없음 → `RuntimeError`).** 상태 = **구현 완료 · CPU dry-test 통과 · GPU 미실행** (결과표 weak 행 수치 0개). 독립 리뷰 verdict 병기. 상세 work-log: `temp/ssl_official_baseline_porting_0529/`.
+
+**Normalization fidelity (2026-05-30 핵심 수정):** 4종 모두 이전엔 pipeline **global MinMax** 를 받아 원논문과 불일치(fidelity 결함)했으나, 현재 `run_baseline.py` `SELF_NORMALIZING_WEAK={wetas, treemil, nrdetector, deepmil}` 등록으로 **raw 데이터 수신 + 원논문 normalization 자체 적용**: WETAS/TreeMIL/DeepMIL = per-recording/per-file StandardScaler(z-score), NRdetector = per-split z-score StandardScaler. predict 측은 test segment 경계 미수신 contract 라 transductive whole-test 로 대체(leakage 없음, residual = granularity). 모델별 상세는 각 §의 **Normalization** 항목.
+
+**Provenance gate (G1–G5):** 본 4종은 `GUIDE.md §7.1` 의 baseline 포팅 재발방지 gate (G1 출처 라벨+source locus / G2 NON_OFFICIAL ≥5-round source-chain / G3 in-project sibling cross-check / G4 provenance≠comparability / G5 vendored VCS 가시성) 를 적용. 각 §의 **Provenance** 항목에 라벨 기록 — DeepMIL encoder(DERIVATIVE_CITED, G3 WETAS DiCNN 재사용)·NRdetector encoder schedule(NON_OFFICIAL/IMPL-INVENTED)이 대표 사례.
+
+### 23. DeepMIL (CVPR 2018) — clean-room 재구현
+
+**File:** `baselines/deepmil/{model.py, wrapper.py}`
+
+**Paper:** Sultani, Chen, Shah, "Real-World Anomaly Detection in Surveillance Videos", CVPR 2018, pp. 6479–6488 (doi:10.1109/CVPR.2018.00678, [arXiv:1801.04264](https://arxiv.org/abs/1801.04264)).
+
+**Reference (중요, two-part provenance):**
+- **head+loss = FAITHFUL (clean-room):** 공식 repo [WaqasSultani/AnomalyDetectionCVPR2018](https://github.com/WaqasSultani/AnomalyDetectionCVPR2018) 은 **무 LICENSE · legacy Keras 1.1.0/Theano · video/C3D · 실행 불가**. vendoring 불가 → MIL ranking head+loss 를 paper 로부터 clean-room 재구현 (DAGMM §13-style reference substitution; 공식 repo 코드 미복사, ekosman MIT PyTorch port 는 교차검증용으로만 참조).
+- **encoder = DERIVATIVE_CITED (NOT OFFICIAL):** Sultani 원논문은 frozen C3D fc6 4096-d feature 를 소비하는 **video** 방법이라 학습형 TS encoder 가 없다. DeepMIL-on-TS encoder 의 canonical 정의는 후속 WS-TSAD 논문 **WETAS (Lee et al., ICCV'21, CVF p.7360)** 의 verbatim 문장: *"DeepMIL employs the same model architecture with WETAS (i.e., DiCNN)"* + *"DeepMIL-4,8,16"*. 따라서 in-project vendored **WETAS `DilatedCNN`** (`comparison/baselines/wetas/model.py`) 을 encoder 로 재사용 (input=n_features, hidden=output=128, kernel=2, n_layers=7 → RF=2^7=128). **OFFICIAL Sultani encoder 아님** (공식 video 방법엔 TS encoder 부재). 이전 bespoke `TSSegmentEncoder` 은퇴.
+
+**Normalization:** per-recording StandardScaler (z-score, WETAS-lineage; `timeseries.py`). wrapper 가 raw 데이터에 자체 적용 (`run_baseline.py` `SELF_NORMALIZING_WEAK`) — 이전 global-minmax 결함 수정. train = train recording fit/transform, predict = transductive whole-test (test segment 경계 미수신 contract 제약).
+
+**Architecture:** encoder = WETAS DiCNN (위 DERIVATIVE_CITED, dense per-timestep feature map `(B,L,128)`) + MIL ranking head `D→512(ReLU,Dropout0.6)→32(Dropout0.6)→1(Sigmoid)`, xavier init, L2=0.001 (FAITHFUL). bag = window.
+
+**Loss:** ranking hinge (margin 1.0) on max-over-timesteps(+bag vs −bag) + smoothness(λ=8e-5) + sparsity(λ=8e-5), positive bag 대상 (FAITHFUL; max 가 segment→timestep 로 dense 화된 것 외 불변).
+
+**Configuration:** **optimizer = Adam lr=1e-4 (WETAS `train_classifier.py:234` 출처)** — Sultani 의 Adagrad lr=0.01 은 frozen-C3D shallow head 전용이라 deep DiCNN encoder 와 joint 학습 시 발산(logits→-200/-440, score collapse)하므로 encoder 출처 optimizer 사용 (preset `optimizer='adam'`/`lr=1e-4`; head/loss 는 Sultani 유지, optimizer 만 encoder 출처). 60 bags/batch (30 pos + 30 neg), seq_len(bag window)=128, encoder_dim=128, dropout=0.6, epochs=10, iters_per_epoch=50. `n_segments=32` 은 config 호환용 **vestigial** (dense per-timestep MIL — 32-seg 변형 미구현).
+
+**Score (dense per-timestep, NON_OFFICIAL disclosed):** encoder dense feature → head 를 매 timestep 에 적용 → per-timestep sigmoid `(B,L)` → overlap mean aggregate → `(N_test,)` raw. (원 DeepMIL 의 32 video segment scoring 은 streaming TS 에 official counterpart 가 없어 dense 로 대체; NON_OFFICIAL disclosed.)
+
+**Provenance (G1–G5, `GUIDE.md §7.1`):** encoder=DERIVATIVE_CITED (G3 sibling 재사용), head+loss=FAITHFUL, optimizer=encoder-sourced (G1, "design choice" 아님), dense scoring=NON_OFFICIAL (G1 disclosed).
+
+**Phase 4 verdict:** head/loss/optimizer VERIFIED_SAME; encoder = literature-sanctioned DiCNN (DERIVATIVE_CITED, NEEDS_REVIEW → ACCEPT). F-1 LOW: paired vs all-pairs hinge (동일 objective).
+
+### 24. WETAS (ICCV 2021) — 공식 vendoring
+
+**File:** `baselines/wetas/{model.py, softdtw_cuda.py, wrapper.py}`
+
+**Paper:** Lee, Yu, Ju, Yu, "Weakly Supervised Temporal Anomaly Segmentation With Dynamic Time Warping", ICCV 2021, pp. 7335–7344 (IEEE pagination; CVF 7355–7364) (doi:10.1109/ICCV48922.2021.00726, [arXiv:2108.06816](https://arxiv.org/abs/2108.06816)).
+
+**Reference:** [donalee/WETAS](https://github.com/donalee/WETAS) (GPL-3.0; bundled soft-DTW MIT), commit `cb149dc`. `model.py`+`softdtw_cuda.py` verbatim vendoring (device-agnostic 편집만, license header 보존). numba 0.61.2 기존 설치 → install 불요.
+
+**Normalization:** per-recording StandardScaler (z-score), `timeseries.py:35-40` (`_preprocess` 가 recording 파일마다 fresh `StandardScaler().fit_transform`). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전 pipeline global-minmax 결함 수정. train = `train_segments` 별 fit/transform, predict = transductive whole-test (test 경계 미수신 contract 제약, residual = granularity 뿐).
+
+**Architecture:** WaveNet-style dilated-CNN (n_layers=7, gated residual) + 공유 `fc(128,1)` head (weak pool head + dense per-timestep head).
+
+**Loss:** `BCE(wscore, wlabel) + dtw_loss` (soft-DTW triplet hinge, beta=0.1, gamma=0.1), Adam lr=1e-4, batch_size=32, split_size=500.
+
+**Score:** continuous dense `dscore` (binary `dpred` 아님) → non-overlap split flatten, front zero-pad drop → `(N_test,)`.
+
+**Phase 4 verdict:** CLEAN (architecture byte-identical except device edits; 17/17 HP 일치).
+
+### 25. TreeMIL (ICASSP 2024) — 공식 active core vendoring
+
+**File:** `baselines/treemil/{model.py, wrapper.py}`
+
+**Paper:** Liu, He, Liu, Li, "TreeMIL: A Multi-instance Learning Framework for Time Series Anomaly Detection with Inexact Supervision", ICASSP 2024, pp. 7510–7514 (doi:10.1109/ICASSP48485.2024.10447536, [arXiv:2401.11235](https://arxiv.org/abs/2401.11235)).
+
+**Reference:** [fly-orange/TreeMIL](https://github.com/fly-orange/TreeMIL) (GPL-3.0), commit `16f166c`. N-ary-tree transformer core + window-BCE (`last_loss`) vendoring. **soft-DTW/alignment 은 학습 gradient 경로에 없는 dead code → 제외** (Phase 4 증명: `train.py:143` backward = BCE만). torch-only.
+
+**Normalization (2026-05-30 — 이전 silent, deviation 명시):** 원논문 = per-file StandardScaler (z-score), `timeseries.py:53-55` (`_preprocess` 가 input 파일마다 전체 `(T,D)` 에 fit 후 train/valid/test slice 에 transductive 적용). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전엔 pipeline global-minmax 를 받아 원논문과 불일치했고 이 deviation 이 문서에 기록되지 않았음(silent). 현재 train = `train_segments` 별 per-file z-score (windowing 前), predict = transductive whole-test (test 경계 미수신 contract 제약, residual = granularity 뿐).
+
+**Architecture:** Conv embedding+positional → multi-scale tree nodes(=MIL instances) → masked MHA (parent/child/neighbor/self) → 공유 `Linear(d_model,1)+sigmoid`. window-score = max-pool, dense-score = gather-ancestors.
+
+**Configuration:** split_size=500, ary_size=2, d_model=128, n_head=5, n_layer=2, lr=1e-4, batch_size=32, epochs=200. effective ctor 값 사용 (오해의 argparse default 아님).
+
+**Score:** dense `dscore (B, split_size)` → contiguous non-overlap window, **tail-pad** + truncate to N_test (공식 left-pad 미복제 — misalignment 방지).
+
+**Phase 4 verdict:** CLEAN.
+
+### 26. NRdetector (KDD 2025) — 공식 vendoring + fidelity 수정
+
+**File:** `baselines/nrdetector/{model.py, wrapper.py}`
+
+**Paper:** Wang et al., "Noise-Resilient Point-wise Anomaly Detection in Time Series Using Weak Segment Labels", KDD 2025 (doi:10.1145/3690624.3709257, [arXiv:2501.11959](https://arxiv.org/abs/2501.11959)).
+
+**Reference:** [UCSC-REAL/NRdetector](https://github.com/UCSC-REAL/NRdetector) (MIT, Yang Liu lab), commit `bd5592b`. encoder + PU-LP selector + PU classifier vendoring. CLI `Solver` → in-memory `fit/predict` adapter. **HOC(이진화기)·soft-DTW(공식 encoder 학습 코드 부재) 제외.**
+
+**Normalization:** per-split z-score StandardScaler, `data_loader.py:50-55` (paper §5.2 "following Xu 2021"; `_preprocess` 가 split 마다 fresh `StandardScaler` fit/transform). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전 global-minmax 결함 수정. fit() 이 raw train 에 fit 후 scaler 저장, predict() 가 저장된 scaler 의미로 test z-score (train→test leakage 없음).
+
+**Architecture:** 2-stage PU — DilatedCNN encoder → PU-LP kNN-graph selector (`noisy_rate=0.4`) → PU classifier (`LabelDistributionLoss` + `constraint_loss`).
+
+**Configuration:** win_size=100, hidden=64, output=64, classifier_hidden=128, lr=1e-5, batch_size=32, epochs=200. **encoder_epochs=50 / encoder_lr=1e-3 (2026-05-30 파라미터화)**. 분류 구분:
+- **fixed-param:** win_size, hidden, classifier_hidden, lr, batch_size, epochs, knn_k=5, seed=0.
+- **runtime-estimated:** `prior=None` → 런타임 동적 추정 (train wlabel rate, clip [0.05,0.5]). 데이터셋마다 anomaly ratio 가 다른 PU class prior 는 **intrinsic 속성이라 추정이 맞음** (공식 고정 0.25/0.31 우회는 의도적). 사용된 prior 는 로깅됨.
+- **fixed knob (추정 대상 아님):** `noisy_rate=0.4` = experimenter-imposed **reveal fraction** — 양성 train segment 중 첫 40%만 labeled-P 로 공개, 나머지는 unlabeled 로 demote (`selector.py:31-39`). dataset 속성이 아닌 실험 knob 이라 고정.
+- **IMPL-INVENTED (confound):** `encoder_epochs=50` / `encoder_lr=1e-3`. 공식엔 encoder **학습 recipe 가 없음** — pretrained `.pth` 를 로드만 한다:
+  > `modules/extractor.py:65` — `model.load_state_dict(torch.load(".../"+dataset+"_model_4.pth"))`
+
+  관련 paper §4.2.1 verbatim:
+  > *"we utilize the basic architecture of dilated CNN (DiCNN) ... put it into the WETAS framework. Note that the extractor here can be replaced with another temporal feature extractor."*
+
+  우리는 해당 `.pth` 미보유라 from-scratch 로 BCE-only 학습(`bce(wscore, wlabel)`, `extractor.py:127`; soft-DTW 는 install ban 으로 제외). 따라서 출처 없는 50/1e-3 는 feature-quality 에 영향을 줄 수 있는 **confound 로 문서화** (NON_OFFICIAL). 완전 일치는 공식 pretrained weight 필요(미가용 가능성).
+
+**Score:** per-window min-max **actmap** of raw `fc(out)` × classifier seg prob (continuous) → non-overlap flatten, leading-pad drop → `(N_test,)`.
+
+**Provenance (G1–G5, `GUIDE.md §7.1`):** encoder schedule = NON_OFFICIAL/IMPL-INVENTED (G1 confound 문서화 + G2 source-chain: official `.pth`-load 확인). `prior` = runtime-estimated (intrinsic). `noisy_rate` = fixed experiment knob.
+
+**Phase 4 verdict:** FIXED → VERIFIED_SAME. 수정 3건: MM1(HIGH) 공식 `calc_lp` 포팅 → PU classifier가 RP=labeled-P / RN=label-propagation `lp_n` 로 학습; MM3 directed adjacency for W; MM4 per-window min-max actmap base score (+ raw-h features). 문서화된 제약: encoder BCE-only, `prior` 동적 추정, `encoder_epochs`/`encoder_lr` IMPL-INVENTED.

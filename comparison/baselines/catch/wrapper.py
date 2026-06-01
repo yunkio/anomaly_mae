@@ -21,6 +21,7 @@ Interface: comparison.baseline_common.run_sota_baseline_with_epoch_eval()
 """
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -31,6 +32,14 @@ import torch
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset, Subset
+
+# Batch-progress logging: stdout goes through conda-run buffer (invisible until
+# subprocess exits). Mirror every [BATCH] line to a file so live monitoring
+# (tail -f) sees per-batch heartbeats. Path overridable via env var.
+_BATCH_LOG_PATH = os.environ.get(
+    'CATCH_BATCH_LOG',
+    '/home/ykio/notebooks/claude/temp/baseline_experiment_run/catch_batch_progress.log',
+)
 
 from comparison.segment_utils import compute_segment_safe_window_indices
 from tqdm import tqdm
@@ -286,6 +295,15 @@ class CATCHBaseline:
             step_for_M = max(1, min(int(len(loader) / 10), 100))
 
             n_batches_total = len(loader)
+            _epoch_start = time.time()
+            _ep_msg = (f"[EPOCH_BEGIN] model={self.name} epoch={epoch + 1}/{self.epochs} "
+                       f"n_batches={n_batches_total} batch_size={self.batch_size}")
+            print(_ep_msg, flush=True)
+            try:
+                with open(_BATCH_LOG_PATH, 'a') as _bl:
+                    _bl.write(_ep_msg + '\n')
+            except Exception:
+                pass
             for i, batch in enumerate(iterator):
                 batch_start = time.time()
                 input_x = batch.float().to(self.device)
@@ -308,7 +326,15 @@ class CATCHBaseline:
 
                 epoch_loss_sum += loss.item()
                 n_batches += 1
-                print(f"[BATCH] model={self.name} epoch={epoch + 1}/{self.epochs} batch={i + 1}/{n_batches_total} time={time.time() - batch_start:.3f}s", flush=True)
+                _msg = (f"[BATCH] model={self.name} epoch={epoch + 1}/{self.epochs} "
+                        f"batch={i + 1}/{n_batches_total} loss={loss.item():.4f} "
+                        f"time={time.time() - batch_start:.3f}s")
+                print(_msg, flush=True)
+                try:
+                    with open(_BATCH_LOG_PATH, 'a') as _bl:
+                        _bl.write(_msg + '\n')
+                except Exception:
+                    pass
 
             # End-of-epoch LR halving (upstream adjust_learning_rate('type1')).
             # Upstream call: adjust_learning_rate(optimizer, scheduler, epoch + 1, config)
@@ -318,6 +344,14 @@ class CATCHBaseline:
 
             avg_loss = epoch_loss_sum / max(n_batches, 1)
             self.train_loss_history.append(avg_loss)
+            _ep_end_msg = (f"[EPOCH_END] model={self.name} epoch={epoch + 1}/{self.epochs} "
+                           f"avg_loss={avg_loss:.6f} elapsed={time.time() - _epoch_start:.1f}s")
+            print(_ep_end_msg, flush=True)
+            try:
+                with open(_BATCH_LOG_PATH, 'a') as _bl:
+                    _bl.write(_ep_end_msg + '\n')
+            except Exception:
+                pass
             if self.verbose:
                 print(f"  Epoch {epoch + 1}: loss = {avg_loss:.6f}")
             if epoch_callback is not None:

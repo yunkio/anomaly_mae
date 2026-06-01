@@ -33,6 +33,15 @@ STANDARD_BASELINES = [
 # Simulation: same 15-baseline set as STANDARD_BASELINES
 SIMULATION_BASELINES = STANDARD_BASELINES
 
+# Weakly-supervised baselines (2026-05-29/30 SSL official-repo porting) — Q1-ONLY.
+# Deliberately NOT added to STANDARD_BASELINES: those run under BOTH Q1 (full) and
+# Q3 (normalonly), but weak-supervised models require labeled anomalies and are N/A
+# under Q3 (their wrappers raise RuntimeError on all-zero train_y). Run these on Q1
+# experiments via `--model <name>` (or a Q1-only model list); the runner dispatches
+# them through `run_weak_sota_baseline_with_epoch_eval` (forwards train_y). Keeping
+# this as a separate list leaves every existing EXPERIMENT_CONFIGS entry untouched.
+WEAK_SUPERVISED_BASELINES = ['wetas', 'treemil', 'nrdetector', 'deepmil']
+
 
 # ============================================================
 # Experiment Configurations (base: WaDi×4 + SWaT×2 + simulation×2 + PSM×2 = 10)

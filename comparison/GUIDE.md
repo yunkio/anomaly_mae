@@ -96,9 +96,9 @@ comparison/
 4. **디렉토리 구조 MAE 동일** — `SWaT/A1A2_full`, `WaDi/A1` 등 MAE experiment #40+ 구조 일치
 5. **excl22 자동 후처리** — SWaT 실험 완료 후 `A1A2_excl22/` 자동 생성
 
-## 3. 데이터셋 (7개; Notion: "6 Datasets"는 Simulation 제외 카운트)
+## 3. 데이터셋 (9개; Notion: "6 Datasets"는 Simulation 제외 카운트)
 
-MAE experiment #40+과 동일한 데이터셋 + SMD/PSM/Exathlon:
+MAE experiment #40+과 동일한 데이터셋 + SMD/PSM/Exathlon + SMAP/MSL (NASA Telemanom, 2026-05-26 통합). 상세 출처/통계는 `docs/DATASET.md` 참조.
 
 | Dataset | Loader | Features | Dir | Q 적용 | 비고 |
 |---------|--------|----------|-----|--------|------|
@@ -109,6 +109,8 @@ MAE experiment #40+과 동일한 데이터셋 + SMD/PSM/Exathlon:
 | SMD (28 machines) | `load_smd_simple(machine=...)` | 32-38 | `SMD/{machine}` | Q1, Q3 | 28 머신, simple split (50/50) |
 | PSM | `load_psm()` | 25 | `PSM` | Q1, Q3 | eBay server metrics, 단일 stream, simple split |
 | **Exathlon (6 apps)** | `load_exathlon(app=N)` | **19** (FScustom) | `Exathlon/app{N}` | Q1, Q3 | Spark 분산처리, apps {1,2,4,5,6,9}, per-app disturbed-split |
+| **SMAP (54 ch)** | `load_smap()` (Pattern A) / `load_smap_simple(channel=...)` (Pattern B) | 25 | `SMAP` (Pattern A) / `SMAP/{ch}` (Pattern B) | Q1, Q3 | NASA Telemanom (Hundman et al. KDD 2018). Pattern A=cross-channel concat+단일 minmax fit+run_boundaries, Pattern B=per-channel 독립 fit (54 채널 mean 보고) |
+| **MSL (27 ch)** | `load_msl()` (Pattern A) / `load_msl_simple(channel=...)` (Pattern B) | 55 | `MSL` (Pattern A) / `MSL/{ch}` (Pattern B) | Q1, Q3 | NASA Telemanom. Pattern A/B 동일 처리 (27 채널 mean 보고) |
 
 > **Q2/Q4 (zscore) 큐는 더 이상 실행하지 않음.** 본 가이드는 minmax 기반 Q1 (full) + Q3 (normalonly) 두 큐만 다룬다. 과거의 Q2/Q4 결과 디렉토리는 `comparison/results/experiments/`에 남아 있지만 신규 실험에는 사용되지 않으며, `configs/baseline_queue_zscore*.json` 파일은 삭제됨.
 
@@ -179,7 +181,7 @@ Apache Spark 스트리밍 작업의 anomaly detection 벤치마크 (Jacob et al.
 `--normalize-mode` CLI 옵션으로 정규화 방식 선택:
 - `minmax` (현재 base queue 표준): Min-max scaling (train-only fit, **NO clip — paper-faithful sklearn `MinMaxScaler` 기본 동작**, 2026-05-25 정책 변경). test 값이 train min/max 밖이면 [0, 1] 범위 초과 가능 (SensorRange paper algorithm 작동을 위해 필요).
 - `zscore` (코드 default, 현재 미사용): Z-score standardization (train-only fit). 큐 JSON에서 `normalize_mode: "minmax"`를 명시하여 base queue는 항상 minmax를 사용. `zscore` 옵션은 CLI에서는 여전히 작동하지만, 신규 비교 실험에서는 사용하지 않음.
-- **2026-05-25 정책 변경**: 이전에는 `np.clip(0, 1)` 강제 적용. 현재 driver `_minmax_per_feature(clip=True/False)` 옵션 도입, `UnifiedLoader` 는 `clip=False` 호출. `mae_anomaly` 파이프라인은 default `clip=True` 유지 (호환성). 영향 모델: 모든 baseline (Simple 5 + Neural 3 + non-self_norm SOTA 7). self_norm SOTA 7개 (anomaly_transformer/dcdetector/memto/moderntcn/timesnet/tfmae/catch/npsr) 는 raw data path 사용하므로 무관.
+- **2026-05-25 정책 변경**: 이전에는 `np.clip(0, 1)` 강제 적용. 현재 driver `_minmax_per_feature(clip=True/False)` 옵션 도입, `UnifiedLoader` 는 `clip=False` 호출. `mae_anomaly` 파이프라인은 default `clip=True` 유지 (호환성). 영향 모델: 모든 baseline (Simple 5 + Neural 3 + non-self_norm SOTA 7). self_norm SOTA 8개 (anomaly_transformer/dcdetector/memto/moderntcn/timesnet/tfmae/catch/npsr) 는 raw data path 사용하므로 무관.
 
 ### NormalOnly Variant
 
@@ -214,7 +216,7 @@ python comparison/run_baseline.py --experiment psm --model all --output-base {ex
 
 # 모델 카테고리 필터
 python comparison/run_baseline.py --experiment simulation --model all --only-simple    # Simple 5만
-python comparison/run_baseline.py --experiment simulation --model all --skip-sota      # SOTA 8 제외
+python comparison/run_baseline.py --experiment simulation --model all --skip-sota      # SOTA 14 제외
 
 # Epoch override
 python comparison/run_baseline.py --experiment simulation --model all --neural-epochs 5
@@ -232,7 +234,7 @@ python comparison/run_baseline.py --experiment simulation --model usad --sota-ep
 - `--at-epochs N`: anomaly_transformer epoch override (default: 10)
 - `--eval-interval N`: epoch eval 간격 (default: 1)
 - `--only-simple`: Simple 5개만 실행
-- `--skip-sota`: SOTA 8개 제외
+- `--skip-sota`: SOTA 14개 제외
 - `--force`: 기존 결과 덮어쓰기
 - `--list`: 현재 결과 status 표만 출력
 
@@ -350,7 +352,7 @@ python comparison/run_baseline.py --experiment psm --model all --normalize-mode 
 | `eval_interval` | int | - | DL 모델 epoch eval 간격 |
 | `force` | bool | - | 기존 결과 덮어쓰기 |
 
-## 7. 모델 분류 (활성 22개; 2026-05-19 신규 7개 SOTA 통합)
+## 7. 모델 분류 (Q1+Q3 공용 unsupervised 22개 + Weakly-supervised 4개 = 26개; 2026-05-19 신규 7개 SOTA, 2026-05-30 weak 4개 통합)
 
 | 분류 | 개수 | 모델 | 특징 |
 |------|------|------|------|
@@ -358,6 +360,9 @@ python comparison/run_baseline.py --experiment psm --model all --normalize-mode 
 | **Neural** | 3 | `mlp`, `mlpmixer`, `transformer` | 외부 training loop, per-epoch eval, **10 epoch 통일** (2026-05-22 변경 — 이전 20 epoch 정책 폐기) |
 | **SOTA (legacy)** | 7 | `gcn_lstm`, `anomaly_transformer`, `tranad`, `usad`, `dagmm`, `gdn`, `omnianomaly` | 내부 training loop + epoch_callback, 10 epoch (default) |
 | **SOTA (new, 2026-05-19)** | 7 | `tfmae` (ICDE'24), `timesnet` (ICLR'23), `dcdetector` (KDD'23), `memto` (NeurIPS'23), `moderntcn` (ICLR'24 Spot), `catch` (ICLR'25), `npsr` (NeurIPS'23) | 내부 training loop + epoch_callback, 10 epoch. 각 모델별 distinct objective — `MODELS.md` 16-22번 참조. |
+| **Weakly Supervised (4)** | 4 | `deepmil` (CVPR'18), `wetas` (ICCV'21), `treemil` (ICASSP'24), `nrdetector` (KDD'25) | **Q1-only** (Q3 = N/A — `train_y` 전부 0 → positive bag 없음 → `RuntimeError`). 학습 시 약 label(`max(train_y over window)`) 사용. **원논문 normalization 자체 적용** (per-recording / per-split StandardScaler) — 위 22개의 pipeline `--normalize-mode` 와 별개. 별도 `WEAK_SUPERVISED_BASELINES` 리스트로 관리. §20 + `MODELS.md` 23-26번 참조. |
+
+> **활성 개수 주석:** "활성 22개" = `STANDARD_BASELINES` (Simple 5 + Neural 3 + SOTA 14; Q1·Q3 공용). Weakly-supervised 4개는 Q1-only · 원논문 normalization · 별도 dispatch 라 22개에 포함하지 않고 **추가(additive) 4개**로 별도 관리 → 코드상 전체 26개 entry. §20 의 fidelity·provenance 기록과 §7.1 provenance gate (G1–G5) 참조.
 
 **주의 (신규 7개 활성 모델):**
 - `npsr`은 `performer-pytorch` 의존 (2026-05-22 `--no-deps` 설치 완료, torch 2.4.1.post302 무변동). 미설치 환경에서는 `nn.MultiheadAttention` 자동 fallback.
@@ -375,7 +380,21 @@ python comparison/run_baseline.py --experiment psm --model all --normalize-mode 
 - `random` 모델: `seed=42` 명시 (deterministic)
 - Neural/SOTA: 명시적 `torch.manual_seed` / `np.random.seed` 호출 **없음** → 다중 실행 간 미세한 결과 변동 가능. Reproduction 시 동일 결과 보장하려면 코드 추가 필요.
 
-`experiment_configs.py:STANDARD_BASELINES`가 단일 source of truth (활성 22개 리스트, 2026-05-19 batch 신규 7개 SOTA 포함).
+`experiment_configs.py:STANDARD_BASELINES`가 단일 source of truth (활성 22개 리스트, 2026-05-19 batch 신규 7개 SOTA 포함). Weakly-supervised 4개는 `experiment_configs.py:WEAK_SUPERVISED_BASELINES` 가 별도 source of truth.
+
+### 7.1 Provenance gate (G1–G5) — baseline 포팅 재발방지 프로세스
+
+2026-05-30 weak baseline rework 의 root-cause 분석 (`temp/.../17_PROVENANCE_FAILURE_ROOT_CAUSE.md`) 에서 도출된, **모든 ported/vendored baseline 에 적용되는 project-wide provenance 규율**. 신규 baseline 추가·기존 baseline 수정 시 아래 G1–G5 를 통과해야 한다. (각 모델의 적용 결과는 `MODELS.md` §23–26 의 provenance 라벨로 기록.)
+
+| gate | 규칙 | 비고 |
+|------|------|------|
+| **G1** | 모든 ported 컴포넌트(encoder/head/loss/normalization/scoring/HP)에 출처 라벨 `{FAITHFUL \| DERIVATIVE_CITED \| NON_OFFICIAL}` + **source locus** (파일:라인 또는 paper 위치) 부착. **"design choice" escape 금지** — 출처 없는 선택은 NON_OFFICIAL 로 명시. |
+| **G2** | `NON_OFFICIAL` 컴포넌트는 **≥5-round recursive source-chain** 검토 (원논문 → 후속 인용 논문 → in-project sibling 순으로 canonical 출처 추적) 후 결정. |
+| **G3** | bespoke 코드 작성 전 **in-project sibling cross-check** (`grep`) — 동일 컴포넌트가 이미 vendored 되어 있으면 재사용 (예: DeepMIL encoder = `wetas/model.py:DilatedCNN` 재사용). |
+| **G4** | **provenance ≠ comparability** routing 분리 — 출처 결함(missing-source defect)을 comparability confound 로 잘못 분류하지 말 것 (root-cause PROV-RC-4). |
+| **G5** | vendored baseline 은 **VCS 가시성** 확보 (commit hash + license header 보존; `.gitignore` 로 숨기지 말 것). |
+
+> **적용 예 (DeepMIL):** encoder = WETAS DiCNN (G3 sibling 재사용 + G1 DERIVATIVE_CITED, source = WETAS p.7360); head+loss = Sultani FAITHFUL (G1, clean-room); optimizer = Adam lr=1e-4 (G1, source = encoder 출처 WETAS `train_classifier.py:234`, "design choice" 아님); dense scoring = NON_OFFICIAL (G1, disclosed). `nrdetector` `encoder_epochs`/`encoder_lr` = IMPL-INVENTED (G1 NON_OFFICIAL + confound 문서화).
 
 ## 8. 결과 형식
 
@@ -705,7 +724,7 @@ comparison/results/
 
 ## 16. Notion 대조 참조
 
-비교 실험의 결과 표·분석은 Notion 페이지 [Baseline Comparison](https://www.notion.so/Baseline-Comparison-16-Models-6-Datasets-4-Conditions-32087856b2078112b500c81664181ee7)에 유지. **2026-05-22 페이지 rewrite 완료** — 기존 페이지가 단일 거대 테이블로 망가져 있어, 24 모델 × 39 dataset × Q1/Q3 구조로 8-section rewrite 적용. 백업은 `.trash/0522/notion/baseline_comparison_page_pre_rewrite_57k.txt`.
+비교 실험의 결과 표·분석은 Notion 페이지 [Baseline Comparison](https://www.notion.so/Baseline-Comparison-16-Models-6-Datasets-4-Conditions-32087856b2078112b500c81664181ee7)에 유지. **2026-05-22 페이지 rewrite 완료** — 기존 페이지가 단일 거대 테이블로 망가져 있어, 22 모델 × 39 dataset × Q1/Q3 구조로 8-section rewrite 적용 (현 활성 22 + Weakly-Supervised 4 별도). 백업은 `.trash/0522/notion/baseline_comparison_page_pre_rewrite_57k.txt`.
 
 본 GUIDE.md와 Notion 페이지의 일관성 규칙 (2026-05-22 업데이트):
 
@@ -713,7 +732,7 @@ comparison/results/
 - **Datasets**: Notion 제목의 "6 Datasets"는 Simulation 제외 카운트. 실제 base 실험은 **Simulation 포함 7개** (Simulation + SWaT + WaDi A1/A2 + SMD + PSM + Exathlon) — 총 39 dataset run/condition.
 - **Conditions**: Notion 제목의 "4 Conditions"는 historical 4-Q 표기지만, **현 active 실험은 Q1 + Q3 두 조건만** (minmax × full / normalonly). Q2/Q4 (zscore) 는 폐기. **실행 순서는 Q3 → Q1** (2026-05-22 사용자 지시).
 - **신규 10개 페이지 rewrite 필요 항목**:
-  - 모델 분류 sub-table (Simple 5 / Neural 3 / Legacy SOTA 7 / New SOTA 10) — 4개 분리
+  - 모델 분류 sub-table (Simple 5 / Neural 3 / Legacy SOTA 7 / New SOTA 7) — 4개 분리
   - 신규 10개 paper metadata (논문명/연도/학회/citation/링크/repo) — 정확성 critical
   - 결과 row placeholder: 실험 완료 전에는 "실험 진행 중 (2026-05-22 시작)" 표시
 - **Notion Section 12**: Baseline 모델 출처 검증 ↔ `comparison/MODELS.md`와 동기화 (sections 16–22 활성 7개 + 23-25 참고용 3개 포함)
@@ -747,7 +766,7 @@ comparison/results/
 ### 18.3 영향 범위 + Experiment 4 cleanup
 
 - 영향 unique 모델: **15** (9 QuoVadis baseline + 6 non-self_norm SOTA, `gcn_lstm` 중복 제외).
-- self_norm SOTA 7개 + npsr은 raw data path → 영향 없음. anomaly_transformer × 5 dataset 결과만 보존.
+- self_norm SOTA 8개 (npsr 포함) 은 raw data path → 영향 없음. anomaly_transformer × 5 dataset 결과만 보존.
 - 영향 entries 70 dirs `.trash/0525/results_backup/` 백업 후 삭제 → queue runner 재dispatch (2026-05-25 21:14).
 - 학습 시간 추가: 16-24 시간 (Neural epochs=50 영향).
 
@@ -841,3 +860,49 @@ TS-AD benchmark 도메인에서는 **TranAD 저자 (Tuli et al., VLDB 2022) 가 
 ## 17. Baseline 정책 (LLM 제외)
 
 **LLM/VLM 정책**: foundation LM (GPT4TS / LLM-TSAD / VLM4TS 등) baseline 은 자원/패러다임 차이로 **코드 구현조차 안 함** (메모리 `feedback_no_llm_baselines.md`).
+
+---
+
+## 20. Weakly-supervised baselines (2026-05-30 통합 — Q1-only, 결과 보류)
+
+기존 22개 baseline은 모두 **unsupervised** (`fit(train_X)` — label 미사용). 2026-05-30 약지도(weakly-supervised) baseline **4종**을 **additive**로 통합했다. 이들은 학습 시 `train_y`(약/세그먼트/bag label)를 사용하므로 전용 실행 경로를 가진다. **기존 22개 baseline·metric·output 코드는 무수정.**
+
+| key | 논문 | 전략 | 약지도 설정 |
+|-----|------|------|-------------|
+| `deepmil` | Sultani et al., CVPR 2018 | head+loss **clean-room 재구현** (공식 repo 무license·실행불가 video/C3D) + encoder = **WETAS DiCNN** (DERIVATIVE_CITED) | bag=window, **dense per-timestep MIL** ranking (±bag 필요) |
+| `wetas` | Lee et al., ICCV 2021 | 공식 코드 vendoring (device-agnostic 편집) | window weak label + soft-DTW alignment |
+| `treemil` | Liu et al., ICASSP 2024 | 공식 active core vendoring (soft-DTW dead code 제외) | N-ary tree MIL, window-BCE |
+| `nrdetector` | Wang et al., KDD 2025 | 공식 vendoring + CLI→in-memory adapter (HOC/softDTW 제외, calc_lp 등 3건 fidelity 수정) | segment PU learning (`noisy_rate=0.4`) |
+
+**통합 구조 (additive / isolated):**
+- 모델 코드: `comparison/baselines/{deepmil,wetas,treemil,nrdetector}/{__init__,model,wrapper}.py`.
+- `baseline_common.py`: `WEAK_SUPERVISED_MODELS` 리스트, `run_weak_sota_baseline_with_epoch_eval` (SOTA 경로 복제 + `train_y` forward), `_get_default_model_params` preset 4종, `create_model` 분기, `SOTA_AVAILABILITY` 등록.
+- `run_baseline.py`: weak 모델 dispatch 분기 (boundary segment + `train_y=loader.get_train_data()[1]` 전달).
+- `experiment_configs.py`: `WEAK_SUPERVISED_BASELINES` 리스트 (기존 `EXPERIMENT_CONFIGS` 무수정).
+
+**약 label 변환 (정보 누출 없음):** `wlabel = max(train_y over window)` — train split 한정. point→window OR coarsening이므로 Q1이 노출하는 정보를 초과하지 않음. test label / future 정보 미사용. best-epoch = `pak_auc_f1` (기존과 동일 protocol).
+
+**Normalization fidelity (2026-05-30 수정 — 핵심):** 이전엔 4 weak 모델이 pipeline 의 **global MinMax scaler** 를 받아 원논문과 불일치하는 fidelity 결함이 있었다. 현재는 4종 모두 `run_baseline.py:240` `SELF_NORMALIZING_WEAK={wetas, treemil, nrdetector, deepmil}` 로 등록되어 **raw 데이터를 수신**(`normalize_mode='none'`)하고, 각 wrapper 가 **원논문 normalization 을 자체 적용**한다.
+
+| 모델 | 원논문 normalization | 출처 | train 측 | predict 측 |
+|------|----------------------|------|----------|------------|
+| `wetas` | per-recording StandardScaler (z-score) | `timeseries.py:35-40` | `train_segments` 별 fit/transform | transductive whole-test |
+| `treemil` | per-file StandardScaler (z-score) | `timeseries.py:53-55` | `train_segments` 별 fit/transform | transductive whole-test |
+| `deepmil` | per-recording StandardScaler (WETAS-lineage) | WETAS `timeseries.py` | train recording fit/transform | transductive whole-test |
+| `nrdetector` | per-split z-score StandardScaler | `data_loader.py:50-55` (paper §5.2 "following Xu 2021") | raw train 에 fit, scaler 저장 | 저장된 scaler 의미로 test z-score |
+
+> **잔여 (결함 아님, contract 제약):** `predict(test_X)` 는 test segment 경계를 받지 않으므로 (`run_*_baseline_with_epoch_eval` contract) per-recording test 정규화가 불가능하다. 가장 충실한 대체로 **transductive whole-test z-score** (test 배열 전체에 fresh StandardScaler fit) 를 적용 — train→test leakage 없음. residual scope gap 은 test granularity (whole-test vs per-recording) 뿐.
+
+**조건 적용:** 4종 모두 **Q1-only**. Q3 (normalonly) 은 `train_y` 가 전부 0 → positive bag/window 없음 → 각 wrapper가 `RuntimeError` 로 거부 (**Q3 = N/A**). 따라서 `STANDARD_BASELINES`(22, Q1+Q3 공용)에 추가하지 않고 별도 `WEAK_SUPERVISED_BASELINES` 리스트로 관리.
+
+**실행:** `python comparison/run_baseline.py --experiment <Q1실험> --model wetas` (또는 `treemil`/`nrdetector`/`deepmil`). 출력은 raw continuous `(N_test,)` → thresholding/metric은 기존 pipeline 담당.
+
+**상태 (2026-05-30):** **구현 완료 · CPU dry-test 통과 · GPU 미실행.** 4 weak 모델 모두 정상 import/fit/predict, shape·Q3-guard·normalization·output-contract 검증 통과. **전체 GPU 실험 미실행 → §3/§4 결과표의 weak 행은 수치 0개**(§3 Q3 = N/A 구조적 부적합, Q1-only; §4 Q1 = GPU 미실행 pending). 독립 리뷰: `wetas`/`treemil`/`deepmil` = CLEAN, `nrdetector` = 3건 수정 후 VERIFIED_SAME.
+
+**충실도 주의 (2026-05-30 갱신):**
+- `deepmil` = head+loss **clean-room 재구현** (Sultani CVPR'18 FAITHFUL: ranking hinge margin 1.0, λ_smooth=λ_sparse=8e-5, dropout 0.6, head `D→512→32→1`, L2=0.001) + encoder = **WETAS DiCNN** (DERIVATIVE_CITED, WETAS ICCV'21 p.7360 "DeepMIL employs the same model architecture with WETAS (i.e., DiCNN)"; input=F, hidden=out=128, kernel=2, n_layers=7, RF=128). 이전 bespoke `TSSegmentEncoder` 은퇴. **OFFICIAL 아님 명시** (Sultani 원논문은 video/C3D 로 학습형 TS encoder 부재). **optimizer = Adam lr=1e-4** (WETAS `train_classifier.py:234` 출처) — Sultani 의 Adagrad lr=0.01 은 frozen-C3D shallow head 전용이라 deep DiCNN encoder 와 joint 학습 시 발산(logits→-200/-440, score collapse)하므로 encoder 출처 optimizer 사용. preset 도 `optimizer='adam'`/`lr=1e-4` 로 갱신. scoring = **dense per-timestep** (32-seg broadcast 은퇴; `n_segments` 는 config 호환용 vestigial).
+- `nrdetector` = encoder 가 BCE-only (공식은 학습 recipe 없이 pretrained `.pth` 로드 — `modules/extractor.py:65`; 우리는 pth 미보유라 from-scratch 학습). `encoder_epochs=50`/`encoder_lr=1e-3` = **IMPL-INVENTED** (출처 없는 confound 로 문서화; `encoder_lr` 은 2026-05-30 파라미터화). `prior=None` → 런타임 동적 추정 (데이터셋마다 anomaly ratio 가 다르므로 estimate 가 맞음; 공식 고정 0.25/0.31 우회). `noisy_rate=0.4` = reveal fraction (양성 라벨 40%만 공개; `selector.py:31-39`) = 실험 knob 이라 추정 대상 아님, 고정 파라미터 유지.
+
+**파라미터화 (R3b):** 4 weak 모델의 고정값은 전부 `baseline_common.py` preset (`_get_default_model_params`) 에 노출(하드코딩 금지). 분류 구분 — fixed-param / runtime-estimated (`prior`) / normalization / impl-invented (`encoder_epochs`/`encoder_lr`). 모델별 default 값·분류는 `MODELS.md` §23–26 에 기재.
+
+상세 출처/구현 기록: `temp/ssl_official_baseline_porting_0529/` (phase1_reference_audit ~ rework_execution_after_root_cause). 모델 출처/HP/provenance는 `MODELS.md` §23–26, 재발방지 gate 는 §7.1 (G1–G5) 참조.

@@ -46,10 +46,12 @@ from comparison.baseline_common import (
     SIMPLE_MODELS,
     NEURAL_MODELS,
     SOTA_MODELS,
+    WEAK_SUPERVISED_MODELS,
     run_simple_baseline,
     run_dl_baseline_with_epoch_eval,
     run_dl_baseline,
     run_sota_baseline_with_epoch_eval,
+    run_weak_sota_baseline_with_epoch_eval,
     print_status,
     print_summary_sorted,
     create_model,
@@ -190,7 +192,14 @@ def main():
     parser.add_argument('--nn-subsample', type=int, default=None,
                        help='Subsample size for 1-NN Distance')
     parser.add_argument('--force', action='store_true',
-                       help='Re-run even if results already exist')
+                       help='Re-run even if results already exist (precedence: --force > --resume)')
+    parser.add_argument('--resume', action='store_true',
+                       help=('Resume weak SSL models (deepmil/wetas/treemil/nrdetector/'
+                             'nrdetector_full) from checkpoints/last.pt if it exists. '
+                             'Other models ignore this flag (their wrappers do not '
+                             'implement set_resume()). If the target sota_epochs is '
+                             'already reached, the entry is auto-skipped. Mutually '
+                             'exclusive with --force (--force wins if both are passed).'))
 
     args = parser.parse_args()
 
@@ -229,13 +238,20 @@ def main():
     # Models whose upstream anomaly_detection pipeline assumes StandardScaler-normalized
     # input (and apply internal RevIN/instance-norm on top). For these we pass raw data
     # so the wrapper can run its own StandardScaler — matches upstream line-by-line.
-    # Other 18 baselines use the externally-applied --normalize-mode (Q1/Q3 = minmax).
     SELF_NORMALIZING_SOTA = {"timesnet", "moderntcn", "dcdetector", "catch", "tfmae", "anomaly_transformer", "memto", "npsr"}
+    # Weakly-supervised baselines self-normalize per their OWN original-paper method
+    # (per-recording StandardScaler for WETAS/TreeMIL/DeepMIL-lineage; per-split z-score
+    # StandardScaler for NRdetector — see baselines/<m>/wrapper.py). Pass raw data so each
+    # wrapper applies its paper-faithful scaler instead of the external pipeline minmax.
+    # (2026-05-30 normalization-fidelity rework — fixes the global-minmax deviation.)
+    SELF_NORMALIZING_WEAK = {"wetas", "treemil", "nrdetector", "nrdetector_full", "deepmil"}
+    # Remaining ~14 baselines use the externally-applied --normalize-mode (Q1/Q3 = minmax;
+    # their original papers also use MinMaxScaler — QuoVadis/USAD/TranAD/DAGMM/GDN/OmniAnomaly).
 
-    if args.model in SELF_NORMALIZING_SOTA:
+    if args.model in SELF_NORMALIZING_SOTA or args.model in SELF_NORMALIZING_WEAK:
         effective_norm = 'none'
         norm_mode = 'none'
-        print(f"  [override] {args.model} uses internal StandardScaler — passing raw data (normalize_mode=none)")
+        print(f"  [override] {args.model} uses internal scaler (original-paper normalization) — passing raw data (normalize_mode=none)")
     else:
         effective_norm = args.normalize_mode
         norm_mode = args.normalize_mode or 'zscore'
@@ -310,11 +326,52 @@ def main():
     failed_models = []  # collected silently-skipped models for end-of-run exit code
 
     for model_name in models_to_run:
-        # Skip if already completed (unless --force)
+        # Skip if already completed (unless --force or --resume with more epochs to go).
         model_dir = results_dir / model_name
         if not args.force and (model_dir / 'epoch_metrics.json').exists():
-            print(f"\n[SKIP] {model_name} already has results (use --force to re-run)", flush=True)
-            continue
+            if args.resume:
+                # Resume only meaningful for weak SSL models (others have no
+                # checkpoint infrastructure — their wrappers don't implement
+                # set_resume()). Distinguish the two cases in the message so
+                # the operator knows whether resume was tried or skipped.
+                is_weak_ssl = model_name in WEAK_SUPERVISED_MODELS
+                last_ckpt = model_dir / 'checkpoints' / 'last.pt'
+                target_epochs = args.sota_epochs if args.sota_epochs is not None else None
+                if not is_weak_ssl:
+                    print(f"\n[SKIP] {model_name} already has results "
+                          f"(--resume not applicable: only weak SSL models support resume)",
+                          flush=True)
+                    continue
+                if last_ckpt.exists() and target_epochs is not None:
+                    try:
+                        import torch as _torch
+                        _ck = _torch.load(last_ckpt, map_location='cpu')
+                        ck_epoch = int(_ck.get('epoch', 0))
+                        if ck_epoch >= target_epochs:
+                            print(f"\n[SKIP] {model_name} resume already at epoch "
+                                  f"{ck_epoch} ≥ target {target_epochs}", flush=True)
+                            continue
+                        print(f"\n[RESUME] {model_name} from epoch {ck_epoch} → target {target_epochs}",
+                              flush=True)
+                        # fall through to training loop (resume=True is forwarded
+                        # to run_weak_sota_baseline_with_epoch_eval below).
+                    except Exception as ck_e:
+                        print(f"\n[WARN] {model_name} could not inspect last.pt ({ck_e}); "
+                              f"falling back to SKIP", flush=True)
+                        continue
+                else:
+                    # No checkpoint to resume from — treat the existing
+                    # epoch_metrics.json as a completed run (consistent with
+                    # the pre-resume behaviour).
+                    print(f"\n[SKIP] {model_name} already has results "
+                          f"(no checkpoint to resume — completed before resume infra "
+                          f"was added, or --sota-epochs not specified)",
+                          flush=True)
+                    continue
+            else:
+                print(f"\n[SKIP] {model_name} already has results (use --force to re-run "
+                      f"or --resume to continue)", flush=True)
+                continue
 
         if not is_model_available(model_name):
             print(f"\n[SKIP] {model_name} not available (import failed)", flush=True)
@@ -341,6 +398,24 @@ def main():
                 traceback.print_exc()
                 failed_models.append((model_name, 'TypeError', str(type_e)))
                 continue
+
+            # Dataset-specific memory-pressure override:
+            # - dcdetector dual-attention OOM-thrashes on WaDi 1.3M train at default
+            #   batch_size=128 (GPU mem hits 98% and forward stalls). Halve.
+            # - catch on WaDi: halved (64) still stalled in preprocessing 5h+ at GPU 98%.
+            #   Quartered (32) to give more headroom + avoid CPU thrashing on 123 features.
+            _WADI_BATCH_DIVISORS = {'dcdetector': 2, 'catch': 4}
+            divisor = _WADI_BATCH_DIVISORS.get(model_name)
+            if divisor and 'wadi' in args.experiment.lower():
+                if hasattr(model, 'batch_size'):
+                    _orig_bs = model.batch_size
+                    model.batch_size = _orig_bs // divisor
+                    print(
+                        f"[CONFIG] {model_name} × {args.experiment}: "
+                        f"batch_size {_orig_bs} → {model.batch_size} (GPU mem pressure, divisor={divisor})",
+                        flush=True,
+                    )
+
             output_dir = results_dir / model_name
 
             if model_name in SIMPLE_MODELS:
@@ -414,6 +489,28 @@ def main():
                     eval_interval=args.eval_interval,
                     max_eval_workers=args.max_eval_workers,
                     train_segments=sa_segments,
+                )
+
+            elif model_name in WEAK_SUPERVISED_MODELS and not args.no_epoch_eval:
+                # ---- Weakly-supervised SOTA (2026-05-29/30 SSL porting) ----
+                # Same execution shape as the SOTA branch, but forwards train_y
+                # (point labels for the train split) so the wrapper can build its
+                # own weak window/bag labels (max over window, train-split-only,
+                # leak-free). Q1-only: the wrapper raises RuntimeError under Q3
+                # (normalonly → all-zero train_y → no positive bag).
+                sa_segments = None
+                if is_segment_aware:
+                    sa_segments = [(s.start, s.end) for s in loader.normal_segments]
+                elif has_run_boundaries:
+                    sa_segments = loader.get_boundary_train_segments()
+                run_weak_sota_baseline_with_epoch_eval(
+                    model, train_X, train_y, test_X, test_y, anomaly_regions,
+                    model_name, output_dir, experiment_name,
+                    excl_region=excl_region,
+                    eval_interval=args.eval_interval,
+                    max_eval_workers=args.max_eval_workers,
+                    train_segments=sa_segments,
+                    resume=args.resume,
                 )
 
             else:
