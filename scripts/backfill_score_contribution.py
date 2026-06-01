@@ -93,6 +93,7 @@ def backfill_one(dataset_dir, loader_key, is_excl22, model_path_override):
         minmax_range=getattr(config, "minmax_range", "0_1"),
         minmax_clamp_min=getattr(config, "minmax_clamp_min", None),
         minmax_clamp_max=getattr(config, "minmax_clamp_max", None),
+        entity_segments=data_info.get("entity_norm_segments"),
     )
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
     print(f"  test windows: {len(test_dataset)}  stride={test_stride}")

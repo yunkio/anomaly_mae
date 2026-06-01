@@ -1,0 +1,427 @@
+{
+  "_meta": {
+    "agent": "dash-data-cartographer",
+    "artifact": "data-schema.json",
+    "generated": "2026-06-01",
+    "status": "revised",
+    "revision": "P1 revision: P1-03 score-ratio resolution order (+ config.score_recon_disc_ratio=null caveat), P1-07 training_histories per-training-epoch vs epoch_metrics per-eval-epoch axis distinction, and appended observed anomaly_type_vocabulary per dataset (semanticist request R4).",
+    "purpose": "Machine-readable schema sidecar to data-schema.md. file_kind -> fields/dtypes/shapes + dynamic-vs-stable map. Backend may codegen its data-access layer against this.",
+    "evidence_roots": {
+      "richest_complete_example": ".trash/0601/pre_fullrerun/271_20260529_100418_271canon_baseline",
+      "live_partial": "results/experiments/271_20260601_190639_271canon_baseline",
+      "writer_code": "scripts/run_base_experiments.py, mae_anomaly/{evaluator,scoring,types,loss,model,dataset_sliding}.py, mae_anomaly/visualization/*"
+    }
+  },
+
+  "directory_taxonomy": {
+    "experiment_dir": {
+      "pattern": "results/experiments/<expNNN>_<TS>_<suffix>/",
+      "example": "271_20260601_190639_271canon_baseline",
+      "fields_in_name": {"exp_num": "int (pinned, no auto-numbering)", "timestamp": "YYYYMMDD_HHMMSS", "suffix": "free text e.g. 271canon_baseline"},
+      "root_files": ["summary.json", "monitoring_log.jsonl"],
+      "optional_root_subdirs": ["telemetry/"],
+      "children": "one subtree per dataset, nested by results_subdir (see dataset_taxonomy)"
+    },
+    "dataset_dir": {
+      "note": "Leaf training/eval unit. Path = experiment_dir + results_subdir. SWaT is a single training run producing TWO sibling leaf dirs (A1A2_full, A1A2_excl22).",
+      "files": [
+        "epoch_metrics.json", "experiment_metadata.json", "best_config.json",
+        "training_histories.json", "anomaly_type_metrics.json",
+        "batch_profiling.json", "batch_profiling.txt",
+        "best_model.pt", "best_model_detailed.csv", "best_epoch_train_scores.npz"
+      ],
+      "subdirs": ["checkpoints/", "epoch_scores/", "visualization/best_model/", "visualization/epoch_metrics/"]
+    }
+  },
+
+  "dataset_taxonomy": {
+    "source": "scripts/run_base_experiments.py:254-420 (DATASETS) + dynamic SMD/Exathlon",
+    "active_universe_count": "39 (5 base + 28 SMD + 6 Exathlon) per run_base_experiments docstring; current full-rerun queue uses 7 dataset keys",
+    "results_subdir_examples": {
+      "simulation": "simulation/simulation",
+      "SWaT_A1A2": "SWaT/A1A2  -> expands to SWaT/A1A2_full + SWaT/A1A2_excl22",
+      "WaDi_A1": "WaDi/A1", "WaDi_A2": "WaDi/A2", "PSM": "PSM",
+      "SMAP_concat": "SMAP/concat", "MSL_concat": "MSL/concat",
+      "SMD_concat": "SMD/concat", "Exathlon_concat": "Exathlon/concat",
+      "SMD_simple_<machine>": "SMD/<machine>", "Exathlon_simple_app<N>": "Exathlon/app<N>"
+    },
+    "current_fullrerun_queue": {
+      "config": "configs/queue_fullrerun_20260601_190603.json",
+      "n_experiments": 31,
+      "datasets": ["PSM","SWaT_A1A2","WaDi_A1","WaDi_A2","SMD_concat","SMAP_concat","MSL_concat"],
+      "dataset_dirs_per_experiment": "8 (SWaT yields 2)"
+    },
+    "depth_warning": "dataset leaf nesting is 1 OR 2 levels deep (PSM=1, SWaT/A1A2_full=2). Dashboard discovery MUST find leaf dirs by presence of epoch_metrics.json (or experiment_metadata.json) rather than assuming a fixed depth."
+  },
+
+  "file_kinds": {
+    "epoch_metrics.json": {
+      "role": "Per-eval-epoch performance trend. PRIMARY source for epoch-trend explorer, ranking, GIFs.",
+      "writer": "scripts/run_base_experiments.py:3134-3136 (initial), :2039 (excl22 overwrite), :1907-1914 (read/patch)",
+      "toplevel_type": "object",
+      "toplevel_fields": {
+        "eval_interval": {"dtype": "int", "stable": true, "example": 5},
+        "epochs": {"dtype": "array<object>", "stable_container": true, "len_example": 100, "note": "one entry per evaluated epoch"}
+      },
+      "epoch_entry": {
+        "stable_index_fields": {
+          "epoch": {"dtype": "int", "semantics": "1-indexed eval epoch; spacing == eval_interval (5,10,...,500)"}
+        },
+        "field_count_example": 185,
+        "DYNAMIC": true,
+        "dynamic_note": "The ~185 metric keys per entry are the DYNAMIC SURFACE. They may be renamed/added/removed across runs/code versions while {eval_interval, epochs:[...]} and the per-entry 'epoch' field stay stable. NO hard-coded metric list. Discover keys at runtime by union over all entries (some keys appear only after warmup).",
+        "scalar_metric_families": {
+          "threshold_free": ["roc_auc","prc_auc","vus_roc","vus_pr"],
+          "point_f1": ["precision","recall","f1_score","optimal_threshold","f1_t","precision_t","recall_t"],
+          "point_adjust_sweep": "pa_<K>_{f1,precision,recall,roc_auc,prc_auc} for K in {0,5,10,...,100} (21 thresholds x 5 = 105 keys)",
+          "pak_auc_summary": ["pak_auc_prc_auc","pak_auc_roc_auc","pak_auc_f1","pak_auc_f1_t","pak_auc_precision","pak_auc_recall","pak_auc_f1_raw","pak_auc_f1_t_raw","pak_auc_precision_raw","pak_auc_recall_raw"],
+          "affiliation": ["affiliation_precision","affiliation_recall","affiliation_f1","r_based_f1"],
+          "anomaly_ratio_variant": ["anomaly_ratio","anomaly_ratio_threshold","f1_ar","precision_ar","recall_ar","f1_t_ar","precision_t_ar","recall_t_ar","affiliation_precision_ar","affiliation_recall_ar","affiliation_f1_ar","r_based_f1_ar"],
+          "disturbing_normal": ["disturbing_roc_auc","disturbing_precision","disturbing_recall","disturbing_f1","n_pure_normal","n_disturbing_normal","n_anomaly"],
+          "diagnostics": ["disc_snr","recon_snr"],
+          "teacher_variant_subset": ["teacher_prc_auc","teacher_f1_t","teacher_pa_20_f1","teacher_pak_auc_prc_auc","teacher_pak_auc_roc_auc","teacher_pak_auc_f1","teacher_pak_auc_f1_t","teacher_pak_auc_precision","teacher_pak_auc_recall","teacher_pak_auc_f1_raw","teacher_pak_auc_f1_t_raw","teacher_pak_auc_precision_raw","teacher_pak_auc_recall_raw"],
+          "training_loss_diag": ["fm_loss","grl_cls_loss","grl_balanced_acc","grl_anomaly_acc","grl_normal_acc","grl_acc_gap","grl_lambda","grl_effective_weight"],
+          "timing": ["_inference_time","_eval_time"]
+        },
+        "array_fields": {
+          "_per_k_prc_auc": {"dtype": "array<float>", "len": 101, "semantics": "PA%K sweep K=0..100 prc_auc"},
+          "_per_k_roc_auc": {"dtype": "array<float>", "len": 101},
+          "_per_k_f1": {"dtype": "array<float>", "len": 101},
+          "_per_k_values": {"dtype": "array<int>", "len": 101, "semantics": "K axis 0..100"},
+          "_infer_feature_disc_mean": {"dtype": "array<float>", "len": "num_features (25 PSM)"},
+          "_infer_feature_disc_max": {"dtype": "array<float>", "len": "num_features"},
+          "_train_feature_recon_mean": {"dtype": "array<float>", "len": "num_features"},
+          "_train_feature_recon_max": {"dtype": "array<float>", "len": "num_features"}
+        },
+        "nullable_fields": {
+          "_train_feature_disc_mean": "null during teacher-only warmup epochs (epoch<=teacher_only_warmup_epochs); array later",
+          "_train_feature_disc_max": "same",
+          "note": "JSON literal 'null' appears (~100x in PSM file). Underscore-prefixed keys are internal/diagnostic; UI may hide by default."
+        }
+      }
+    },
+
+    "experiment_metadata.json": {
+      "role": "Best-epoch snapshot + full config + loss stats + timing + provenance. PRIMARY for config inspector, ranking-by-best, completion marker.",
+      "writer": "scripts/run_base_experiments.py:2114-2165 (assembled), :2298 (used as dataset completion skip-marker)",
+      "toplevel_fields": {
+        "experiment_name": {"dtype": "str", "example": "base_PSM"},
+        "scoring_mode": {"dtype": "str", "example": "adaptive"},
+        "swat_eval_mode": {"dtype": "str|null", "values": [null, "full", "excl22"]},
+        "timing": {"dtype": "object", "keys": ["wall_time","pure_train_time","train_per_epoch","epoch_eval_time","num_epochs","num_evals","inference_time","gpu_total","best_epoch","best_epoch_metric","best_epoch_score","best_prc_auc","cpu_eval_time","cpu_viz_time","total_time"]},
+        "metrics": {"dtype": "object", "note": "best-epoch metric dict; SAME dynamic key family as epoch_metrics entry (minus _train_* / epoch / timing). For excl22 worker this is the excl22 metrics."},
+        "disc_metrics": {"dtype": "object", "note": "discrepancy-only score variant; same metric key family"},
+        "teacher_recon_metrics": {"dtype": "object", "note": "teacher-recon-only score variant; same key family"},
+        "student_recon_metrics": {"dtype": "object", "note": "student-recon-only score variant; same key family"},
+        "config": {"dtype": "object", "key_count_example": 110, "note": "full hyperparameter snapshot; DYNAMIC (config fields evolve). Identical content to best_config.json"},
+        "loss_stats": {"dtype": "object", "keys": ["reconstruction_loss","discrepancy_loss","recon_normal","recon_anomaly","recon_pure_normal","recon_disturbing","disc_normal","disc_anomaly","disc_pure_normal","disc_disturbing","recon_normal_std","recon_anomaly_std","disc_normal_std","disc_anomaly_std","disc_disturbing_std","disc_ratio","disc_ratio_disturbing","recon_ratio","disc_SNR","disc_SNR_disturbing","recon_SNR","disc_cohens_d_normal_vs_anomaly","recon_cohens_d_normal_vs_anomaly","disc_cohens_d_disturbing_vs_anomaly","recon_cohens_d_disturbing_vs_anomaly"]}
+      },
+      "conditional_toplevel_fields": {
+        "metrics_excl_region22": "present when excl22 eval ran (any SWaT dir); writer :2131",
+        "teacher_recon_metrics_excl_region22": "writer :2132",
+        "excl_region22_info": "writer :2133",
+        "metrics_full": "present only when swat_eval_mode=='excl22'; full-eval reference; writer :2135",
+        "teacher_recon_metrics_full": "writer :2136",
+        "_prewarmup_backfill": "provenance object {applied,date,old_best_epoch,new_best_epoch,new_best_is_prewarmup,stale_best_model_viz,note}; present only on backfilled runs",
+        "_lambda_recompute": "provenance object {applied,date,ratio,fm_in_score,best_epoch,flipped}; present only on lambda-recomputed runs. PROVENANCE ONLY — read by zero live-code paths (scoring.py reads config.score_recon_disc_ratio, NOT this). 'ratio' is a string like '4:1'. THIS is the authoritative source of the applied recon:disc ratio + fm_in_score on backfilled runs where config.score_recon_disc_ratio is null. See score_ratio_resolution below."
+      },
+      "score_ratio_resolution": {
+        "_finding": "P1-03 (verified). config.score_recon_disc_ratio is JSON null on the canonical 271 run (field added to config.py:223 AFTER these runs trained). The applied ratio lives in _lambda_recompute.ratio.",
+        "verified_example": ".trash/0601/pre_fullrerun/271_20260529_100418_271canon_baseline/PSM/experiment_metadata.json::config.score_recon_disc_ratio == null; ::_lambda_recompute == {\"applied\":true,\"date\":\"2026-06-01\",\"ratio\":\"4:1\",\"fm_in_score\":false,\"best_epoch\":100,\"flipped\":false}",
+        "resolution_order_for_dashboard": [
+          "1. experiment_metadata._lambda_recompute.ratio (parse 'R:1' string -> R) and ._lambda_recompute.fm_in_score, when _lambda_recompute is present",
+          "2. else config.score_recon_disc_ratio when non-null",
+          "3. else the 4.0 code default (mae_anomaly/scoring.py:247)"
+        ],
+        "hazard": "A score-formula / 'what carries the detector' panel that reads config.score_recon_disc_ratio alone renders None/blank for every backfilled run. Bind to the resolution order; never show a blank ratio.",
+        "fm_in_score_authority": "_lambda_recompute.fm_in_score is the per-run authority for whether FM was inside that run's anomaly score (false on the 271 run, matching scoring.py:237 FM-forced-off as of 2026-06-01)."
+      }
+    },
+
+    "best_config.json": {
+      "role": "Full hyperparameter config of the run (110 keys). Same content as experiment_metadata.config. PRIMARY for config inspector + comparison diff.",
+      "writer": "scripts/run_base_experiments.py:1851",
+      "toplevel_type": "object",
+      "key_count_example": 110,
+      "DYNAMIC": true,
+      "dynamic_note": "Config field set evolves with code (new ablation flags added/removed). Discover keys at runtime. Notable groups: architecture (d_model,nhead,num_*_layers,patch_size,num_patches,patchify_mode), masking (masking_ratio,mask_after_encoder,force_mask_anomaly), loss/margin (margin_type,lambda_disc,anomaly_loss_weight), grl_* (~15 keys), fm_* (use_feature_matching,fm_loss_weight,fm_distance_metric), scad_* (~14 keys), score (anomaly_score_mode,eval_disc_weight,eval_fm_weight,score_recon_disc_ratio), schedule (num_epochs,warmup_epochs,teacher_only_warmup_epochs,eval_interval), normalize (normalize_mode,minmax_*).",
+      "stable_anchor_fields": ["seq_length","num_features","num_epochs","eval_interval","random_seed","best_epoch_metric","anomaly_score_mode","teacher_only_warmup_epochs"]
+    },
+
+    "training_histories.json": {
+      "role": "Per-TRAINING-EPOCH training-loss curves (one entry per trained epoch; the only sub-eval-interval signal). Source for loss-component trends, batch profiling, epoch timings.",
+      "writer": "scripts/run_base_experiments.py:1853",
+      "toplevel_type": "object",
+      "toplevel_keys": "string repeat-index (e.g. '0'); usually a single key",
+      "axis_hazard": {
+        "_finding": "P1-07 (verified). training_histories['0'].train_* lists are PER-TRAINING-EPOCH, NOT per-eval-epoch and NOT per-batch.",
+        "granularity": "per-training-epoch: each train_* list has length == num_epochs (500 in PSM example); the companion 'epoch' list == [1,2,...,500]. n_batches_per_epoch=8, so it is NOT batch-granular (the review's 'per-batch/step' wording is imprecise).",
+        "distinct_from": "epoch_metrics.json::epochs[] is per-EVAL-epoch (length 100 for the same run, epoch in {5,10,...,500}, spacing eval_interval=5).",
+        "length_mismatch": "500 (training_histories) vs 100 (epoch_metrics) for the same run.",
+        "rule": "Align training_histories to epoch_metrics by the EPOCH NUMBER (the integer in each list), NEVER by list index. The frontend MUST NOT co-plot the two on one shared epoch x-axis (or shared index); render them as separate traces / separate axes. Bind train_* keys via registry key_namespaces.history but keep the per-training-epoch x distinct."
+      },
+      "entry_fields": {
+        "_note": "each value is a LIST indexed by TRAINING EPOCH (one entry per trained epoch, length == num_epochs). Many keys; lists may be EMPTY for disabled components (e.g. train_scad_* when use_scad=False).",
+        "per_epoch_loss_lists": ["train_loss","train_rec_loss","train_disc_loss","train_normal_loss","train_anomaly_loss","train_mean_discrepancy","train_teacher_recon_normal","train_teacher_recon_anomaly","train_student_recon_normal","train_student_recon_anomaly","train_fm_loss","train_fm_adaptive_lambda","train_grl_cls_loss","train_grl_balanced_acc","train_grl_anomaly_acc","train_grl_normal_acc","train_grl_lambda","train_grl_effective_weight"],
+        "ratio_score_diag": ["epoch_recon_ratio_{normal,disturbing,anomaly}","epoch_disc_ratio_{normal,disturbing,anomaly}","epoch_recon_score_*","epoch_disc_score_*","epoch_raw_recon_*","epoch_raw_disc_*"],
+        "maybe_empty_lists": ["train_d_loss","train_d_real_acc","train_d_fake_acc","train_adv_loss","train_adaptive_lambda","train_scad_loss","train_scad_n_anom","train_scad_n_norm","train_scad_z_separation","train_scad_z_anom_var","train_scad_z_norm_var","train_scad_lambda","train_scad_adaptive_lambda","train_scad_ramp","train_scad_effective_weight","train_scad_grad_norm","train_scad_main_grad_norm"],
+        "nested_lists": {
+          "epoch_anomaly_type_scores": "list of dicts (may be {} early epochs)",
+          "train_feature_recon_mean": "list of per-feature arrays (or None early)",
+          "train_feature_recon_max": "list of per-feature arrays",
+          "train_feature_disc_mean": "list (None during warmup)",
+          "train_feature_disc_max": "list (None during warmup)",
+          "batch_profiling": "list of per-batch timing dicts",
+          "epoch_timings": "list of per-epoch timing dicts (epoch_total, forward_approx, ...)"
+        },
+        "epoch": "list<int> 1..num_epochs"
+      },
+      "DYNAMIC": true,
+      "dynamic_note": "Key set tracks enabled loss components; UI must handle empty lists and None entries gracefully."
+    },
+
+    "anomaly_type_metrics.json": {
+      "role": "Per-anomaly-type detection breakdown. Source for performance-by-type charts.",
+      "writer": "scripts/run_base_experiments.py:1876-1878 (evaluator.get_performance_by_anomaly_type)",
+      "toplevel_type": "object",
+      "toplevel_keys": "anomaly type name (e.g. 'spike', 'attack', dataset-dependent) — DYNAMIC, dataset-specific vocabulary",
+      "per_type_fields": ["count","mean_score","std_score","roc_auc","prc_auc","precision","recall","f1_score","detection_rate","pa_<K>_{f1,precision,recall,roc_auc,prc_auc,detection_rate} for K in 0..100"],
+      "DYNAMIC": true,
+      "dynamic_note": "Anomaly-type vocabulary varies per dataset. Observed: simulation emits the 9-type ANOMALY_TYPE_NAMES set (dataset_sliding.py:34); the real-world runs in trash (PSM/SWaT/WaDi) bucket all anomalies under a single 'spike' key, while best_model_detailed.csv uses coarse {normal,attack} names. Discover type keys at runtime; see top-level anomaly_type_vocabulary for the canonical list + display-name seeds (semanticist R4)."
+    },
+
+    "batch_profiling.json": {
+      "role": "One-time per-batch GPU timing breakdown. Source for compute-cost panel.",
+      "writer": "scripts/run_base_experiments.py:426-543 (save_batch_profiling), :3398 shared-copied for SWaT excl22",
+      "fields": {
+        "batch_size": "int", "n_batches_per_epoch": "int", "n_profiled_batches": "int",
+        "batch_0_skipped": "bool", "avg_batch_time_ms": "float", "estimated_epoch_time_s": "float",
+        "estimated_total_train_time_s": "float", "num_epochs": "int",
+        "components": "array<object{component,total_ms,avg_ms,...}> (5: Data->GPU etc.)",
+        "layer_components": "array<object> (per-layer breakdown)",
+        "per_batch": "array<object{batch,data_to_gpu_ms,model_forward_ms,...}>"
+      },
+      "sidecar": "batch_profiling.txt = human pretty-print of same data"
+    },
+
+    "best_model_detailed.csv": {
+      "role": "Per-WINDOW best-model sample table (sampled, ~20000 rows). Source for per-sample scatter/hardest-samples.",
+      "writer": "scripts/run_base_experiments.py:1873 (detailed_df_sampled.to_csv)",
+      "columns": ["reconstruction_loss","discrepancy_loss","total_loss","label","sample_type","anomaly_type","anomaly_type_name"],
+      "dtypes": {"reconstruction_loss":"float","discrepancy_loss":"float","total_loss":"float","label":"int(0/1)","sample_type":"int code","anomaly_type":"int code","anomaly_type_name":"str"},
+      "rows_example": 20001,
+      "note": "row count is the SAMPLED window count, not full test length."
+    },
+
+    "best_epoch_train_scores.npz": {
+      "role": "Per-TIMESTEP train-split anomaly scores at best epoch (for train/test score distribution overlay).",
+      "writer": "scripts/run_base_experiments.py:3265",
+      "arrays": {
+        "adaptive_score": {"dtype": "float32", "shape": "(train_len,)", "example": "(176401,)"},
+        "teacher_recon_error": {"dtype": "float32", "shape": "(train_len,)"},
+        "discrepancy_error": {"dtype": "float32", "shape": "(train_len,)"},
+        "point_labels": {"dtype": "int8", "shape": "(train_len,)", "values": "0/1 (train usually all 0)"},
+        "fm_error": {"dtype": "float32", "shape": "(train_len,)", "CONDITIONAL": "present only when fm computed (use_feature_matching) at save time"}
+      },
+      "absence_note": "MISSING for SWaT excl22 dirs and some variants. Treat as optional."
+    },
+
+    "epoch_scores/epoch_<NNN>_scores.npz": {
+      "role": "Per-TIMESTEP test-split scores at each eval epoch. LARGE family (one per eval epoch, ~100 files, ~0.5MB each). Source for distribution-drift GIFs, threshold sweeps.",
+      "writer": "scripts/run_base_experiments.py:2853-2864 (save_dict + savez_compressed)",
+      "filename": "epoch_{ep:03d}_scores.npz; ep is 1-indexed eval epoch (matches epoch_metrics 'epoch')",
+      "arrays": {
+        "adaptive_score": {"dtype": "float32", "shape": "(test_len,)", "example": "(43921,)", "note": "pre-warmup epochs are recon-only-gated (scoring.is_prewarmup_epoch)"},
+        "teacher_recon_error": {"dtype": "float32", "shape": "(test_len,)", "note": "saved UN-gated (raw)"},
+        "discrepancy_error": {"dtype": "float32", "shape": "(test_len,)", "note": "saved raw"},
+        "point_labels": {"dtype": "int8", "shape": "(test_len,)", "values": "0/1"},
+        "fm_error": {"dtype": "float32", "shape": "(test_len,)", "CONDITIONAL": "writer :2859 only saved when fm_p is not None AND config.use_feature_matching; ABSENT otherwise"}
+      },
+      "count_example": "100 per dataset dir (one per eval epoch, 5..500)",
+      "lazy_load": true
+    },
+
+    "best_model.pt": {
+      "role": "Best-epoch model weights (torch). NOT read by dashboard (no GPU, no model load).",
+      "writer": "torch.save in run_base_experiments",
+      "dtype": "binary torch state_dict", "note": "OPAQUE to dashboard; size info only."
+    },
+
+    "checkpoints/{best_checkpoint.pt,latest_checkpoint.pt}": {
+      "role": "Resume checkpoints. OPAQUE/IGNORE for dashboard.",
+      "size": "~315MB (best) / ~369MB (latest) each",
+      "note": "13 .pt files & ~3.9GB of the 4.1GB experiment footprint are checkpoints. Dashboard must NOT load these; only stat() for size if at all. Only kept for KEEP_CHECKPOINT_DATASETS subset."
+    },
+
+    "summary.json": {
+      "role": "Experiment-ROOT roll-up across all datasets in the run. Source for experiment-level ranking landing page.",
+      "writer": "scripts/run_base_experiments.py:3499-3502 (per-dataset result), :3902-3909 (file)",
+      "fields": {
+        "total_time": "float", "config_set": "str (A/B/C...)", "description": "str", "timestamp": "ISO8601",
+        "results": "array<object{key,dir,pure_train_time,epoch_eval_time,inference_time,per_epoch,best_epoch,best_score,best_prc,final_prc,final_f1}>"
+      },
+      "note": "results[].key uses the dataset KEY (e.g. 'SWaT_A1A2','WaDi_A1'), not the leaf subdir. dir is an ABSOLUTE path captured at write time (may be stale if moved to .trash)."
+    },
+
+    "monitoring_log.jsonl": {
+      "role": "Append-only training telemetry, one JSON object per line per monitor tick. Source for live progress / health panel.",
+      "writer": "monitor/telemetry sidecar (scripts/monitor_status.py, telemetry_sidecar.py)",
+      "format": "JSONL (NOT a single JSON array)",
+      "line_fields": ["ts","runtime","dataset_idx","dataset","epoch","total_epochs","speed_last5","speed_last20","eval_cost","amortized","gpu_util","gpu_mem_mb","gpu_temp","gpu_power","cpu_load1","worker_cpu_pct","ram_used_mb","latest_eval_epoch","latest_pak_f1","best_pak_f1","best_epoch","nan_inf_count","judgment_verdict","judgment_reason","interpretation"],
+      "nullable": "latest_eval_epoch/latest_pak_f1/best_pak_f1/best_epoch are null before first eval; values may be JSON null",
+      "append_hazard": true,
+      "note": "interpretation is a nested object. Lines may contain non-ASCII (Korean) verdict strings. Last line may be partially written during live run -> parse line-by-line, skip undecodable trailing line."
+    },
+
+    "telemetry/{snapshots.csv,plot.png}": {
+      "role": "Fine-grained hardware telemetry time-series. Optional panel.",
+      "snapshots.csv_columns": ["ts_iso","elapsed_s","gpu_util_pct","gpu_mem_used_mb","gpu_mem_total_mb","gpu_mem_bw_pct","gpu_power_w","gpu_temp_c","gpu_fan_pct","gpu_pstate","gpu_clk_gr_mhz","gpu_clk_mem_mhz","cpu_load1","cpu_load5","cpu_load15","ram_used_mb","ram_free_mb","ram_total_mb","swap_used_mb","worker_pid","worker_cpu_pct","worker_mem_pct","worker_rss_mb","worker_threads","disk_used_pct"],
+      "rows_example": 3733,
+      "presence": "OPTIONAL (only when telemetry sidecar ran)."
+    },
+
+    "visualization/epoch_metrics/*.png": {
+      "role": "Pre-rendered per-epoch trend plots. Browseable in viz gallery (the dashboard ALSO re-derives trends from epoch_metrics.json for interactivity/GIFs).",
+      "writer": "scripts/run_base_experiments.py:1058-1526 (plot_epoch_metrics + feature plots)",
+      "canonical_names": ["epoch_dashboard.png","epoch_prc_auc.png","epoch_f1_t.png","epoch_pa_k_f1.png","epoch_pak_auc.png","epoch_feature_disc.png","epoch_feature_recon.png"],
+      "conditional_names": {"epoch_fm_loss.png": "only when fm active (:1300)", "epoch_grl.png": "only when grl active (:1360)"},
+      "count_range": "7-9 (excl22 dirs tend to have 7; full dirs 9)"
+    },
+
+    "visualization/best_model/*.png": {
+      "role": "Pre-rendered best-model diagnostic plots. Largest gallery.",
+      "writer": "mae_anomaly/visualization/best_model_visualizer.py (BestModelVisualizer.generate_all), run_base_experiments.py:2144-2155",
+      "canonical_names": ["best_model_roc_curve.png","best_model_prc_curve.png","best_model_roc_curve_comparison.png","best_model_prc_curve_comparison.png","best_model_confusion_matrix.png","best_model_reconstruction.png","best_model_detection_examples.png","best_model_score_contribution.png","best_model_summary.png","anomaly_threshold.png","score_distribution_by_label.png","score_distribution_by_type.png","discrepancy_trend.png","FM_OD_contribution_trend.png","GRL_contribution_trend.png","feature_dominance.png","feature_extremes.png","feature_profile.png","hardest_samples.png","case_study_gallery.png","learning_curve.png","pa_k_auc_summary.png","pure_vs_disturbing_normal.png"],
+      "count_range": "22-23 (PSM 23; SWaT/WaDi 22; excl22 21-22). Set varies with config (FM/GRL/SCAD trends present only when enabled).",
+      "stale_marker": "STALE_VIZ.txt may be present (plain text) flagging PNGs that no longer match the recomputed best_epoch (2026-06-01 prewarmup backfill). UI should surface this as a caveat badge."
+    }
+  },
+
+  "metric_dictionary": {
+    "default_ranking_metric": {"key": "pak_auc_f1", "direction": "higher_better", "source": "config.best_epoch_metric / timing.best_epoch_metric"},
+    "direction_higher_better": ["roc_auc","prc_auc","*_f1","*_f1_t","precision*","recall*","pa_*","pak_auc_*","vus_roc","vus_pr","affiliation_*","r_based_f1","detection_rate","*_SNR","*_snr","*cohens_d*","*detection_rate"],
+    "direction_lower_better_losses": ["train_loss","train_rec_loss","train_disc_loss","reconstruction_loss","fm_loss","optimal_threshold(neutral)"],
+    "neutral_or_context": ["anomaly_ratio","grl_lambda","grl_effective_weight","*_threshold","n_pure_normal","n_disturbing_normal","n_anomaly","count"],
+    "score_variant_blocks": {
+      "metrics": "primary adaptive score (recon + downweighted disc; FM dropped from score as of 2026-06-01)",
+      "teacher_recon_metrics": "teacher reconstruction-only score",
+      "student_recon_metrics": "student/discrepancy-only score",
+      "disc_metrics": "raw discrepancy score"
+    },
+    "fm_in_score_note": "As of 2026-06-01 (mae_anomaly/scoring.py:237,248) FM is EXCLUDED from the anomaly score (scaled_fm always None, fm_active forced False); recon:disc fixed at score_recon_disc_ratio (default 4:1). fm_error arrays/fm_loss STILL recorded as diagnostics. Per-run FM-in-score authority = _lambda_recompute.fm_in_score (false on the 271 run).",
+    "score_ratio_resolution_note": "P1-03: config.score_recon_disc_ratio is null on backfilled runs (field added to config.py:223 after these runs). Resolve the applied recon:disc ratio in this order: (1) experiment_metadata._lambda_recompute.ratio (parse 'R:1' -> R) + .fm_in_score when present; (2) else config.score_recon_disc_ratio when non-null; (3) else 4.0 (scoring.py:247). NEVER read config.score_recon_disc_ratio alone for a score-formula panel or it renders blank. See file_kinds.experiment_metadata.json.score_ratio_resolution."
+  },
+
+  "anomaly_type_vocabulary": {
+    "_purpose": "Semanticist request R4: observed anomaly-type key vocabulary per dataset, so the metric registry can seed friendlier display names. The vocabulary is treated as FULLY DYNAMIC otherwise — discover keys at runtime from anomaly_type_metrics.json (and the anomaly_type_name column of best_model_detailed.csv); these are only OBSERVED seeds, not an exhaustive or stable contract.",
+    "canonical_full_vocabulary": {
+      "_source": "mae_anomaly/dataset_sliding.py:34 ANOMALY_TYPE_NAMES (the simulation/sliding generator's full type set; index 0 = 'normal', 1-9 = anomaly types). evaluator.py:1992-1993 maps integer anomaly_type codes -> these names.",
+      "names_indexed": {
+        "0": "normal", "1": "spike", "2": "memory_leak", "3": "cpu_saturation",
+        "4": "network_congestion", "5": "cascading_failure", "6": "resource_contention",
+        "7": "correlation_inversion", "8": "temporal_flatline", "9": "frequency_shift"
+      },
+      "category": {
+        "_source": "mae_anomaly/dataset_sliding.py:54 ANOMALY_CATEGORY",
+        "value": ["spike", "memory_leak", "cpu_saturation", "network_congestion", "cascading_failure", "resource_contention"],
+        "pattern": ["correlation_inversion", "temporal_flatline", "frequency_shift"]
+      },
+      "display_name_seeds": {
+        "normal": "Normal",
+        "spike": "Spike / DDoS",
+        "memory_leak": "Memory Leak",
+        "cpu_saturation": "CPU Saturation",
+        "network_congestion": "Network Congestion",
+        "cascading_failure": "Cascading Failure",
+        "resource_contention": "Resource Contention",
+        "correlation_inversion": "Correlation Inversion (pattern)",
+        "temporal_flatline": "Temporal Flatline (pattern)",
+        "frequency_shift": "Frequency Shift (pattern)",
+        "attack": "Attack",
+        "anomaly": "Anomaly"
+      }
+    },
+    "observed_per_dataset": {
+      "_note": "Keys ACTUALLY observed in anomaly_type_metrics.json across the .trash/0601/pre_fullrerun complete runs (271/274/286/287). All real-world datasets in these runs bucketed their anomalies under the single type 'spike'. The simulation dataset (not in this trash set) emits all 9 types from canonical_full_vocabulary. best_model_detailed.csv::anomaly_type_name additionally exposes the coarse {normal, attack} labels.",
+      "anomaly_type_metrics_keys": {
+        "PSM": ["spike"],
+        "SWaT_A1A2_full": ["spike"],
+        "SWaT_A1A2_excl22": ["spike"],
+        "WaDi_A1": ["spike"],
+        "WaDi_A2": ["spike"]
+      },
+      "best_model_detailed_csv_name_values": {
+        "all_realworld_datasets_observed": ["normal", "attack"]
+      }
+    },
+    "dashboard_guidance": "Render type keys dynamically; look up display_name_seeds for a friendlier label when a key matches, else title-case the raw key and badge it 'inferred name'. Do NOT hard-code the per-dataset key list — a dataset's vocabulary is whatever keys its anomaly_type_metrics.json contains at load time."
+  },
+
+  "dynamic_vs_stable_map": {
+    "STABLE_directory_structure": [
+      "experiment_dir naming pattern <num>_<TS>_<suffix>",
+      "presence of summary.json + monitoring_log.jsonl at experiment root",
+      "dataset leaf dir contains the same FILE KINDS (epoch_metrics.json, experiment_metadata.json, best_config.json, training_histories.json, anomaly_type_metrics.json, batch_profiling.{json,txt}, best_model.pt, best_model_detailed.csv, visualization/{epoch_metrics,best_model}/, checkpoints/, epoch_scores/)",
+      "epoch_metrics.json toplevel = {eval_interval:int, epochs:[...]}",
+      "each epoch entry has an integer 'epoch' key",
+      "NPZ array names within a file (adaptive_score/teacher_recon_error/discrepancy_error/point_labels [+fm_error])",
+      "monitoring_log.jsonl is JSONL (one object per line)",
+      "best_model_detailed.csv column set"
+    ],
+    "DYNAMIC_contents": [
+      "the ~185 metric KEYS inside each epoch_metrics epoch entry (renamed/added/removed across code versions)",
+      "the ~110 config KEYS in best_config.json / experiment_metadata.config (ablation flags evolve)",
+      "the metric KEYS inside experiment_metadata.{metrics,disc_metrics,teacher_recon_metrics,student_recon_metrics}",
+      "the anomaly-type KEYS in anomaly_type_metrics.json (dataset-specific vocabulary)",
+      "WHICH visualization PNGs exist (FM/GRL/SCAD trend plots conditional on enabled components)",
+      "WHETHER fm_error array exists in an NPZ (conditional on use_feature_matching at save time)",
+      "WHETHER conditional metadata blocks exist (metrics_excl_region22, metrics_full, _prewarmup_backfill, _lambda_recompute)",
+      "training_histories list keys present/empty (depends on enabled loss components)"
+    ],
+    "discovery_rule": "Backend MUST: (1) discover leaf dataset dirs by presence of epoch_metrics.json/experiment_metadata.json at depth 1-2; (2) build the metric column set by UNION over all epoch entries AND all score-variant blocks at load time; (3) treat every metric key as data-driven; infer direction/family by documented name-pattern fallback (see metric_dictionary), badge inferred ones; (4) never assume a key exists — null/missing must degrade gracefully."
+  },
+
+  "variety_cardinality": {
+    "experiments_in_fullrerun": 31,
+    "complete_examples_in_trash": ["271_271canon_baseline (5 leaf dirs incl SWaT x2)", "274_274canon_balsamp (3 leaf dirs)", "286_clamp_pm4 (4 leaf dirs, PSM missing)", "287_unmask (PSM only)", "285_no_fm (summary+monitoring ONLY, no dataset dirs = early-abort)"],
+    "dataset_dirs_per_experiment": "varies 1..8 (incomplete/aborted runs have fewer; SWaT contributes 2)",
+    "epochs_per_run": "num_epochs 500, eval_interval 5 => 100 eval points => 100 epoch entries + ~100 epoch_scores NPZ",
+    "swat_dual_eval": "SWaT/A1A2_full and SWaT/A1A2_excl22 are siblings; excl22 lacks best_epoch_train_scores.npz; metadata carries metrics_full/metrics_excl_region22 cross-refs",
+    "footprint_per_complete_experiment": {"size": "~4.1GB", "npz": "~404", "png": "~155", "pt_checkpoints": "13 (~3.9GB of the 4.1GB)"},
+    "schema_drift": "Live run dataset dirs and trash 271 share IDENTICAL epoch_metrics schema (185 keys). Drift dimension is over TIME/code-version, not within this snapshot. Older archived runs (outside this trash set) may have different/fewer metric keys -> dynamic discovery required."
+  },
+
+  "edge_cases_hazards": {
+    "in_progress_dataset_dir": "Live leaf dir may have ONLY checkpoints/ + epoch_scores/ (no epoch_metrics.json/experiment_metadata.json/best_model yet). Treat experiment_metadata.json as the completion marker (writer uses it as skip-marker :2298).",
+    "append_during_read": "monitoring_log.jsonl AND epoch_scores/ are actively appended by the live run. Read JSONL line-by-line tolerating a truncated final line; list-then-load NPZ to avoid racing a half-written file (catch zipfile.BadZipFile / EOFError and skip).",
+    "missing_best_model": "best_epoch_train_scores.npz absent for excl22 and some variants; best_model.pt may be absent mid-run. Guard all reads.",
+    "null_in_json": "epoch_metrics has JSON null for _train_feature_disc_* during warmup; monitoring_log has null pre-eval fields. JSON may (rarely) contain NaN/Infinity literals from default=float dumps -> use a tolerant JSON parser or sanitize.",
+    "large_npz_lazy": "epoch_scores has ~100 NPZ/dir; per-timestep arrays up to ~176K float32. Load lazily/on-demand, never eager-load all into memory; downsample for plotting.",
+    "large_checkpoints": "checkpoints/*.pt are 300-370MB; NEVER open. stat-only.",
+    "stale_viz_marker": "STALE_VIZ.txt flags PNGs inconsistent with recomputed best_epoch. Surface as caveat, do not trust those PNGs as ground truth.",
+    "absolute_paths_in_summary": "summary.json results[].dir are absolute paths captured at run time; do not rely on them after a dir is moved (e.g. to .trash). Resolve relative to the experiment dir instead.",
+    "png_count_variance": "22-23 best_model + 7-9 epoch_metrics PNGs; gallery must enumerate dynamically, not assume a fixed list.",
+    "non_ascii": "monitoring_log judgment strings contain Korean; read as UTF-8.",
+    "depth_ambiguity": "leaf dir depth is 1 (PSM) or 2 (SWaT/A1A2_full); discovery must not hard-code depth."
+  },
+
+  "queryability_matrix": [
+    {"question": "Which experiment/dataset has best pak_auc_f1?", "data": "best-epoch metric", "file_field": "experiment_metadata.json::metrics.pak_auc_f1 (or timing.best_epoch_score)", "cost": "cheap"},
+    {"question": "Rank all datasets in a run", "data": "per-dataset roll-up", "file_field": "summary.json::results[]", "cost": "cheap"},
+    {"question": "How did f1_t evolve over epochs?", "data": "per-epoch trend", "file_field": "epoch_metrics.json::epochs[].f1_t", "cost": "cheap"},
+    {"question": "Animate metric ranking race across epochs", "data": "all metrics x all epochs x all datasets", "file_field": "epoch_metrics.json (many)", "cost": "compute (CPU, cache GIF)"},
+    {"question": "Score distribution: normal vs anomaly at best epoch", "data": "per-timestep test scores + labels", "file_field": "epoch_scores/epoch_<best>_scores.npz::{adaptive_score,point_labels}", "cost": "compute (NPZ load + hist)"},
+    {"question": "Distribution drift across epochs", "data": "per-timestep scores per epoch", "file_field": "epoch_scores/*.npz", "cost": "compute (lazy, heavy)"},
+    {"question": "Train vs test score overlap", "data": "train+test per-timestep scores", "file_field": "best_epoch_train_scores.npz + epoch_scores/epoch_<best>", "cost": "compute"},
+    {"question": "Full hyperparameters / diff two runs", "data": "config", "file_field": "best_config.json (or experiment_metadata.config)", "cost": "cheap"},
+    {"question": "Detection performance by anomaly type", "data": "per-type metrics", "file_field": "anomaly_type_metrics.json", "cost": "cheap"},
+    {"question": "Training loss component curves", "data": "per-epoch loss lists", "file_field": "training_histories.json::['0'].train_*", "cost": "cheap-moderate (large lists)"},
+    {"question": "Where is GPU/compute time spent?", "data": "batch timing", "file_field": "batch_profiling.json + experiment_metadata.timing", "cost": "cheap"},
+    {"question": "Is this run still training / healthy?", "data": "live telemetry", "file_field": "monitoring_log.jsonl (tail)", "cost": "cheap (tail)"},
+    {"question": "Hardware utilization over time", "data": "telemetry series", "file_field": "telemetry/snapshots.csv", "cost": "cheap-moderate"},
+    {"question": "Browse pre-rendered diagnostic plots", "data": "PNG gallery", "file_field": "visualization/**/*.png", "cost": "cheap (serve static)"},
+    {"question": "SWaT full vs excl22 comparison", "data": "two sibling eval dirs", "file_field": "SWaT/A1A2_full vs A1A2_excl22 (+ metadata.metrics_full/_excl_region22)", "cost": "cheap"},
+    {"question": "Per-sample hardest windows", "data": "sampled window table", "file_field": "best_model_detailed.csv", "cost": "cheap-moderate"},
+    {"question": "Best epoch & whether it's pre-warmup", "data": "best epoch + warmup window", "file_field": "experiment_metadata.timing.best_epoch + config.teacher_only_warmup_epochs (+_prewarmup_backfill)", "cost": "cheap"}
+  ]
+}

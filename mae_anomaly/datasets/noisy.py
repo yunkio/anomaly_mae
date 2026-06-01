@@ -29,6 +29,7 @@ class NoisyLabelSlidingWindowDataset(SlidingWindowDataset):
         minmax_range: str = '0_1',
         minmax_clamp_min: float = None,
         minmax_clamp_max: float = None,
+        entity_segments: list = None,
     ):
         """Initialize noisy label dataset.
 
@@ -65,6 +66,7 @@ class NoisyLabelSlidingWindowDataset(SlidingWindowDataset):
             minmax_range=minmax_range,
             minmax_clamp_min=minmax_clamp_min,
             minmax_clamp_max=minmax_clamp_max,
+            entity_segments=entity_segments,
         )
 
     def __getitem__(self, idx):

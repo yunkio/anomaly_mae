@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-06-02: Fix — concat 멀티-entity 데이터셋 **per-entity 정규화** (whole-array → per-entity)
+
+**문제 (whole-array fit)**: `SMAP_concat`/`MSL_concat`/`SMD_concat`/`Exathlon_concat`은 entity(채널/머신/app)를
+`[e1_train..eN_train | e1_test..eN_test]`로 이어붙인 raw 배열을 반환했고, 하류 `SlidingWindowDataset`이
+`signals[:train_end]` **전체(=통짜 concat train)에서 단 한 세트의 통계로 정규화**했다. entity마다 절대 스케일이
+다를 때(예: A센서 100±5 vs B센서 5±0.5) 통짜 z-score는 A→≈+1·B→≈−1(entity별 상수)로 만들고, 각 entity 내부의
+진짜 변동(std 5, 0.5)을 큰 전체 std(≈48)로 나눠 ≈0.1·0.01로 뭉갠다. 결과적으로 모델이 보는 주신호가 "이상 여부"가
+아니라 "어느 entity 출신"이 되고, 절대값 작은 entity의 이상은 가려지며, 단일 threshold도 일그러진 분포 위에서 잡힌다.
+
+**수정 (per-entity fit, leakage-free)**:
+- 4개 concat 로더가 `data_info['entity_norm_segments']`(= entity별 `(train_len, test_len)`, concat 순서)를 emit.
+- `SlidingWindowDataset(entity_segments=...)` → 각 entity를 **자기 train 구간만으로 fit**(`_normalize_per_entity`),
+  config의 동일 mode/range/clamp(zscore / minmax 0_1 / neg1_1+clamp) 재사용(`_apply_normalization` 단일화).
+  per-entity라 단일 global scaler 없음(`scaler_*=None`; 외부 소비처 없음). `entity_segments=None`(SWaT/WaDi/PSM
+  단일 entity)이면 기존 whole-array 경로 그대로(=동작 불변).
+- `_standardize_per_feature`의 통계 계산을 **float64**로 변경(near-constant·large-offset feature에서 float32
+  axis-0 합산 오차가 작은 std로 나뉘며 정규화 train mean을 ~0.02 흔들던 정밀도 artifact 제거). minmax는 min/max라 무관.
+- run_base 4개 생성부 + `reviz_one_best_model`/`backfill_score_contribution`/`NoisyLabel`에 `entity_segments` 전달.
+  (viz/*.py·ablation은 run_boundaries조차 안 넘기는 simulation/legacy 경로라 concat 비대상.)
+
+**검증(실측)**: per-entity zscore train mean ≈0 (MSL 5e-6, SMD 1.4e-4) / unit-std(err<7e-4) — whole-array는
+entity 미중심(MSL 2.08, SMD 4.64)으로 버그 재현. 누수 0(test-region mean 자유). boundary 0-crossing 보존
+(MSL/SMD train+test 전부 CROSS=0). minmax 0_1 per-entity(각 entity train min0/max1) True. 단일 entity(PSM) global 경로 불변.
+
+**영향**: 기존 SMAP/MSL/SMD concat 결과(whole-array)는 무효 → 삭제(재실행 대상). SWaT/WaDi/PSM(단일 entity)은 영향 없음.
+
 ## 2026-06-01: 멀티-세그먼트 데이터셋 `concat` / `simple` 등록 (SMAP·MSL·SMD·Exathlon)
 
 채널/머신/app 으로 나뉜 4개 데이터셋을 일관된 **`<DS>_concat`**(전 세그먼트를 한 스트림으로) /

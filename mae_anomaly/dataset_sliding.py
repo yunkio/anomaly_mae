@@ -106,14 +106,23 @@ def _standardize_per_feature(
     signals = signals.copy()
     train_signals = signals[:train_end]
 
-    scaler_mean = train_signals.mean(axis=0)  # (num_features,)
-    scaler_std = train_signals.std(axis=0)    # (num_features,)
+    # Compute statistics in float64. A float32 axis-0 reduction over a
+    # near-constant, large-offset feature (e.g. 0.979 ± 0.01, std ≈ 1e-2)
+    # accumulates a summation error in the mean (~1e-4) that, divided by the
+    # tiny std, leaves the normalized train mean off-0 by ~0.02. float64
+    # accumulation removes this; the cast-back to float32 mean has only ~1e-7
+    # representation error. (Matters most for the per-entity path where each
+    # entity is fit on its own — possibly small/near-constant — segment.)
+    scaler_mean = train_signals.astype(np.float64).mean(axis=0)  # (num_features,)
+    scaler_std = train_signals.astype(np.float64).std(axis=0)    # (num_features,)
 
     # Protect against constant features (std ≈ 0)
     scaler_std[scaler_std < 1e-8] = 1.0
 
+    scaler_mean = scaler_mean.astype(np.float32)
+    scaler_std = scaler_std.astype(np.float32)
     signals = (signals - scaler_mean) / scaler_std
-    return signals.astype(np.float32), scaler_mean.astype(np.float32), scaler_std.astype(np.float32)
+    return signals.astype(np.float32), scaler_mean, scaler_std
 
 
 @dataclass
@@ -990,6 +999,93 @@ def _minmax_per_feature(
     return signals.astype(np.float32), scaler_min.astype(np.float32), scaler_range.astype(np.float32)
 
 
+def _apply_normalization(
+    signals: np.ndarray,
+    train_end: int,
+    normalize_mode: str,
+    minmax_range: str = '0_1',
+    minmax_clamp_min: Optional[float] = None,
+    minmax_clamp_max: Optional[float] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Normalize ``signals`` fitting stats on ``signals[:train_end]`` only.
+
+    Single source of the normalize-mode decode (zscore / minmax 0_1 / minmax
+    neg1_1 + NPSR-style test-only clamp). Used by BOTH the whole-array path and
+    the per-entity path so their semantics stay identical.
+
+    Returns (normalized_signals, scaler_a, scaler_b) where (a, b) are
+    (mean, std) for zscore or (min, range) for minmax.
+    """
+    if normalize_mode == 'minmax':
+        if minmax_range == 'neg1_1':
+            feature_range, tight_clip = (-1.0, 1.0), False
+            cm_min, cm_max = minmax_clamp_min, minmax_clamp_max
+        else:  # '0_1' — preserves prior behavior exactly
+            feature_range, tight_clip = (0.0, 1.0), True
+            cm_min, cm_max = None, None
+        return _minmax_per_feature(
+            signals, train_end, clip=tight_clip, feature_range=feature_range,
+            clamp_min=cm_min, clamp_max=cm_max,
+        )
+    return _standardize_per_feature(signals, train_end)
+
+
+def _normalize_per_entity(
+    signals: np.ndarray,
+    entity_segments: List[Tuple[int, int]],
+    normalize_mode: str,
+    minmax_range: str = '0_1',
+    minmax_clamp_min: Optional[float] = None,
+    minmax_clamp_max: Optional[float] = None,
+) -> np.ndarray:
+    """Per-entity normalization for concatenated multi-entity datasets.
+
+    ``signals`` MUST follow the concat layout
+    ``[e1_train | ... | eN_train | e1_test | ... | eN_test]`` and
+    ``entity_segments`` lists ``(train_len, test_len)`` per entity in that exact
+    order. Each entity is normalized with statistics fitted on ITS OWN train
+    portion only (leakage-free), so entities with different absolute scales are
+    each centered/scaled correctly.
+
+    Rationale (2026-06-02): a single whole-array fit over the concatenated
+    stream mixes every entity's statistics. When entity A varies around 100±5
+    and entity B around 5±0.5, a global z-score maps A→≈+1, B→≈−1 (constant per
+    entity) and crushes each entity's true intra-entity variation (÷ the large
+    global std) to ~0.01 — so the dominant learned signal becomes "which entity"
+    rather than "is this anomalous", and small-magnitude entities' anomalies are
+    masked. The single global threshold is then set on this distorted
+    distribution. Per-entity fit removes this failure mode.
+
+    Returns the fully-normalized signals (same shape). Labels / run_boundaries
+    are untouched.
+    """
+    signals = signals.copy()
+    total_train = sum(int(tl) for tl, _ in entity_segments)
+    tr_off, te_off = 0, 0
+    for train_len, test_len in entity_segments:
+        train_len, test_len = int(train_len), int(test_len)
+        if train_len <= 0:
+            tr_off += max(train_len, 0)
+            te_off += max(test_len, 0)
+            continue
+        tr_lo, tr_hi = tr_off, tr_off + train_len
+        te_lo, te_hi = total_train + te_off, total_train + te_off + test_len
+        if test_len > 0:
+            seg = np.concatenate([signals[tr_lo:tr_hi], signals[te_lo:te_hi]], axis=0)
+        else:
+            seg = signals[tr_lo:tr_hi]
+        seg_norm, _, _ = _apply_normalization(
+            seg, train_len, normalize_mode, minmax_range,
+            minmax_clamp_min, minmax_clamp_max,
+        )
+        signals[tr_lo:tr_hi] = seg_norm[:train_len]
+        if test_len > 0:
+            signals[te_lo:te_hi] = seg_norm[train_len:]
+        tr_off += train_len
+        te_off += test_len
+    return signals.astype(np.float32)
+
+
 class SlidingWindowDataset(Dataset):
     """
     Dataset that extracts sliding windows from a long time series.
@@ -1019,6 +1115,7 @@ class SlidingWindowDataset(Dataset):
         minmax_range: str = '0_1',  # '0_1' (default tight clip) | 'neg1_1' (NPSR-style)
         minmax_clamp_min: Optional[float] = None,  # test-only clamp lower (used when minmax_range='neg1_1')
         minmax_clamp_max: Optional[float] = None,  # test-only clamp upper (used when minmax_range='neg1_1')
+        entity_segments: Optional[List[Tuple[int, int]]] = None,  # per-entity (train_len,test_len) for concat multi-entity datasets → per-entity normalization (else whole-array)
     ):
         self.window_size = window_size
         self.mask_last_n = mask_last_n
@@ -1033,7 +1130,21 @@ class SlidingWindowDataset(Dataset):
         total_length = len(signals)
         train_end = int(total_length * train_ratio)
 
-        if normalize_mode == 'minmax':
+        if entity_segments:
+            # Concat multi-entity dataset (SMAP/MSL/SMD/Exathlon): fit a separate
+            # scaler PER ENTITY on its own train portion (leakage-free). Override
+            # train_end to the exact entity seam (sum of per-entity train lengths)
+            # so the split below matches the normalization seam regardless of
+            # float rounding in `total_length * train_ratio`.
+            train_end = sum(int(tl) for tl, _ in entity_segments)
+            signals = _normalize_per_entity(
+                signals, entity_segments, normalize_mode,
+                minmax_range, minmax_clamp_min, minmax_clamp_max,
+            )
+            # Per-entity → no single global scaler (no downstream consumers).
+            self.scaler_mean = self.scaler_std = None
+            self.scaler_min = self.scaler_range = None
+        elif normalize_mode == 'minmax':
             # Decode minmax_range option
             if minmax_range == 'neg1_1':
                 # NPSR-style: scale to [-1, 1], no tight clip, test-only clamp via minmax_clamp_min/max

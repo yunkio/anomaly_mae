@@ -1341,6 +1341,10 @@ def load_smd_concat(machines: Optional[List[str]] = None):
         'dataset_type': 'smd_concat', 'machines': machines, 'n_total': n_total,
         'n_features': num_features, 'train_len': total_train, 'test_len': total_test,
         'train_ratio': train_ratio, 'run_boundaries': run_boundaries,
+        # Per-entity (machine) normalization: (train_len, test_len) per machine in
+        # concat order [m1_train..mN_train | m1_test..mN_test]. Leakage-free
+        # per-machine z-score/minmax fit (whole-array fit would mix 28 machines).
+        'entity_norm_segments': list(zip(train_seg_lengths, test_seg_lengths)),
         'train_attack_ratio': float(np.mean(all_labels[:total_train])) if total_train else 0.0,
         'test_attack_ratio': float(np.mean(all_labels[total_train:])) if total_test else 0.0,
     }
@@ -1625,6 +1629,10 @@ def load_exathlon_concat(apps: Optional[List[int]] = None):
         'dataset_type': 'exathlon_concat', 'apps': apps, 'n_total': n_total,
         'n_features': num_features, 'train_len': total_train, 'test_len': total_test,
         'train_ratio': train_ratio, 'run_boundaries': run_boundaries,
+        # Per-entity (app) normalization: (train_len, test_len) per app in concat
+        # order [app1_train..appK_train | app1_test..appK_test]. Leakage-free
+        # per-app fit (whole-array fit would mix apps of differing scale).
+        'entity_norm_segments': list(zip(train_lens, test_lens)),
         'train_attack_ratio': float(np.mean(all_labels[:total_train])) if total_train else 0.0,
         'test_attack_ratio': float(np.mean(all_labels[total_train:])) if total_test else 0.0,
     }
@@ -2419,6 +2427,13 @@ def _load_smap_msl_combined(spacecraft: str, safe_cut_margin: int = 10):
         'test_attack_ratio':  float(test_labels_global.mean()),
         'n_anomaly_regions_total': len(anomaly_regions),
         'run_boundaries': run_boundaries,
+        # Per-entity (channel) normalization: (train_portion_len, test_portion_len)
+        # per channel in concat order [ch1_train..chN_train | ch1_test..chN_test].
+        # Leakage-free per-channel fit (whole-array fit mixed all channels — the
+        # 2026-06-02 whole-array-vs-per-entity fix).
+        'entity_norm_segments': [
+            (m['train_portion_len'], m['test_portion_len']) for m in channel_meta
+        ],
         'safe_cut_margin': int(safe_cut_margin),
         'channel_meta': channel_meta,
         'source': ('NASA Telemanom data.zip via Wayback Machine snapshot '

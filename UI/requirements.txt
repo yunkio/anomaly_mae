@@ -1,0 +1,18 @@
+# TSMAE Dashboard backend — isolated venv requirements.
+# Installed ONLY into ./UI/.venv (created from a NON-dc_vis base python:
+# /home/ykio/anaconda3/bin/python3, py3.12.4). NEVER pip-installed into dc_vis.
+# Pure-python / scientific wheels only. NO torch, NO GPU libs, NO ffmpeg.
+# Pins are compatibility floors with an upper guard where a major bump would break us.
+#
+# backend-design.md §1.2 is the binding source of this list.
+
+fastapi>=0.111,<0.116        # typed async API + OpenAPI
+uvicorn[standard]>=0.30,<0.35 # ASGI server (single local process)
+pydantic>=2.7,<3              # normalized data model (v2)
+pandas>=2.2,<2.3             # columnar metric tables / CSV
+numpy>=1.26,<2.1            # NPZ float32 arrays (match the writer's dtype era)
+pyarrow>=16.0               # parquet/feather mtime-aware cache
+matplotlib>=3.8,<3.11        # Agg backend, headless GIF frame render
+imageio>=2.34               # GIF assembly (imageio.mimsave)
+pillow>=10.3               # imageio GIF plugin / image ops
+orjson>=3.10               # fast + NaN/Inf-tolerant JSON parse
