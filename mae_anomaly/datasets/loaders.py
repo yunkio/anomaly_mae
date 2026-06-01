@@ -1031,6 +1031,10 @@ def load_smd(
         'test_attack': int(np.sum(test_labels_split == 1)),
         'n_anomaly_regions_total': len(anomaly_regions),
         'run_boundaries': run_boundaries if run_boundaries else None,
+        # Per-entity (machine) normalization segments — consistent with smd_concat
+        # so per-entity norm applies regardless of which SMD loader setting is used
+        # (multi-machine [all_train|all_test] layout; one (train_len,test_len) per machine).
+        'entity_norm_segments': list(zip(train_lengths, test_lengths)),
     }
 
     print(f"\n  Train/Test split:")
