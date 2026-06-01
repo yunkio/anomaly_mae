@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-06-02: Comparison 파이프라인 **per-entity 정규화 일원화** + baseline faithfulness 재감사 fix
+
+MAE 파이프라인 fix(아래 항목, `f94d7dc`)는 `comparison/` baseline 경로를 고치지 않았다(comparison은 자체
+`unified_loader`에서 whole-array로 `_minmax_per_feature`를 직접 호출). 본 작업은 그 위에 comparison 측을 **동일한
+`entity_norm_segments` 단일 소스**로 일원화한다.
+
+**per-entity 정규화 (comparison)**:
+- `comparison/data/unified_loader.py::get_file_norm_segments()`가 **`data_info['entity_norm_segments']`**(main이 emit)를
+  단일 소스로 소비 → 4개 multi-entity concat(smap/msl/smd_concat/exathlon_concat) per-entity, 단일파일/`*_simple`은 no-op.
+- Path A(harness minmax/zscore, 14모델): 신규 공유 커널 `comparison/baselines/_per_file_norm.py`로 entity별 leak-free
+  fit(train)/transform(test). single-file은 legacy `_minmax_per_feature(clip=False)`/`_standardize_per_feature`와 **bit-identical**.
+- self-norm 6모델(npsr·anomaly_transformer·wetas·deepmil·treemil·nrdetector): wrapper 내부에서 per-entity(scaler-pluggable,
+  모델별 scaler 보존), `test_segments` plumbing은 `run_baseline.py`→`baseline_common.py`에서 `inspect.signature` sibling-gate.
+- **이중정규화 0** 증명(none→wrapper vs harness minmax/zscore 상호배타); **6 untouchable SOTA**(timesnet/tfmae/memto/
+  moderntcn/dcdetector/catch)는 upstream이 whole-array라 무수정. comparison 고유 차이(minmax **clip=False** paper-faithful,
+  모델별 scaler identity)는 의도적으로 보존.
+- `load_smd`('smd', multi-machine)에도 `entity_norm_segments` emit 추가 → per-entity가 **SMD 로더 setting 무관 일관**
+  (smd_block_split은 단일 머신 K-block split → single-entity no-op이 정확).
+
+**faithfulness fix (strict 재감사)**: moderntcn score-aggregation을 last-position-only(`err[:,-1]`)→**all-position
+overlap-average**(upstream flatten 복원); nrdetector를 continuous `act×sigmoid(seg)`→**upstream `solver.test`의 binary
+transductive gate**(`seg≥mean+thre·(max−min)`, thre=0) verbatim; wetas test 정규화를 transductive fit-on-test→**train-scaler
+transform**(leak 제거). wetas의 방출 score `dscore`는 upstream `dauc`/`dauprc` 입력과 동일 = 본 실험 ranking metric
+(pak_auc_f1/ROC/PRC) 기준 faithful (paper headline인 DTW-aligned F1/IoU는 본 실험 평가 대상 아님 → 미산출 유지).
+
+**검증**: 26모델 최종 per-model verify(faithfulness + 파이프라인 trace + normalize-once + concat/simple 양쪽 + contract);
+kernel 단위테스트 통과(per-entity 독립·leak-free·single-file bit-identical). **영향**: comparison SMD/MSL/SMAP/Exathlon +
+moderntcn/nrdetector 결과는 코드 변경으로 무효 → 재실행 시 corrected 수치 생성(재실행 자체는 미수행).
+
 ## 2026-06-02: Fix — concat 멀티-entity 데이터셋 **per-entity 정규화** (whole-array → per-entity)
 
 **문제 (whole-array fit)**: `SMAP_concat`/`MSL_concat`/`SMD_concat`/`Exathlon_concat`은 entity(채널/머신/app)를
