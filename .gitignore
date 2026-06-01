@@ -16,6 +16,9 @@
 !/README.md
 !/ablation_guideline.md
 !/set_guideline.md
+!/setup.py
+!/requirements.txt
+!/examples/
 !/.gitignore
 
 # 2) the only exclusions inside the tracked dirs
