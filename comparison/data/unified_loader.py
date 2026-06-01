@@ -732,31 +732,23 @@ class UnifiedLoader:
         file pairs 1:1 with the i-th test file (entity order identical in both
         blocks for every multi-file loader).
 
-        Multi-file datasets -> one entry per entity (cumsum of per-file lengths):
-          - smap / msl  : channel (``channel_meta[k]['train_portion_len'/'test_portion_len']``)
-          - smd_concat  : machine (``train_seg_lengths`` / ``test_seg_lengths``)
-          - exathlon_concat : app  (``train_lens`` / ``test_lens``)
-        Any other ``dataset_type`` (single-file PSM/SWaT/WaDi/simulation, etc.)
-        -> ``([(0, train_end)], [(0, test_len)])`` == whole-array, a true NO-OP.
+        Multi-file datasets -> one entry per entity, sourced from the UNIFIED
+        ``data_info['entity_norm_segments']`` emitted by the concat loaders
+        (origin/main f94d7dc): a list of ``(train_len, test_len)`` per entity in
+        concat order (smap/msl channel, smd_concat machine, exathlon_concat app).
+        Any dataset without it (single-file PSM/SWaT/WaDi/simulation, or a single
+        entity) -> ``([(0, train_end)], [(0, test_len)])`` == whole-array NO-OP.
 
-        SEPARATE from ``get_boundary_train_segments`` (window-safety): this list
-        keys on the per-FILE length arrays + dataset_type, never on the raw
+        SEPARATE from ``get_boundary_train_segments`` (window-safety): the norm
+        segmentation comes from ``entity_norm_segments`` (the SAME source the MAE
+        pipeline's ``_normalize_per_entity`` consumes), never from the raw
         ``run_boundaries`` set (which also marks intra-file seams).
         """
         di = self.data_info or {}
-        dt = di.get('dataset_type')
         total_len = len(self.labels) if self.labels is not None else 0
         test_len = total_len - self.train_end
-        if dt in ('smap', 'msl'):
-            trl = [m['train_portion_len'] for m in di['channel_meta']]
-            tel = [m['test_portion_len'] for m in di['channel_meta']]
-        elif dt == 'smd_concat':
-            trl = di['train_seg_lengths']
-            tel = di['test_seg_lengths']
-        elif dt == 'exathlon_concat':
-            trl = di['train_lens']
-            tel = di['test_lens']
-        else:
+        ens = di.get('entity_norm_segments')
+        if not ens or len(ens) <= 1:           # single-file / single-entity -> NO-OP
             return [(0, self.train_end)], [(0, test_len)]
 
         def _cum(lens):
@@ -766,7 +758,7 @@ class UnifiedLoader:
                 p += int(L)
             return segs
 
-        return _cum(trl), _cum(tel)
+        return _cum([int(tl) for tl, _ in ens]), _cum([int(te) for _, te in ens])
 
     def create_train_windows_boundary_safe(self, seq_len: int, stride: int = 1):
         """MAE-style single-pass sliding window for the standard variant.

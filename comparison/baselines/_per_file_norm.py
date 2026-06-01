@@ -41,19 +41,24 @@ __all__ = [
 # --------------------------------------------------------------------------- #
 def fit_file_scaler(train_slice: np.ndarray, mode: str) -> dict:
     """Fit ONE scaler on a single file's TRAIN slice only (leak-free)."""
+    # Stats in float64 (matches origin/main _standardize_per_feature: a float32
+    # axis-0 reduction over near-constant features leaves the normalized train
+    # mean off-0 by ~0.02; float64 removes that artifact). Stored as float32.
     if mode == "zscore":
-        mean = train_slice.mean(axis=0)
-        std = train_slice.std(axis=0)
+        ts = train_slice.astype(np.float64)
+        mean = ts.mean(axis=0)
+        std = ts.std(axis=0)
         std = std.copy()
         std[std < 1e-8] = 1.0
-        return {"mode": "zscore", "mean": mean, "std": std}
+        return {"mode": "zscore", "mean": mean.astype(np.float32), "std": std.astype(np.float32)}
     elif mode == "minmax":
-        mn = train_slice.min(axis=0)
-        mx = train_slice.max(axis=0)
+        ts = train_slice.astype(np.float64)
+        mn = ts.min(axis=0)
+        mx = ts.max(axis=0)
         rng = mx - mn
         rng = rng.copy()
         rng[rng < 1e-8] = 1.0
-        return {"mode": "minmax", "min": mn, "range": rng}
+        return {"mode": "minmax", "min": mn.astype(np.float32), "range": rng.astype(np.float32)}
     else:
         raise ValueError(f"unknown mode {mode!r} (expected 'zscore' or 'minmax')")
 
