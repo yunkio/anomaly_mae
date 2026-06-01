@@ -1,52 +1,23 @@
 # ============================================================
-# Cross-machine consistency policy (machineB) — SCOPED
-# TRACK : only .py / .md that belong to the comparison + mae_anomaly
-#         experiments (their code + runner scripts + docs).
-# IGNORE: everything else (all other dirs, binaries, data, json, .txt,
-#         notebooks, caches, results, deprecated/legacy, .claude, CLAUDE.md).
+# Track the experiment directories IN FULL:
+#   comparison/ · configs/ · mae_anomaly/ · docs/ · scripts/
+# Ignore everything else at repo root, plus the only bulky things
+# inside the tracked dirs: the 12 GB comparison/results/ output
+# tree and Python __pycache__.
 # ============================================================
 
-# 1) ignore everything, but keep descending into directories
-*
-!*/
-
-# 2) whitelist .py / .md ONLY inside the experiment areas ----
-!comparison/**/*.py
-!comparison/**/*.md
-!mae_anomaly/**/*.py
-!mae_anomaly/**/*.md
-!scripts/**/*.py
-!scripts/**/*.md
-!docs/**/*.py
-!docs/**/*.md
-
-# 3) experiment-related root docs + keep .gitignore ----------
+# 1) ignore every root-level entry, then whitelist what we track
+/*
+!/comparison/
+!/configs/
+!/mae_anomaly/
+!/docs/
+!/scripts/
 !/README.md
 !/ablation_guideline.md
 !/set_guideline.md
-!.gitignore
+!/.gitignore
 
-# 4) re-exclude — WIN over the whitelist above ---------------
-# results / deprecated / caches inside the tracked areas
+# 2) the only exclusions inside the tracked dirs
 comparison/results/
-comparison/_deprecated/
-**/_deprecated/
 **/__pycache__/
-docs/report_images/
-# .py junk
-*_backup*.py
-*_option*.py
-*.bak
-
-# 5) hard-exclude non-experiment dir trees entirely (root-anchored).
-#    Wins over `!*/`; also blocks embedded git repos / edge cases under them.
-/temp/
-/.trash/
-/trash/
-/dataset/
-/legacy/
-/references/
-/ResearchProposal/
-/.claude/
-/configs/
-/results/

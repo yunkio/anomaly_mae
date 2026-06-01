@@ -1,0 +1,46 @@
+{
+    "experiments": [
+        {
+            "name": "exp211_209_no_grl",
+            "set": "C",
+            "dataset": ["simulation", "SWaT_A1A2", "WaDi_A1", "WaDi_A2", "smd_all"],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 num_epochs=200 teacher_only_warmup_epochs=100 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 fm_distance_metric=l2 fm_adaptive_lambda=True"
+        },
+        {
+            "name": "exp212_209_ep300",
+            "set": "C",
+            "dataset": ["simulation", "SWaT_A1A2", "WaDi_A1", "WaDi_A2", "smd_all"],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 num_epochs=300 teacher_only_warmup_epochs=150 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 use_grl=True grl_loss_weight=0.2 grl_cls_lr_ratio=0.1 grl_target_mode=window fm_distance_metric=l2 fm_adaptive_lambda=True"
+        },
+        {
+            "name": "exp213_209_no_slow",
+            "set": "C",
+            "dataset": ["simulation", "SWaT_A1A2", "WaDi_A1", "WaDi_A2", "smd_all"],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 num_epochs=200 teacher_only_warmup_epochs=100 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 use_grl=True grl_loss_weight=0.2 grl_cls_lr_ratio=1.0 grl_target_mode=window fm_distance_metric=l2 fm_adaptive_lambda=True"
+        },
+        {
+            "name": "exp214_209_no_win",
+            "set": "C",
+            "dataset": ["simulation", "SWaT_A1A2", "WaDi_A1", "WaDi_A2", "smd_all"],
+            "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 num_epochs=200 teacher_only_warmup_epochs=100 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 use_grl=True grl_loss_weight=0.2 grl_cls_lr_ratio=0.1 grl_target_mode=patch fm_distance_metric=l2 fm_adaptive_lambda=True"
+        },
+        {
+            "name": "exp215_209_enc5",
+            "set": "C",
+            "dataset": ["simulation", "SWaT_A1A2", "WaDi_A1", "WaDi_A2", "smd_all"],
+            "config_override": "num_encoder_layers=5 num_teacher_decoder_layers=3 num_student_decoder_layers=2 num_epochs=200 teacher_only_warmup_epochs=100 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 use_grl=True grl_loss_weight=0.2 grl_cls_lr_ratio=0.1 grl_target_mode=window fm_distance_metric=l2 fm_adaptive_lambda=True"
+        },
+        {
+            "name": "exp216_209_enc6",
+            "set": "C",
+            "dataset": ["simulation", "SWaT_A1A2", "WaDi_A1", "WaDi_A2", "smd_all"],
+            "config_override": "num_encoder_layers=6 num_teacher_decoder_layers=3 num_student_decoder_layers=2 num_epochs=200 teacher_only_warmup_epochs=100 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 use_grl=True grl_loss_weight=0.2 grl_cls_lr_ratio=0.1 grl_target_mode=window fm_distance_metric=l2 fm_adaptive_lambda=True"
+        },
+        {
+            "name": "exp217_209_enc3",
+            "set": "C",
+            "dataset": ["simulation", "SWaT_A1A2", "WaDi_A1", "WaDi_A2", "smd_all"],
+            "config_override": "num_encoder_layers=3 num_teacher_decoder_layers=3 num_student_decoder_layers=2 num_epochs=200 teacher_only_warmup_epochs=100 use_feature_matching=True epoch_offset=True dynamic_margin_k=6 normalize_mode=minmax anomaly_loss_weight=2.0 use_grl=True grl_loss_weight=0.2 grl_cls_lr_ratio=0.1 grl_target_mode=window fm_distance_metric=l2 fm_adaptive_lambda=True"
+        }
+    ]
+}

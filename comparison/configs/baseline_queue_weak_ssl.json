@@ -1,0 +1,28 @@
+{
+  "description": "Weakly-supervised SSL baselines (labeled-train) — 4 weak models × 4 datasets + NRdetector ablation (noisy_rate 0.4 vs 1.0). 19 entries (deepmil_psm SKIP — already finished at 100ep in trash/0531/exp7_before_50ep_reset/, kept as reference). 50 epoch unified (USER decision 2026-06-01 after deepmil_swat 100ep saturation observation). Resume infrastructure (last.pt + best.pt + atomic epoch_metrics.json) added 2026-06-01 — see GUIDE_SSL.md. swat_a1a2 auto-generates SWaT/A1A2_full + SWaT/A1A2_excl22.",
+  "experiments": [
+    { "name": "deepmil_swat",             "experiment": "swat_a1a2",        "model": "deepmil",         "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "deepmil_wadi_A1",          "experiment": "wadi_14days_A1",   "model": "deepmil",         "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "deepmil_wadi_A2",          "experiment": "wadi_14days_A2",   "model": "deepmil",         "sota_epochs": 50, "eval_interval": 1 },
+
+    { "name": "wetas_psm",                "experiment": "psm",              "model": "wetas",           "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "wetas_swat",               "experiment": "swat_a1a2",        "model": "wetas",           "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "wetas_wadi_A1",            "experiment": "wadi_14days_A1",   "model": "wetas",           "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "wetas_wadi_A2",            "experiment": "wadi_14days_A2",   "model": "wetas",           "sota_epochs": 50, "eval_interval": 1 },
+
+    { "name": "treemil_psm",              "experiment": "psm",              "model": "treemil",         "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "treemil_swat",             "experiment": "swat_a1a2",        "model": "treemil",         "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "treemil_wadi_A1",          "experiment": "wadi_14days_A1",   "model": "treemil",         "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "treemil_wadi_A2",          "experiment": "wadi_14days_A2",   "model": "treemil",         "sota_epochs": 50, "eval_interval": 1 },
+
+    { "name": "nrdetector_psm",           "experiment": "psm",              "model": "nrdetector",      "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "nrdetector_swat",          "experiment": "swat_a1a2",        "model": "nrdetector",      "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "nrdetector_wadi_A1",       "experiment": "wadi_14days_A1",   "model": "nrdetector",      "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "nrdetector_wadi_A2",       "experiment": "wadi_14days_A2",   "model": "nrdetector",      "sota_epochs": 50, "eval_interval": 1 },
+
+    { "name": "nrdetector_full_psm",      "experiment": "psm",              "model": "nrdetector_full", "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "nrdetector_full_swat",     "experiment": "swat_a1a2",        "model": "nrdetector_full", "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "nrdetector_full_wadi_A1",  "experiment": "wadi_14days_A1",   "model": "nrdetector_full", "sota_epochs": 50, "eval_interval": 1 },
+    { "name": "nrdetector_full_wadi_A2",  "experiment": "wadi_14days_A2",   "model": "nrdetector_full", "sota_epochs": 50, "eval_interval": 1 }
+  ]
+}

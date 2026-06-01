@@ -1,0 +1,621 @@
+{
+  "description": "Baseline experiment 4\ubc88 \u2014 Q3 minmax+normalonly \u00b7 22 baselines \u00d7 4 datasets (PSM \u2192 SWAT \u2192 WaDi A1 \u2192 WaDi A2). Model-first ordering: each model finishes all 4 datasets before next model.",
+  "experiments": [
+    {
+      "name": "random_psm",
+      "experiment": "psm_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "sensor_range_psm",
+      "experiment": "psm_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "sensor_range_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "sensor_range_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "sensor_range_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "pca_error_psm",
+      "experiment": "psm_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "pca_error_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "pca_error_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "pca_error_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "l2_norm_psm",
+      "experiment": "psm_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "l2_norm_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "l2_norm_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "l2_norm_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "nn_distance_psm",
+      "experiment": "psm_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "nn_distance_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "nn_distance_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "nn_distance_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlp_psm",
+      "experiment": "psm_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlp_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlp_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlp_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlpmixer_psm",
+      "experiment": "psm_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlpmixer_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlpmixer_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "mlpmixer_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "transformer_psm",
+      "experiment": "psm_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "transformer_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "transformer_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "transformer_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_psm",
+      "experiment": "psm_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "anomaly_transformer_psm",
+      "experiment": "psm_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "anomaly_transformer_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "anomaly_transformer_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "anomaly_transformer_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_psm",
+      "experiment": "psm_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "usad_psm",
+      "experiment": "psm_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "usad_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "usad_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "usad_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dagmm_psm",
+      "experiment": "psm_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dagmm_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dagmm_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dagmm_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_psm",
+      "experiment": "psm_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "omnianomaly_psm",
+      "experiment": "psm_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "omnianomaly_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "omnianomaly_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "omnianomaly_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tfmae_psm",
+      "experiment": "psm_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tfmae_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tfmae_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tfmae_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_psm",
+      "experiment": "psm_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dcdetector_psm",
+      "experiment": "psm_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dcdetector_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dcdetector_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "dcdetector_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_psm",
+      "experiment": "psm_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_psm",
+      "experiment": "psm_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "moderntcn_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_psm",
+      "experiment": "psm_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_psm",
+      "experiment": "psm_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    }
+  ]
+}
