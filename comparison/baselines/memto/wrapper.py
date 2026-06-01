@@ -36,6 +36,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset, Subset
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._boundary_safe_window import per_entity_concat
 from tqdm import tqdm
 
 from .model import EntropyLoss, GatheringLoss, TransformerVar
@@ -298,7 +299,7 @@ class MEMTOBaseline:
         self.model.mem_module.phase_type = "test"
         return self
 
-    def predict(self, test_X: np.ndarray) -> np.ndarray:
+    def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
         """1D anomaly score per timestep.
 
         Per-window score formula (upstream solver.py:258-261):
@@ -320,6 +321,32 @@ class MEMTOBaseline:
         T_test length contract:
           * Tail: repeat-last per-timestep score for `scores[valid_len:T_test]`.
           * Head: forward-fill from first valid score if any leading gap.
+
+        BOUNDARY-SAFE TEST WINDOWING (2026-06-02):
+          MEMTO's anomaly score is fully PER-WINDOW (the softmax-over-L weighting and
+          the recon MSE are computed inside each non-overlap window; upstream then just
+          `np.concatenate(...).reshape(-1)`). There is NO whole-test score
+          post-processing (no median-IQR, no smoothing, no max-over-features). So the
+          ENTIRE windowing + inference + per-window→per-timestep mapping (incl. the
+          head/tail fill that satisfies the (T_test,) contract) is the RAW score
+          producer; nothing runs after it.
+
+          On multi-entity datasets (SMD machines / SMAP-MSL channels / Exathlon apps)
+          ``test_segments`` are the per-entity (lo,hi) TEST-LOCAL slices from the SAME
+          source as normalization (``loader.get_file_norm_segments()`` test side). We
+          route the raw producer through ``per_entity_concat`` so every non-overlap
+          window lives inside ONE entity — no window spans an entity boundary.
+          ``per_entity_concat`` runs the raw producer independently per slice and
+          concatenates the (Li,) outputs.
+
+          Normalization is UNCHANGED: the train-fit ``StandardScaler`` is applied to
+          the WHOLE test array BEFORE per-entity slicing. The scaler is fit on TRAIN
+          only (upstream data_loader.py:L20-L26), so slicing the test array cannot
+          change it — the per-slice raw scores are bit-identical to the whole-array
+          legacy scores for any single entity.
+
+          Single-entity / None / non-tiling ``test_segments`` → ``per_entity_concat``
+          makes ONE call over the whole (normalized) array == bit-identical legacy NO-OP.
         """
         if self.model is None:
             raise RuntimeError("Model not trained. Call fit() first.")
@@ -327,6 +354,8 @@ class MEMTOBaseline:
             raise RuntimeError("Scaler not fit. Call fit() before predict().")
 
         # Apply paper-faithful StandardScaler.transform on test data (train-only fit).
+        # Done on the WHOLE test array BEFORE per-entity windowing — the scaler is
+        # train-fit, hence slice-invariant; normalization granularity is unchanged.
         test_X = self.scaler.transform(test_X).astype(np.float32)
 
         # Ensure memory module is in 'test' mode (no buffer update)
@@ -334,80 +363,98 @@ class MEMTOBaseline:
         self.model.mem_module.phase_type = "test"
         self.model.eval()
 
-        N_test, n_features = test_X.shape
-        if N_test < self.win_size:
-            raise ValueError(f"Test sequence length {N_test} shorter than win_size {self.win_size}")
-
-        # ----------------------------------------------------------------
-        # Reference-faithful non-overlap windowing (stride = win_size).
-        # n_windows = (N_test - W) // W + 1   (upstream SMDSegLoader.__len__)
-        # ----------------------------------------------------------------
-        stride = self.win_size
-        n_windows = (N_test - self.win_size) // stride + 1
-        valid_len = n_windows * self.win_size  # ≤ N_test
-
-        per_window_scores = []  # list of (B, L) np arrays → concat → reshape(-1)
+        n_features = test_X.shape[1]
         gather_pointwise = GatheringLoss(reduce=False)
 
-        n_batches = (n_windows + self.batch_size - 1) // self.batch_size
+        def _raw_fn(sub_X: np.ndarray) -> np.ndarray:
+            """Raw per-timestep MEMTO score for ONE entity slice (len(sub_X),).
 
-        with torch.no_grad():
-            for batch_idx in range(n_batches):
-                batch_start = batch_idx * self.batch_size
-                batch_end = min(batch_start + self.batch_size, n_windows)
-                actual_bs = batch_end - batch_start
+            Exactly the legacy non-overlap windowing + inference + concat→reshape(-1)
+            + head/tail fill, restricted to this slice. Edge-safe: a slice shorter than
+            ``win_size`` yields zero windows — return all-zeros (neutral, finite) rather
+            than crashing. Such a tiny entity contributes no model signal; zeros keep the
+            (T_test,) contract intact and never inject a spurious high/low rank.
+            """
+            n_test = sub_X.shape[0]
 
-                batch_windows = np.zeros((actual_bs, self.win_size, n_features), dtype=np.float32)
-                for j, w_idx in enumerate(range(batch_start, batch_end)):
-                    start = w_idx * stride
-                    batch_windows[j] = test_X[start : start + self.win_size]
+            # ------------------------------------------------------------
+            # Reference-faithful non-overlap windowing (stride = win_size).
+            # n_windows = (n_test - W) // W + 1   (upstream SMDSegLoader.__len__)
+            # ------------------------------------------------------------
+            stride = self.win_size
+            if n_test < self.win_size:
+                # Edge case (zero-tolerance): entity slice shorter than one window.
+                # No window can be formed; emit a neutral all-zero score (finite).
+                return np.zeros(n_test, dtype=np.float32)
 
-                input_x = torch.from_numpy(batch_windows).to(self.device)
-                outputs = self.model(input_x)
-                recon = outputs["out"]
-                queries = outputs["queries"]
-                mem = outputs["mem"]
+            n_windows = (n_test - self.win_size) // stride + 1
+            valid_len = n_windows * self.win_size  # ≤ n_test
 
-                # Per-timestep recon MSE: mean over feature dim → (B, L)
-                recon_mse = ((recon - input_x) ** 2).mean(dim=-1)  # (B, L)
-                # Per-timestep gather distance: (B, L)
-                gather_pt = gather_pointwise(queries, mem)  # (B, L)
-                # Paper-faithful: softmax over sequence dim, scaled by temperature τ=0.1
-                latent_score = torch.softmax(gather_pt / self.temperature, dim=-1)  # (B, L)
-                score_bl = (latent_score * recon_mse).cpu().numpy()  # (B, L)
-                per_window_scores.append(score_bl)
+            per_window_scores = []  # list of (B, L) np arrays → concat → reshape(-1)
+            n_batches = (n_windows + self.batch_size - 1) // self.batch_size
 
-                if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}%", end="")
+            with torch.no_grad():
+                for batch_idx in range(n_batches):
+                    batch_start = batch_idx * self.batch_size
+                    batch_end = min(batch_start + self.batch_size, n_windows)
+                    actual_bs = batch_end - batch_start
+
+                    batch_windows = np.zeros((actual_bs, self.win_size, n_features), dtype=np.float32)
+                    for j, w_idx in enumerate(range(batch_start, batch_end)):
+                        start = w_idx * stride
+                        batch_windows[j] = sub_X[start : start + self.win_size]
+
+                    input_x = torch.from_numpy(batch_windows).to(self.device)
+                    outputs = self.model(input_x)
+                    recon = outputs["out"]
+                    queries = outputs["queries"]
+                    mem = outputs["mem"]
+
+                    # Per-timestep recon MSE: mean over feature dim → (B, L)
+                    recon_mse = ((recon - input_x) ** 2).mean(dim=-1)  # (B, L)
+                    # Per-timestep gather distance: (B, L)
+                    gather_pt = gather_pointwise(queries, mem)  # (B, L)
+                    # Paper-faithful: softmax over sequence dim, scaled by temperature τ=0.1
+                    latent_score = torch.softmax(gather_pt / self.temperature, dim=-1)  # (B, L)
+                    score_bl = (latent_score * recon_mse).cpu().numpy()  # (B, L)
+                    per_window_scores.append(score_bl)
+
+                    if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
+                        progress = (batch_idx + 1) / n_batches * 100
+                        print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}%", end="")
+
+            # --------------------------------------------------------
+            # Reference-faithful aggregation: concat → reshape(-1)
+            # (upstream solver.py:275 `np.concatenate(...).reshape(-1)`)
+            # --------------------------------------------------------
+            valid_scores = np.concatenate(per_window_scores, axis=0).reshape(-1).astype(np.float32)
+            assert valid_scores.shape[0] == valid_len, (
+                f"valid_scores len {valid_scores.shape[0]} != expected {valid_len}"
+            )
+
+            # --------------------------------------------------------
+            # Option B fallback (user-directed; reference is IMPLICIT_NONE):
+            #   head: forward-fill from first valid score (head_len=0 — non-overlap
+            #         windowing starts at index 0)
+            #   tail: repeat-last per-timestep score for [valid_len, n_test)
+            # --------------------------------------------------------
+            scores = np.empty(n_test, dtype=np.float32)
+            head_len = 0  # non-overlap windowing emits scores aligned to start
+            scores[head_len : head_len + valid_len] = valid_scores
+            tail_len = n_test - valid_len - head_len
+            if head_len > 0:
+                scores[:head_len] = valid_scores[0]
+            if tail_len > 0:
+                scores[head_len + valid_len:] = valid_scores[-1]
+            return scores
+
+        # Boundary-safe: window+infer per entity (no window spans a boundary).
+        # Single-entity / None → ONE call over the whole array (bit-identical no-op).
+        scores = per_entity_concat(test_X, test_segments, _raw_fn)
 
         if self.verbose:
             print()
         self.model.mem_module.phase_type = prev_phase
-
-        # ----------------------------------------------------------------
-        # Reference-faithful aggregation: concat → reshape(-1)
-        # (upstream solver.py:275 `np.concatenate(test_attens_energy, axis=0).reshape(-1)`)
-        # ----------------------------------------------------------------
-        valid_scores = np.concatenate(per_window_scores, axis=0).reshape(-1).astype(np.float32)
-        assert valid_scores.shape[0] == valid_len, (
-            f"valid_scores len {valid_scores.shape[0]} != expected {valid_len}"
-        )
-
-        # ----------------------------------------------------------------
-        # Option B fallback (user-directed; reference is IMPLICIT_NONE):
-        #   head: forward-fill from first valid score (here head_len=0 since
-        #         non-overlap windowing starts at index 0)
-        #   tail: repeat-last per-timestep score for [valid_len, T_test)
-        # ----------------------------------------------------------------
-        scores = np.empty(N_test, dtype=np.float32)
-        head_len = 0  # non-overlap windowing emits scores aligned to start
-        scores[head_len : head_len + valid_len] = valid_scores
-        tail_len = N_test - valid_len - head_len
-        if head_len > 0:
-            scores[:head_len] = valid_scores[0]
-        if tail_len > 0:
-            scores[head_len + valid_len :] = valid_scores[-1]
         return scores
 
     def save(self, save_dir: Path) -> None:

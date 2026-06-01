@@ -25,6 +25,23 @@ import json
 import time
 import sys
 
+# Boundary-safe TEST windowing (shared single source of truth). `entity_test_slices`
+# returns per-entity (lo, hi) TEST-LOCAL half-open slices from the SAME source as
+# per-entity normalization (loader.get_file_norm_segments() test side); None / single
+# entity -> [(0, n_test)] (exact legacy whole-array behaviour). See module docstring.
+#
+# NOTE on `per_entity_concat` vs `entity_test_slices`: the shared `per_entity_concat`
+# helper carries a 1D per-timestep `(Li,)` raw score per entity and tiles [0, n_test).
+# QuoVadis neural scoring cannot use it directly because the boundary-sensitive raw
+# quantity here is the per-window, PER-SENSOR forecast residual `(n_windows_i, F)` whose
+# row count (Le - seq_len) does NOT equal the entity length Le, and whose whole-test
+# post-processing (median-IQR per sensor over the full window axis) needs the 2D per-sensor
+# delta to survive concatenation. We therefore use the SAME module's `entity_test_slices`
+# (identical no-op guarantee + source of truth) to window each entity in isolation, concat
+# the per-window per-sensor deltas, and run the whole-test post-proc ONCE — keeping
+# post-proc granularity bit-identical to the legacy single-entity path.
+from comparison.baselines._boundary_safe_window import entity_test_slices
+
 
 class NeuralBaselineBase(ABC):
     """
@@ -255,43 +272,37 @@ class NeuralBaselineBase(ABC):
         # MAX over sensors (notebook: `normalise_scores(score).max(1)`)
         return err_scores.max(axis=-1).astype(np.float32)
 
-    def predict(self, test_data: np.ndarray) -> np.ndarray:
-        """Compute paper-faithful anomaly scores for test data.
+    def _window_inference_delta(self, sub_X: np.ndarray) -> np.ndarray:
+        """RAW per-window per-sensor forecast residual for ONE entity slice.
 
-        Reference inference behavior (QuoVadisTAD `quovadis_tad/model_utils/model_def.py::test_embedder`
-        line 483 + notebook `nn_baselines_models_train_test.ipynb` standard call):
-            score = np.abs(predictions - orig_target)           # (n_windows, n_features)
-            normalise_scores(score).max(1)                       # median-IQR + smooth(5) + MAX
-
-        Reference EXPLICITLY TRUNCATES labels: `gt_labels = labels[input_sequence_length:]`,
-        producing a score sequence of length `T_test - seq_len`. The `./comparison/` pipeline
-        cannot truncate labels, so we apply Option B fallback — forward-fill the first
-        `seq_len` head timesteps from the first valid per-timestep score (matches the
-        GCN-LSTM port in `gcn_lstm/model.py`).
+        Boundary-safe by construction: windows are built ONLY from `sub_X` (a single
+        entity's test slice), so no model-input window can span an entity boundary.
+        This is exactly the legacy windowing + batched inference + `|pred - target|`,
+        scoped to `sub_X`.
 
         Args:
-            test_data: Test data (n_samples, n_features).
+            sub_X: (Li, F) one entity's test slice (already normalized upstream).
 
         Returns:
-            (T_test,) float32 — higher = more anomalous.
+            delta: (n_windows_i, F) float32 — per-window per-sensor absolute residual,
+            where ``n_windows_i = max(Li - seq_len, 0)``. A slice shorter than the window
+            (``Li <= seq_len``) yields ``(0, F)`` (no crash; caller head-fills it).
         """
-        if self.model is None:
-            raise RuntimeError("Model not fitted. Call fit() first.")
-
-        self.model.eval()
-
-        # Create windows
-        windows, targets = self._create_windows(test_data)
-        n_samples = len(test_data)
-
+        n_feat = sub_X.shape[1] if sub_X.ndim == 2 else self.n_features
+        # Edge-safe: a slice no longer than the window yields zero next-step windows.
+        # `_create_windows` computes n_windows = (Li - seq_len - 1)//stride + 1, which is
+        # NEGATIVE for Li <= seq_len and would crash `np.zeros((n_windows, ...))`. Guard here.
+        if len(sub_X) <= self.seq_len:
+            return np.zeros((0, n_feat), dtype=np.float32)
+        windows, targets = self._create_windows(sub_X)
         if len(windows) == 0:
-            return np.zeros(n_samples, dtype=np.float32)
+            # Entity slice shorter than the window → zero windows. Return empty (0, F);
+            # the per-timestep scatter below leaves this entity's points to head-fill.
+            return np.zeros((0, n_feat), dtype=np.float32)
 
-        # Predict in batches — accumulate per-feature absolute residuals
         all_residuals = []
         n_batches = (len(windows) + self.batch_size - 1) // self.batch_size
         start_time = time.time()
-
         if self.verbose:
             print(f"  Inference: {len(windows):,} windows in {n_batches} batches")
 
@@ -317,30 +328,97 @@ class NeuralBaselineBase(ABC):
             total_time = time.time() - start_time
             print(f"\n  Inference complete: {total_time:.1f}s")
 
-        # (n_windows, n_features) absolute residual
-        delta = np.concatenate(all_residuals, axis=0).astype(np.float32)
+        return np.concatenate(all_residuals, axis=0).astype(np.float32)
 
-        # median-IQR + 5-box smooth + sensor-MAX (paper-faithful)
-        per_window_score = self._paper_faithful_scoring(delta)  # (n_windows,)
+    def predict(self, test_data: np.ndarray, test_segments=None) -> np.ndarray:
+        """Compute paper-faithful anomaly scores for test data (boundary-safe windowing).
 
-        # Map window scores to point-level scores.
-        # Each window at position i predicts timestamp i + seq_len.
+        Reference inference behavior (QuoVadisTAD `quovadis_tad/model_utils/model_def.py::test_embedder`
+        line 483 + notebook `nn_baselines_models_train_test.ipynb` standard call):
+            score = np.abs(predictions - orig_target)           # (n_windows, n_features)
+            normalise_scores(score).max(1)                       # median-IQR + smooth(5) + MAX
+
+        Reference EXPLICITLY TRUNCATES labels: `gt_labels = labels[input_sequence_length:]`,
+        producing a score sequence of length `T_test - seq_len`. The `./comparison/` pipeline
+        cannot truncate labels, so we apply Option B fallback — forward-fill the first
+        `seq_len` head timesteps from the first valid per-timestep score (matches the
+        GCN-LSTM port in `gcn_lstm/model.py`).
+
+        Boundary-safe TEST windowing (multi-file datasets: SMD machines / SMAP-MSL channels /
+        Exathlon apps): on multi-entity test arrays, each entity's test slice is windowed +
+        inferred INDEPENDENTLY (via `entity_test_slices`), so no model-input window spans an
+        entity boundary. The per-window per-sensor residuals are concatenated and the WHOLE-TEST
+        post-processing (median-IQR per sensor over the full window axis + 5-box smooth +
+        sensor-MAX, in `_paper_faithful_scoring`) is applied ONCE on the concatenation — exactly
+        as before. Single-entity / None / non-tiling `test_segments` -> ONE windowing call over
+        the whole array == bit-identical legacy behaviour.
+
+        Args:
+            test_data: Test data (n_samples, n_features).
+            test_segments: per-entity (lo, hi) TEST-LOCAL half-open slices (from
+                `loader.get_file_norm_segments()` test side). None / single entity ->
+                whole-array (legacy no-op).
+
+        Returns:
+            (T_test,) float32 — higher = more anomalous.
+        """
+        if self.model is None:
+            raise RuntimeError("Model not fitted. Call fit() first.")
+
+        self.model.eval()
+
+        n_samples = len(test_data)
+        slices = entity_test_slices(n_samples, test_segments)
+
+        # --- RAW producer (boundary-sensitive): per-entity windowing + inference + the
+        #     per-window -> per-timestep target mapping. Concatenated per-window per-sensor
+        #     residuals + their GLOBAL target timesteps survive to the whole-test post-proc. ---
+        delta_parts = []           # list of (m_e, F) per-entity per-window residuals
+        target_index_parts = []    # list of (m_e,) global target timestep for each window row
+
+        for (lo, hi) in slices:
+            sub_X = test_data[lo:hi]
+            delta_e = self._window_inference_delta(sub_X)   # (m_e, F), m_e = max(hi-lo-seq_len, 0)
+            m_e = delta_e.shape[0]
+            if m_e > 0:
+                # Window i (entity-local) predicts local timestep i + seq_len -> global lo+i+seq_len.
+                local_targets = np.arange(m_e, dtype=np.int64) + self.seq_len
+                target_index_parts.append(local_targets + lo)
+                delta_parts.append(delta_e)
+            # else: entity slice <= seq_len -> no valid windows. Its whole [lo, hi) span has no
+            #       own score and is left at 0 (the head-fill loop below skips it). Unscorable
+            #       region == legacy all-zero behaviour; never crashes.
+
+        if not delta_parts:
+            # No entity produced any window (every slice <= seq_len) -> all-zero, finite.
+            return np.zeros(n_samples, dtype=np.float32)
+
+        # (Σ m_e, F) per-window per-sensor residual, in entity order.
+        delta = np.concatenate(delta_parts, axis=0).astype(np.float32)
+        target_index = np.concatenate(target_index_parts, axis=0)  # (Σ m_e,) global timesteps
+
+        # --- WHOLE-TEST post-processing (UNCHANGED granularity): median-IQR per sensor over
+        #     the full concatenated window axis + 5-box smooth + sensor-MAX. Applied ONCE. For
+        #     single-entity this `delta` IS the legacy whole-array per-window delta -> identical. ---
+        per_window_score = self._paper_faithful_scoring(delta)  # (Σ m_e,)
+
+        # --- Map per-window scores to per-timestep via recorded GLOBAL target indices. ---
         scores = np.zeros(n_samples, dtype=np.float32)
-        n_windows = len(per_window_score)
-        valid_start = self.seq_len
-        valid_end = min(valid_start + n_windows, n_samples)
+        scores[target_index] = per_window_score
 
-        # Place valid scores
-        if valid_end > valid_start:
-            scores[valid_start:valid_end] = per_window_score[:valid_end - valid_start]
-
-        # Option B head fallback: forward-fill first `seq_len` from first valid score.
-        if valid_start > 0 and n_windows > 0:
-            scores[:valid_start] = per_window_score[0]
-
-        # Defensive tail fallback (nominal stride=1 leaves no gap)
-        if valid_end < n_samples and n_windows > 0:
-            scores[valid_end:] = per_window_score[-1]
+        # --- Option B head fallback (per entity): forward-fill each entity's first `seq_len`
+        #     head timesteps from that entity's first valid score. The per-window scores are in
+        #     entity order, so the first row of each entity block is its first valid score. ---
+        cursor = 0
+        for (lo, hi) in slices:
+            m_e = max((hi - lo) - self.seq_len, 0)
+            if m_e > 0:
+                first_valid = per_window_score[cursor]
+                scores[lo:lo + self.seq_len] = first_valid
+                cursor += m_e
+            else:
+                # Unscorable entity (<= seq_len): leave its span at 0 (already initialized).
+                pass
 
         # Final NaN/inf guard
         scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)

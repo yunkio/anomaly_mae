@@ -952,6 +952,7 @@ def run_dl_baseline_with_epoch_eval(
     max_eval_workers: int = 10,
     train_windows: np.ndarray = None,
     train_targets: np.ndarray = None,
+    test_segments=None,
 ) -> dict:
     """Run a DL baseline with per-epoch inference + synchronous CPU eval.
 
@@ -1043,8 +1044,10 @@ def run_dl_baseline_with_epoch_eval(
         should_eval = (ep % eval_interval == 0) or (ep == model.epochs)
 
         if should_eval:
-            # GPU inference (synchronous)
-            scores = model.predict(test_X)
+            # GPU inference (synchronous) — boundary-safe per-entity windowing
+            # via test_segments iff the wrapper accepts it (single-arg wrappers
+            # fall through to the legacy whole-array predict).
+            scores = _predict_gated(model, test_X, test_segments)
 
             # CPU eval (synchronous — avoids ThreadPool deadlock with CUDA)
             try:
@@ -1095,10 +1098,10 @@ def run_dl_baseline_with_epoch_eval(
             final_scores = np.load(best_scores_file)['anomaly_score']
         else:
             # eval_interval>1 or save failed — fall back to last-epoch predict
-            final_scores = model.predict(test_X)
+            final_scores = _predict_gated(model, test_X, test_segments)
     else:
         # No per-epoch eval done — compute metrics on last-epoch predict
-        final_scores = model.predict(test_X)
+        final_scores = _predict_gated(model, test_X, test_segments)
         final_metrics = compute_all_metrics(final_scores, test_y, anomaly_regions)
         final_metrics['epoch'] = model.epochs
         epoch_metrics_list = [final_metrics]
@@ -1134,9 +1137,12 @@ def _predict_gated(model_instance, test_X, test_segments):
     accepts it. Uses ``inspect.signature`` (NOT a bare try/except) so a real
     TypeError raised inside ``predict`` is never masked.
 
-    The 6 untouchable wrappers (timesnet/tfmae/memto/moderntcn/dcdetector/catch)
-    expose a single-arg ``predict(test_X)`` -> the gate falls through to the
-    legacy call, leaving them bit-for-bit unchanged.
+    All 21 windowing wrappers (incl. the 6 RevIN SOTA timesnet/tfmae/memto/
+    moderntcn/dcdetector/catch) now accept ``test_segments`` and use it for BOTH
+    leak-free per-entity normalization AND boundary-safe per-entity TEST windowing.
+    The stateless/simple wrappers (random/sensor_range/l2_norm/nn_distance/
+    pca_error) keep a single-arg ``predict(test_X)`` -> the gate falls through to
+    the legacy call, leaving them bit-for-bit unchanged.
     """
     try:
         params = inspect.signature(model_instance.predict).parameters

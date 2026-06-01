@@ -27,6 +27,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset, Subset
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._boundary_safe_window import per_entity_concat, is_multi_entity
 from tqdm import tqdm
 
 from .model import TimesNet
@@ -199,7 +200,7 @@ class TimesNetBaseline:
 
         return self
 
-    def predict(self, test_X: np.ndarray) -> np.ndarray:
+    def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
         """Compute 1D anomaly score per timestep (reconstruction MSE, last-position scoring).
 
         Unified pipeline pattern (Phase 2.5.1, user direction 2026-05-24): use
@@ -227,6 +228,27 @@ class TimesNetBaseline:
             falls on them; forward-fill them from valid_scores[0] (the first
             valid score). Documented in
             `model_work/timesnet/11_INFERENCE_AGGREGATION_CORRECTION.md`.
+
+        Boundary-safe TEST windowing (multi-entity datasets):
+            ``test_segments`` is the per-entity (lo, hi) TEST-LOCAL list from
+            ``UnifiedLoader.get_file_norm_segments()`` (test side) — the SAME
+            source as per-entity normalization. On multi-file datasets (SMD
+            machines / SMAP-MSL channels / Exathlon apps) the sliding windower +
+            model inference + per-window→per-timestep mapping (incl. the Option B
+            head fill) is run INDEPENDENTLY on each entity's test slice via
+            ``per_entity_concat`` so NO window straddles an entity boundary.
+            Single-entity / None / non-tiling segments -> ONE call over the whole
+            array == bit-identical legacy behaviour (helper guarantees the no-op).
+
+            NORMALIZATION IS UNCHANGED: the train-fit ``StandardScaler.transform``
+            is applied to the WHOLE test array BEFORE windowing (below). Because it
+            is a pure ``transform`` (scaler fit on train only, NOT re-fit on test),
+            slicing the test array per-entity afterwards cannot change any
+            normalized value — so this stays in the "untouchable-norm" class:
+            only the WINDOWING is made boundary-safe, never the normalization.
+            Upstream confirms train-only fit + transform on test
+            (Time-Series-Library/data_provider/data_loader.py SMDSegLoader:
+            ``self.scaler.fit(train_data); test_data = self.scaler.transform(test_data)``).
         """
         if self.model is None:
             raise RuntimeError("Model not trained. Call fit() first.")
@@ -234,68 +256,117 @@ class TimesNetBaseline:
             raise RuntimeError("Scaler not fit. Call fit() first.")
 
         # Apply paper-faithful StandardScaler.transform on test data (train-only fit).
+        # WHOLE-TEST normalization, done BEFORE windowing — untouchable-norm class.
         test_X = self.scaler.transform(test_X).astype(np.float32)
 
         N_test, n_features = test_X.shape
-        if N_test < self.win_size:
+        # Legacy contract: the WHOLE test must be at least one window long. A
+        # genuine per-entity sub-slice shorter than win_size is handled inside
+        # raw_fn (edge-safe fallback) and must NOT reach this guard, so we only
+        # raise for the whole-array case (preserves bit-identical legacy error).
+        if N_test < self.win_size and not is_multi_entity(N_test, test_segments):
             raise ValueError(
                 f"Test sequence length {N_test} shorter than win_size {self.win_size}"
             )
 
-        # stride=1 sliding (canonical pattern from omnianomaly.predict()).
-        test_stride = 1
-        n_windows = (N_test - self.win_size) // test_stride + 1  # = N_test - W + 1
         self.model.eval()
-        n_batches = (n_windows + self.batch_size - 1) // self.batch_size
 
-        per_window_last: list = []  # each: (actual_bs,) — last-position scalar per window
+        def raw_fn(sub_X: np.ndarray) -> np.ndarray:
+            """RAW per-timestep score producer for ONE entity's test slice.
 
-        with torch.no_grad():
-            for batch_idx in range(n_batches):
-                batch_start = batch_idx * self.batch_size
-                batch_end = min(batch_start + self.batch_size, n_windows)
-                actual_bs = batch_end - batch_start
+            Runs the canonical stride=1 sliding windower + model inference +
+            last-position per-window reduction + Option B forward-fill head over
+            ``sub_X`` IN ISOLATION (no cross-entity dependence => boundary-safe).
+            Returns ``(len(sub_X),)`` finite scores. There is NO whole-test
+            post-processing in TimesNet, so the full raw score IS the final
+            score; ``per_entity_concat`` simply stitches the per-entity raw
+            arrays back together with no extra reduction needed afterwards.
 
-                batch_windows = np.zeros(
-                    (actual_bs, self.win_size, n_features), dtype=np.float32
-                )
-                for j, w_idx in enumerate(range(batch_start, batch_end)):
-                    start = w_idx * test_stride
-                    batch_windows[j] = test_X[start : start + self.win_size]
+            Edge case (per-entity slice shorter than win_size): the TimesNet
+            model is built with a FIXED ``seq_len=win_size`` and its internal
+            period-folding reshape (``TimesBlock.forward``) assumes that exact
+            length, so it CANNOT consume a shorter window. We therefore LEFT-PAD
+            the slice up to ``win_size`` (edge-replicate the first row), score the
+            single full-length window, and assign that scalar to every timestep of
+            the (short) slice. This never crosses a boundary, keeps the model's
+            input shape valid, and returns a finite ``(L,)`` score. It cannot
+            occur on the legacy single-entity path for any real dataset (guarded
+            above); it only protects pathologically short entity slices.
+            """
+            sub_X = np.asarray(sub_X, dtype=np.float32)
+            L = sub_X.shape[0]
 
-                input_x = torch.from_numpy(batch_windows).to(self.device)
-                output = self.model(input_x)
-                # Per-window per-timestep MSE, mean over features → [B, T]
-                window_scores = ((output - input_x) ** 2).mean(dim=-1)
-                # Last-position reduction → [B] scalar per window
-                last_pos = window_scores[:, -1].cpu().numpy().astype(np.float32)
-                per_window_last.append(last_pos)
+            # --- short-slice fallback: pad to win_size, score one window, broadcast ---
+            if L < self.win_size:
+                pad = self.win_size - L
+                # edge-replicate the FIRST row at the head so the real data sits at
+                # the window TAIL (the last-position scorer reads the true last row).
+                padded = np.concatenate(
+                    [np.repeat(sub_X[:1], pad, axis=0), sub_X], axis=0
+                ).astype(np.float32)  # (win_size, F)
+                with torch.no_grad():
+                    ix = torch.from_numpy(padded[None]).to(self.device)  # (1, W, F)
+                    out = self.model(ix)
+                    ws = ((out - ix) ** 2).mean(dim=-1)            # (1, W)
+                    scalar = float(ws[0, -1].cpu().numpy())
+                return np.full(L, scalar, dtype=np.float32)
 
-                if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}%", end="")
+            test_stride = 1
+            n_windows = (L - self.win_size) // test_stride + 1  # = L - W + 1
+            n_batches = (n_windows + self.batch_size - 1) // self.batch_size
 
-        if self.verbose:
-            print()
+            per_window_last: list = []  # each: (actual_bs,) — last-position scalar
 
-        # valid_scores: length = n_windows = N_test - W + 1.
-        # Aligned to test_X timesteps via: valid_scores[w] → t = w + W - 1.
-        valid_scores = np.concatenate(per_window_last, axis=0).astype(np.float32)
-        valid_len = valid_scores.shape[0]
-        assert valid_len == n_windows, (
-            f"aggregation length mismatch: {valid_len} != {n_windows}"
-        )
+            with torch.no_grad():
+                for batch_idx in range(n_batches):
+                    batch_start = batch_idx * self.batch_size
+                    batch_end = min(batch_start + self.batch_size, n_windows)
+                    actual_bs = batch_end - batch_start
 
-        # Map valid_scores into the output, plus Option B forward-fill head.
-        # Head: t ∈ [0, W-1) inherits valid_scores[0] (first valid score).
-        # Body: t ∈ [W-1, N_test) gets valid_scores[t - (W-1)] = valid_scores[0..valid_len-1].
-        # Total: head_len + valid_len = (W-1) + (N_test - W + 1) = N_test.
-        scores = np.empty(N_test, dtype=np.float32)
-        head_len = self.win_size - 1
-        if head_len > 0:
-            scores[:head_len] = valid_scores[0]
-        scores[head_len:head_len + valid_len] = valid_scores
+                    batch_windows = np.zeros(
+                        (actual_bs, self.win_size, n_features), dtype=np.float32
+                    )
+                    for j, w_idx in enumerate(range(batch_start, batch_end)):
+                        start = w_idx * test_stride
+                        batch_windows[j] = sub_X[start : start + self.win_size]
 
+                    input_x = torch.from_numpy(batch_windows).to(self.device)
+                    output = self.model(input_x)
+                    # Per-window per-timestep MSE, mean over features → [B, T]
+                    window_scores = ((output - input_x) ** 2).mean(dim=-1)
+                    # Last-position reduction → [B] scalar per window
+                    last_pos = window_scores[:, -1].cpu().numpy().astype(np.float32)
+                    per_window_last.append(last_pos)
+
+                    if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
+                        progress = (batch_idx + 1) / n_batches * 100
+                        print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}%", end="")
+
+            if self.verbose:
+                print()
+
+            # valid_scores: length = n_windows = L - W + 1.
+            # Aligned to sub_X timesteps via: valid_scores[w] → t = w + W - 1.
+            valid_scores = np.concatenate(per_window_last, axis=0).astype(np.float32)
+            valid_len = valid_scores.shape[0]
+            assert valid_len == n_windows, (
+                f"aggregation length mismatch: {valid_len} != {n_windows}"
+            )
+
+            # Map valid_scores into the output, plus Option B forward-fill head.
+            # Head: t ∈ [0, W-1) inherits valid_scores[0] (first valid score).
+            # Body: t ∈ [W-1, L) gets valid_scores[t - (W-1)].
+            # Total: head_len + valid_len = (W-1) + (L - W + 1) = L.
+            scores = np.empty(L, dtype=np.float32)
+            head_len = self.win_size - 1
+            if head_len > 0:
+                scores[:head_len] = valid_scores[0]
+            scores[head_len:head_len + valid_len] = valid_scores
+            return scores
+
+        # Boundary-safe: per-entity windowing+inference, then concat. Single-entity
+        # / None / non-tiling -> ONE raw_fn(whole test) == bit-identical legacy path.
+        scores = per_entity_concat(test_X, test_segments, raw_fn)
         return scores
 
     def save(self, save_dir: Path) -> None:

@@ -42,6 +42,7 @@ _BATCH_LOG_PATH = os.environ.get(
 )
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._boundary_safe_window import per_entity_concat
 from tqdm import tqdm
 
 from .model import (
@@ -363,7 +364,7 @@ class CATCHBaseline:
     # Inference (mirrors upstream CATCH.detect_score)
     # --------------------------------------------------------------
 
-    def predict(self, test_X: np.ndarray) -> np.ndarray:
+    def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
         """Reference-faithful CATCH inference (upstream `detect_score`, mode='thre').
 
         Windowing: non-overlap stride=`win_size` (upstream `SegLoader(mode='thre')`
@@ -378,7 +379,24 @@ class CATCHBaseline:
         We apply Option B fallback — repeat-last per-timestep score — to satisfy
         the `./comparison/` pipeline contract `scores.shape == (T_test,)`.
 
-        Re-verified 2026-05-24 via WebFetch:
+        Boundary-safe TEST windowing (2026-06-02): on multi-entity datasets (SMD
+        machines / SMAP-MSL channels / Exathlon apps) the non-overlap windowing +
+        inference + per-window→per-timestep mapping (incl. Option B tail fill) is run
+        INDEPENDENTLY on each entity's own test slice via `per_entity_concat`, so no
+        non-overlap window ever spans an entity boundary. CATCH has NO whole-test score
+        post-processing in upstream `detect_score` (verified 2026-06-02: it returns the
+        concatenated/reshaped window scores directly — no median/IQR/smoothing/
+        normalization), so the per-entity raw producer IS the full score path and there
+        is nothing to re-apply globally afterwards.
+
+        Normalization (StandardScaler, fit on TRAIN only) is applied to the whole test
+        array BEFORE per-entity windowing. The scaler is a pointwise affine transform
+        fit on train, so slicing the already-normalized test is bit-identical to
+        slicing-then-transforming — per-entity windowing does NOT change normalization
+        (the "untouchable-norm" guarantee holds). Single-entity / None / non-tiling
+        `test_segments` -> ONE call over the whole array == exact legacy behaviour.
+
+        Re-verified 2026-05-24 / 2026-06-02 via WebFetch:
           - https://raw.githubusercontent.com/decisionintelligence/CATCH/master/ts_benchmark/baselines/catch/CATCH.py
           - https://raw.githubusercontent.com/decisionintelligence/CATCH/master/ts_benchmark/baselines/utils.py
         """
@@ -388,61 +406,81 @@ class CATCHBaseline:
             raise RuntimeError("Scaler not fit. Call fit() first.")
 
         # Apply paper-faithful StandardScaler.transform on test data (train-only fit).
+        # Done on the WHOLE test array BEFORE per-entity windowing: the scaler is
+        # train-fit and pointwise, so this is slicing-invariant (normalization UNCHANGED).
         test_X = self.scaler.transform(test_X).astype(np.float32)
 
         N_test, n_features = test_X.shape
-        if N_test < self.win_size:
-            raise ValueError(f"Test sequence length {N_test} shorter than win_size {self.win_size}")
 
-        # Upstream SegLoader(mode='thre') effective behavior: non-overlap stride=win_size.
-        n_windows = (N_test - self.win_size) // self.win_size + 1
         self.model.eval()
-
         temp_criterion = nn.MSELoss(reduction='none')
         freq_criterion_fn = frequency_criterion(self._config)
         score_lambda = self._config.score_lambda
 
-        per_batch_scores: list = []  # list of [B, W] numpy arrays per batch (upstream attens_energy)
-        n_batches = (n_windows + self.batch_size - 1) // self.batch_size
-        with torch.no_grad():
-            for batch_idx in range(n_batches):
-                batch_start = batch_idx * self.batch_size
-                batch_end = min(batch_start + self.batch_size, n_windows)
-                actual_bs = batch_end - batch_start
+        def _raw_score(sub_X: np.ndarray) -> np.ndarray:
+            """RAW per-timestep CATCH scores for a SINGLE entity's test slice.
 
-                batch_windows = np.zeros((actual_bs, self.win_size, n_features), dtype=np.float32)
-                for j, w_idx in enumerate(range(batch_start, batch_end)):
-                    start = w_idx * self.win_size  # non-overlap stride
-                    batch_windows[j] = test_X[start: start + self.win_size]
+            Exactly the legacy non-overlap windowing + model inference + upstream
+            concat/reshape + Option B repeat-last tail fill, but confined to `sub_X`
+            (so no window crosses an entity boundary). Returns shape `(len(sub_X),)`.
+            """
+            sub_X = np.asarray(sub_X, dtype=np.float32)
+            n_sub = sub_X.shape[0]
+            # Edge case: an entity shorter than win_size has no non-overlap window.
+            # Do NOT crash (multi-entity datasets may contain a tiny entity); fall back
+            # to a neutral constant score for that entity. Documented as a sensible
+            # fallback for the degenerate short-slice case (upstream would error here).
+            if n_sub < self.win_size:
+                return np.zeros(n_sub, dtype=np.float32)
 
-                input_x = torch.from_numpy(batch_windows).to(self.device)
-                outputs, _, _ = self.model(input_x)
+            # Upstream SegLoader(mode='thre') effective behavior: non-overlap stride=win_size.
+            n_windows = (n_sub - self.win_size) // self.win_size + 1
 
-                # Per upstream detect_score: temp_score [B,L], freq_score [B,L]
-                temp_score = torch.mean(temp_criterion(input_x, outputs), dim=-1)  # [B, L]
-                freq_score = torch.mean(freq_criterion_fn(input_x, outputs), dim=-1)  # [B, L]
-                window_scores = (temp_score + score_lambda * freq_score).cpu().numpy()  # [B, L]
-                per_batch_scores.append(window_scores.astype(np.float32))
+            per_batch_scores: list = []  # list of [B, W] numpy arrays (upstream attens_energy)
+            n_batches = (n_windows + self.batch_size - 1) // self.batch_size
+            with torch.no_grad():
+                for batch_idx in range(n_batches):
+                    batch_start = batch_idx * self.batch_size
+                    batch_end = min(batch_start + self.batch_size, n_windows)
+                    actual_bs = batch_end - batch_start
 
-                if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}%", end="")
+                    batch_windows = np.zeros((actual_bs, self.win_size, n_features), dtype=np.float32)
+                    for j, w_idx in enumerate(range(batch_start, batch_end)):
+                        start = w_idx * self.win_size  # non-overlap stride
+                        batch_windows[j] = sub_X[start: start + self.win_size]
 
-        if self.verbose:
-            print()
+                    input_x = torch.from_numpy(batch_windows).to(self.device)
+                    outputs, _, _ = self.model(input_x)
 
-        # Upstream aggregation: np.concatenate(attens_energy, axis=0).reshape(-1)
-        valid_scores = np.concatenate(per_batch_scores, axis=0).reshape(-1).astype(np.float32)
-        valid_len = valid_scores.shape[0]  # == n_windows * win_size
+                    # Per upstream detect_score: temp_score [B,L], freq_score [B,L]
+                    temp_score = torch.mean(temp_criterion(input_x, outputs), dim=-1)  # [B, L]
+                    freq_score = torch.mean(freq_criterion_fn(input_x, outputs), dim=-1)  # [B, L]
+                    window_scores = (temp_score + score_lambda * freq_score).cpu().numpy()  # [B, L]
+                    per_batch_scores.append(window_scores.astype(np.float32))
 
-        # Option B fallback: scores aligned to start; pad tail by repeating last per-timestep score.
-        point_scores = np.empty(N_test, dtype=np.float32)
-        # All valid_len comes from the start of test_X (upstream natural ordering).
-        point_scores[:valid_len] = valid_scores
-        if valid_len < N_test:
-            # Tail: repeat last valid score (Option B repeat-last)
-            point_scores[valid_len:] = valid_scores[-1]
-        return point_scores
+                    if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
+                        progress = (batch_idx + 1) / n_batches * 100
+                        print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}%", end="")
+
+            if self.verbose:
+                print()
+
+            # Upstream aggregation: np.concatenate(attens_energy, axis=0).reshape(-1)
+            valid_scores = np.concatenate(per_batch_scores, axis=0).reshape(-1).astype(np.float32)
+            valid_len = valid_scores.shape[0]  # == n_windows * win_size
+
+            # Option B fallback: scores aligned to start; pad tail by repeating last score.
+            sub_scores = np.empty(n_sub, dtype=np.float32)
+            sub_scores[:valid_len] = valid_scores
+            if valid_len < n_sub:
+                sub_scores[valid_len:] = valid_scores[-1]  # Option B repeat-last
+            return sub_scores
+
+        # Route windowing + inference + per-window→per-timestep mapping (incl. tail fill)
+        # through per_entity_concat so no non-overlap window spans an entity boundary.
+        # No whole-test post-processing follows (upstream detect_score returns raw scores).
+        point_scores = per_entity_concat(test_X, test_segments, _raw_score)
+        return point_scores.astype(np.float32)
 
     # --------------------------------------------------------------
     # Save / load

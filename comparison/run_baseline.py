@@ -462,6 +462,11 @@ def main():
                         seq_len=seq_len,
                         stride=getattr(model, 'train_stride', 1) or 1,
                     )
+                # Per-source-FILE NORM segments (SEPARATE from window-safety
+                # sa_windows): multi-file -> per entity; single-file -> whole-array.
+                # TEST side routes the neural wrapper's windowing+inference through
+                # per_entity_concat so no TEST window spans an entity boundary.
+                norm_tr, norm_te = loader.get_file_norm_segments()
                 run_dl_baseline_with_epoch_eval(
                     model, train_X, test_X, test_y, anomaly_regions,
                     model_name, output_dir, experiment_name,
@@ -470,6 +475,7 @@ def main():
                     max_eval_workers=args.max_eval_workers,
                     train_windows=sa_windows,
                     train_targets=sa_targets,
+                    test_segments=norm_te,
                 )
 
             elif model_name in SOTA_MODELS and not args.no_epoch_eval:

@@ -23,6 +23,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset, Subset
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._boundary_safe_window import per_entity_concat
 from tqdm import tqdm
 
 from .model import MTFA, my_kl_loss
@@ -225,49 +226,73 @@ class TFMAEBaseline:
 
         return self
 
-    def predict(self, test_X: np.ndarray) -> np.ndarray:
-        """Compute 1D anomaly score per timestep — paper-faithful inference.
+    def _raw_scores(self, sub_X: np.ndarray) -> np.ndarray:
+        """RAW per-timestep score producer for ONE entity's (already-scaled) test slice.
+
+        Runs the reference-faithful non-overlap (stride = win_size) walk + MTFA inference +
+        per-window softmax-KL energy + concat/reshape + tail/head fill, returning a finite
+        ``(len(sub_X),)`` score. NO cross-entity dependence: windows are formed within
+        ``sub_X`` only, so no window can span an entity boundary when this is called per-entity
+        by ``per_entity_concat``. Identical to the legacy single-array path when ``sub_X`` is the
+        whole (scaled) test array (single-entity / None) — bit-identical NO-OP.
 
         Reference: `LMissher/TFMAE @ main`
-          - `data_factory/data_loader.py::SMDSegLoader` (mode='test'):
-              non-overlap walk with stride = win_size
-              (`__len__ = (T - W) // W + 1`,
-               `__getitem__` returns `self.test[index*W : index*W + W]`
-               since the `step` passed to `__init__` is hardcoded to 1).
-          - `solver.py::Solver.test()`:
-              per-window per-position score = `softmax(temperature * (adv + con), dim=-1)`,
-              aggregated via `np.concatenate(attens_energy, axis=0).reshape(-1)` (flatten),
-              i.e., one score per timestep within each non-overlap window, concatenated.
-          - Tail handling in reference: IMPLICIT_NONE — the trailing `T mod W` timesteps
-            are silently dropped because labels come from the same loader.
+          - `data_factory/data_loader.py::SMDSegLoader` (mode='test'): non-overlap walk,
+              stride = win_size (`__len__ = (T - W)//W + 1`, `__getitem__` -> `test[i*W : i*W+W]`).
+          - `solver.py::Solver.test()`: per-window per-position score =
+              `softmax(temperature*(adv+con), dim=-1)` (softmax is OVER the window's own time
+              axis — a within-window operation, NOT a whole-test post-process), aggregated via
+              `np.concatenate(..., axis=0).reshape(-1)`.
+          - Tail handling in reference: IMPLICIT_NONE — trailing `T mod W` timesteps dropped.
 
-        Pipeline contract requires output length == T_test exactly. Per user-decided
-        fallback (Option B), pad the tail by repeating the last valid score, and pad
-        the head (if any) by forward-fill from the first valid score.
+        Pipeline contract requires output length == len(sub_X) exactly. Per user-decided
+        fallback (Option B): tail repeat-last, head forward-fill.
+
+        EDGE CASE (short slice, len(sub_X) < win_size): the non-overlap walk yields zero
+        windows. Instead of crashing we edge-pad the slice up to one full ``win_size`` window
+        (repeat the last row), run a single inference, softmax within that padded window, and
+        keep the first ``len(sub_X)`` per-timestep scores. This preserves the within-window
+        softmax-KL semantics and returns finite scores for every timestep of the short entity.
         """
-        if self.model is None:
-            raise RuntimeError("Model not trained. Call fit() first.")
-        if self.scaler is None:
-            raise RuntimeError("Scaler not fit. Call fit() first.")
-
-        # Apply paper-faithful StandardScaler.transform on test data (train-only fit).
-        test_X = self.scaler.transform(test_X).astype(np.float32)
-
-        N_test, n_features = test_X.shape
-        if N_test < self.win_size:
-            raise ValueError(
-                f"Test sequence length {N_test} shorter than win_size {self.win_size}"
-            )
-
+        sub_X = np.asarray(sub_X, dtype=np.float32)
+        N_test, n_features = sub_X.shape
         W = self.win_size
         T = self.k_temperature
+
+        self.model.eval()
+
+        # ---- Edge case: entity slice shorter than one window. Pad to W, score, truncate. ----
+        if N_test < W:
+            pad = W - N_test
+            # Edge-pad (repeat last row) to a single full window; harmless if all-equal.
+            padded = np.concatenate(
+                [sub_X, np.repeat(sub_X[-1:], pad, axis=0)], axis=0
+            ).astype(np.float32)
+            with torch.no_grad():
+                input_x = torch.from_numpy(padded[None, :, :]).to(self.device)
+                tematt, freatt = self.model(input_x)
+                adv = None
+                con = None
+                for u in range(len(freatt)):
+                    freatt_norm = freatt[u] / torch.unsqueeze(
+                        torch.sum(freatt[u], dim=-1), dim=-1
+                    )
+                    adv_u = my_kl_loss(tematt[u], freatt_norm.detach()) * T
+                    con_u = my_kl_loss(freatt_norm, tematt[u].detach()) * T
+                    if u == 0:
+                        adv, con = adv_u, con_u
+                    else:
+                        adv = adv + adv_u
+                        con = con + con_u
+                metric = torch.softmax((adv + con), dim=-1)  # [1, W]
+            win_scores = metric.cpu().numpy().reshape(-1).astype(np.float32)
+            return win_scores[:N_test].copy()
 
         # Reference-faithful non-overlap walk: stride = win_size.
         # n_windows matches reference `__len__ = (T - W) // W + 1`.
         n_windows = (N_test - W) // W + 1
         valid_len = n_windows * W  # = reference's effective output length
 
-        self.model.eval()
         per_window_scores: list = []  # each entry: np.ndarray of shape (B, W)
         n_batches = (n_windows + self.batch_size - 1) // self.batch_size
 
@@ -283,7 +308,7 @@ class TFMAEBaseline:
                 )
                 for j, w_idx in enumerate(range(batch_start, batch_end)):
                     s = w_idx * W
-                    batch_windows[j] = test_X[s : s + W]
+                    batch_windows[j] = sub_X[s : s + W]
 
                 input_x = torch.from_numpy(batch_windows).to(self.device)
                 tematt, freatt = self.model(input_x)
@@ -316,7 +341,7 @@ class TFMAEBaseline:
             print()
 
         # Reference-faithful aggregation: np.concatenate(..., axis=0).reshape(-1)
-        # → flat (n_windows * W,) sequence aligned to test_X[0 : valid_len].
+        # → flat (n_windows * W,) sequence aligned to sub_X[0 : valid_len].
         valid_scores = (
             np.concatenate(per_window_scores, axis=0).reshape(-1).astype(np.float32)
         )
@@ -325,7 +350,7 @@ class TFMAEBaseline:
         )
 
         # ---- Option B fallback (user-decided, IMPLICIT_NONE policy) ----
-        # Reference's output naturally aligns to test_X[0:valid_len] (head_len = 0,
+        # Reference's output naturally aligns to sub_X[0:valid_len] (head_len = 0,
         # tail_len = N_test - valid_len). Repeat-last for tail; forward-fill for head
         # (no-op when head_len = 0, which is the typical case).
         scores = np.empty(N_test, dtype=np.float32)
@@ -341,6 +366,47 @@ class TFMAEBaseline:
             scores[head_len + valid_len:] = valid_scores[-1]
 
         return scores
+
+    def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
+        """Compute 1D anomaly score per timestep — paper-faithful inference.
+
+        BOUNDARY-SAFE TEST WINDOWING: on multi-entity datasets (SMD machines / SMAP-MSL
+        channels / Exathlon apps) the test array is a concatenation of independent entities.
+        The reference non-overlap (stride = win_size) walk over the WHOLE concatenated array
+        would form windows that span an entity boundary, mixing two entities and corrupting
+        the boundary-region scores. We route the windowing + inference + per-window->per-
+        timestep mapping (incl. tail/head fill) through ``per_entity_concat``, which runs the
+        RAW producer (``self._raw_scores``) on each entity's test slice INDEPENDENTLY (so no
+        window crosses a boundary) and concatenates. ``test_segments`` are the per-entity
+        (lo, hi) TEST-LOCAL slices from the SAME source as normalization
+        (``loader.get_file_norm_segments()`` test side). None / single-entity / non-tiling ->
+        ONE call over the whole array == bit-identical legacy behaviour (helper no-op).
+
+        NORMALIZATION (untouchable-norm class — UNCHANGED): TFMAE self-normalizes with a
+        ``StandardScaler`` fit on TRAIN only, then ``.transform`` applied to test. This affine
+        transform does NOT depend on the test array contents, so applying it over the WHOLE test
+        BEFORE per-entity windowing is bit-identical to applying it per-slice — we keep the
+        whole-test transform (no per-entity normalization) and only make the WINDOWING
+        boundary-safe.
+
+        POST-PROCESSING: TFMAE has NO whole-test score post-processing. The per-window
+        ``softmax(adv+con, dim=-1)`` is computed independently WITHIN each window (over that
+        window's own time axis), so it is part of the RAW producer, not a series-level step.
+        Hence ``per_entity_concat`` simply concatenates the per-entity raw scores; nothing is
+        re-applied afterward and post-processing granularity is unchanged.
+        """
+        if self.model is None:
+            raise RuntimeError("Model not trained. Call fit() first.")
+        if self.scaler is None:
+            raise RuntimeError("Scaler not fit. Call fit() first.")
+
+        # Apply paper-faithful StandardScaler.transform on test data (train-only fit).
+        # Done over the WHOLE test BEFORE windowing — slicing-invariant (see docstring).
+        test_X = self.scaler.transform(test_X).astype(np.float32)
+
+        # Boundary-safe: window + infer + per-window energy per-entity, then concat.
+        # Single-entity / None -> exactly self._raw_scores(test_X) (legacy NO-OP).
+        return per_entity_concat(test_X, test_segments, self._raw_scores).astype(np.float32)
 
     def save(self, save_dir: Path) -> None:
         if self.model is None:

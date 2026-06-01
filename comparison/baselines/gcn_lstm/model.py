@@ -35,6 +35,7 @@ from typing import Optional, Tuple
 import numpy as np
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._boundary_safe_window import entity_test_slices
 import torch
 import torch.nn as nn
 from scipy.stats import iqr
@@ -621,69 +622,108 @@ class GCNLSTMBaseline:
             return smoothed
         return err_scores
 
-    def predict(self, test_data: np.ndarray) -> np.ndarray:
-        """Compute paper-faithful anomaly scores.
+    def _infer_window_residuals(self, sub_data: np.ndarray) -> np.ndarray:
+        """RAW per-entity producer: stride-1 windowing + model inference → per-window residual.
 
-        Args:
-            test_data: (T_test, n_features) float32.
+        Boundary-safe by construction — operates on ONE entity's test slice only, so no window
+        spans an entity boundary. Returns the per-sensor absolute residual matrix
+        ``(n_windows, n_sensors)`` (NOT collapsed / NOT post-processed). Reference residual:
+        ``np.abs(predictions - orig_target)`` (model_def.py::test_embedder L426-435).
 
-        Returns:
-            (T_test,) float32 — higher = more anomalous.
-
-        Reference inference behavior (QuoVadisTAD `quovadis_tad/model_utils/model_def.py::test_embedder`,
-        lines 423-436 + 407-409): stride=1 sliding windows → per-window per-sensor
-        `abs(pred - target)` → median-IQR normalize + 5-box smooth → MAX-over-sensors.
-        Reference EXPLICITLY TRUNCATES labels: `gt_labels = labels[input_sequence_length:]`,
-        producing a score sequence of length `T_test - seq_len` aligned to t ∈ [seq_len, T_test - 1].
-
-        Per Phase 2.5 user direction: `./comparison/` pipeline cannot truncate labels, so we
-        apply Option B fallback — forward-fill the first `seq_len` head timesteps from the
-        first valid per-timestep score. There is no tail gap (next-step forecasting with
-        stride=1 covers t ∈ [seq_len, T_test - 1] inclusively), so tail repeat-last is N/A.
+        Edge-safe: a slice with ``len(sub_data) <= seq_len`` yields 0 windows; ``_create_windows``
+        already returns empty arrays for that case, so an empty ``(0, n_sensors)`` is returned and
+        the caller fills that entity's timesteps via the documented fallback.
         """
-        if self.model is None:
-            raise RuntimeError("Model not fitted. Call fit() first.")
-
-        self.model.eval()
-
-        # Build test windows (reference stride=1 per Keras `timeseries_dataset_from_array`
-        # default `sequence_stride=1`). Each window i predicts target at t = i + seq_len.
-        windows, targets = self._create_windows(test_data, stride=1)
-        n_samples = len(test_data)
-
+        windows, targets = self._create_windows(sub_data, stride=1)
         if len(windows) == 0:
-            return np.zeros(n_samples, dtype=np.float32)
+            return np.zeros((0, self.n_features), dtype=np.float32)
 
-        # Inference in batches
-        n_batches = (len(windows) + self.batch_size - 1) // self.batch_size
         residuals: list = []  # each (B, n_features)
-        start_time = time.time()
-
-        if self.verbose:
-            print(f"  Inference: {len(windows):,} windows in {n_batches} batches")
-
         with torch.no_grad():
-            for batch_idx, i in enumerate(range(0, len(windows), self.batch_size)):
+            for i in range(0, len(windows), self.batch_size):
                 bw = torch.from_numpy(windows[i:i + self.batch_size]).to(self.device)
                 bt = targets[i:i + self.batch_size]  # numpy
                 pred = self.model(bw).cpu().numpy()
                 # per-sensor absolute residual (reference: np.abs(predictions - orig_target))
                 residuals.append(np.abs(pred - bt))
 
-                if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    elapsed = time.time() - start_time
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}% | "
-                          f"Elapsed: {elapsed:.1f}s", end="")
-                    sys.stdout.flush()
+        return np.concatenate(residuals, axis=0).astype(np.float32)
+
+    def predict(self, test_data: np.ndarray, test_segments=None) -> np.ndarray:
+        """Compute paper-faithful anomaly scores (boundary-safe TEST windowing).
+
+        Args:
+            test_data: (T_test, n_features) float32. Already normalized by driver (Path A).
+            test_segments: per-entity (lo, hi) TEST-LOCAL slices (from the SAME source as
+                per-entity normalization, ``loader.get_file_norm_segments()`` test side). None /
+                single-entity / non-tiling → ONE pass over the whole array == legacy behaviour.
+
+        Returns:
+            (T_test,) float32 — higher = more anomalous.
+
+        Reference inference behavior (QuoVadisTAD `quovadis_tad/model_utils/model_def.py::test_embedder`,
+        L423-436 + 407-409): stride=1 sliding windows → per-window per-sensor
+        `abs(pred - target)` → median-IQR normalize + 5-box smooth → MAX-over-sensors.
+        Reference EXPLICITLY TRUNCATES labels: `gt_labels = labels[input_sequence_length:]`,
+        producing a score sequence of length `T_test - seq_len` aligned to t ∈ [seq_len, T_test - 1].
+
+        Per Phase 2.5 user direction: `./comparison/` pipeline cannot truncate labels, so we
+        apply Option B fallback — forward-fill the first `seq_len` head timesteps from the
+        first valid per-timestep score (applied PER ENTITY). There is no tail gap (next-step
+        forecasting with stride=1 covers t ∈ [seq_len, Li - 1] of each entity), so tail
+        repeat-last is N/A in the nominal case.
+
+        Boundary-safety (multi-file datasets: SMD / SMAP-MSL / Exathlon):
+            RAW PRODUCER (windowing + inference → per-window per-sensor residual) runs INDEPENDENTLY
+            on each entity's test slice via the shared single-source-of-truth helper
+            (`_boundary_safe_window.entity_test_slices`), so NO window spans an entity boundary.
+            WHOLE-TEST POST-PROC (median-IQR over axis=0, box-smooth, MAX-over-sensors) is applied
+            ONCE on the concatenated window-residual — EXACTLY as before, granularity UNCHANGED
+            (`normalise_scores` uses np.median/iqr over the full window axis: data_utils.py L34-35).
+            Note: per_entity_concat returns (n_test,) 1-D and cannot carry the per-sensor dim that
+            the whole-test median-IQR needs, so we use its sibling `entity_test_slices` (same module,
+            same boundary-safe tiling) and concat the per-window residual MATRIX on axis 0.
+            Single-entity / None → ONE entity slice → bit-identical to the legacy path.
+        """
+        if self.model is None:
+            raise RuntimeError("Model not fitted. Call fit() first.")
+
+        self.model.eval()
+
+        n_samples = len(test_data)
+        test_data = np.asarray(test_data, dtype=np.float32)
+        slices = entity_test_slices(n_samples, test_segments)
+
+        # --- RAW PRODUCER (per-entity, boundary-safe): windowing + inference → residual ---
+        # Per entity, record its (lo, hi) and how many windows it contributed, so we can scatter
+        # the post-processed per-window scores back to the right timesteps with per-entity head-fill.
+        start_time = time.time()
+        if self.verbose:
+            tag = "1 entity (whole array)" if len(slices) == 1 else f"{len(slices)} entities (boundary-safe)"
+            print(f"  Inference (per-entity windowing): {tag}")
+
+        delta_blocks: list = []          # each (n_windows_i, n_sensors)
+        entity_meta: list = []           # (lo, hi, n_windows_i)
+        for (lo, hi) in slices:
+            delta_i = self._infer_window_residuals(test_data[lo:hi])
+            delta_blocks.append(delta_i)
+            entity_meta.append((lo, hi, len(delta_i)))
 
         if self.verbose:
-            total_time = time.time() - start_time
-            print(f"\n  Inference complete: {total_time:.1f}s")
+            total_windows = int(sum(m[2] for m in entity_meta))
+            print(f"\n  Inference complete: {time.time() - start_time:.1f}s "
+                  f"({total_windows:,} windows over {len(slices)} entity slice(s))")
 
-        # Stack to (n_windows, n_sensors) absolute residual
-        delta = np.concatenate(residuals, axis=0).astype(np.float32)
+        # Concatenate the per-window per-sensor residuals across entities (axis 0 = window axis).
+        # Single-entity → this is exactly the legacy `delta`.
+        delta = (np.concatenate(delta_blocks, axis=0).astype(np.float32)
+                 if delta_blocks else np.zeros((0, self.n_features), dtype=np.float32))
 
+        if len(delta) == 0:
+            # No valid windows anywhere (every entity shorter than seq_len, or empty test).
+            return np.zeros(n_samples, dtype=np.float32)
+
+        # --- WHOLE-TEST POST-PROC (applied ONCE, granularity UNCHANGED) ---
         # per-sensor median-IQR normalize + box smooth (reference normalise_scores)
         smoothed = self._normalise_scores(
             delta,
@@ -692,36 +732,34 @@ class GCNLSTMBaseline:
             smooth_window=self.score_smooth_window,
             epsilon=self.score_iqr_epsilon,
         )
-
         # Aggregate over sensors: MAX  (reference notebook cells 13/16/19: `.max(1)`)
-        per_window_score = smoothed.max(axis=-1).astype(np.float32)  # (n_windows,)
+        per_window_score = smoothed.max(axis=-1).astype(np.float32)  # (total_windows,)
 
-        # Map back to (T_test,). Window i's target lives at t = i + seq_len.
-        # `_create_windows(stride=1)` returns n_windows = n_samples - seq_len windows
-        # (i ∈ [0, n_samples - seq_len - 1]), covering t ∈ [seq_len, n_samples - 1].
-        # So no tail gap exists — only the first `seq_len` head positions need filling.
+        # --- Map per-window scores back to (T_test,), PER ENTITY (head-fill per entity) ---
+        # For entity (lo, hi) with n_windows_i windows: window j → timestep lo + seq_len + j,
+        # covering t ∈ [lo + seq_len, hi - 1]; the first `seq_len` head positions [lo, lo+seq_len)
+        # forward-fill from that entity's first valid score (Option B, applied per entity).
         scores = np.empty(n_samples, dtype=np.float32)
-        valid_start = self.seq_len  # first index with a valid per-timestep score
-        n_valid = len(per_window_score)
-        valid_end = valid_start + n_valid  # exclusive; expected = n_samples
-
-        # Place valid scores
-        scores[valid_start:valid_end] = per_window_score
-
-        # --- Option B head fallback (user-directed substitution for EXPLICIT_TRUNCATE) ---
-        # Reference drops first `seq_len` labels; pipeline cannot truncate, so forward-fill
-        # head positions from the first valid score.
-        if valid_start > 0 and n_valid > 0:
-            scores[:valid_start] = per_window_score[0]
-        elif n_valid == 0:
-            scores[:] = 0.0
-
-        # --- Option B tail fallback (only needed in degenerate cases) ---
-        # In nominal stride=1 next-step forecasting, valid_end == n_samples, so this branch
-        # never executes. Kept defensively in case `_create_windows` returns fewer windows
-        # than expected (e.g., future stride change).
-        if valid_end < n_samples and n_valid > 0:
-            scores[valid_end:] = per_window_score[-1]
+        cursor = 0
+        for (lo, hi, n_windows_i) in entity_meta:
+            if n_windows_i == 0:
+                # Degenerate entity (Li <= seq_len): no own valid score. Fill 0.0 (neutral) —
+                # NEVER borrow another entity's score (would be cross-entity leakage). In practice
+                # SMD/SMAP/Exathlon test entities are >> seq_len=5, so this never triggers.
+                scores[lo:hi] = 0.0
+                continue
+            block = per_window_score[cursor:cursor + n_windows_i]
+            cursor += n_windows_i
+            valid_start = lo + self.seq_len            # first index with a valid per-timestep score
+            valid_end = valid_start + n_windows_i      # exclusive; nominally == hi
+            scores[valid_start:valid_end] = block
+            # Option B head fallback (per entity): forward-fill the head seq_len from first valid.
+            if valid_start > lo:
+                scores[lo:valid_start] = block[0]
+            # Defensive tail fallback (never executes in nominal stride=1 next-step forecasting,
+            # where valid_end == hi). Kept in case _create_windows returns fewer windows.
+            if valid_end < hi:
+                scores[valid_end:hi] = block[-1]
 
         # Final guard
         scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)

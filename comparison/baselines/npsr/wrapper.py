@@ -54,6 +54,7 @@ from comparison.baselines._per_file_norm import (
     fit_transform_train_per_file,
     transform_test_per_file,
 )
+from comparison.baselines._boundary_safe_window import per_entity_concat
 
 
 # ---------------------------------------------------------------------------
@@ -536,7 +537,6 @@ class NPSRBaseline:
     def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
         if self.model is None:
             raise RuntimeError("Model not trained. Call fit() first.")
-        T_full = len(test_X)
         F = test_X.shape[1]
         if F != self.n_features:
             raise ValueError(f"feature mismatch: test has {F}, fit had {self.n_features}")
@@ -551,27 +551,18 @@ class NPSRBaseline:
         if train_X is None:
             raise RuntimeError("Train data cache missing — wrapper must be fit() first.")
 
-        # Compute reconstruction errors for train (no_rep) + test
-        # M_pt errors
+        # ---- θ_N : single global training-set threshold (computed ONCE, NOT
+        # test windowing) -------------------------------------------------------
+        # The reference computes θ_N from the (concatenated) TRAIN nominality and
+        # uses ONE θ_N across all entities (utils.py). θ_N depends only on TRAIN
+        # data — it is invariant to how the TEST series is sliced — so it is
+        # computed here, before the per-entity test loop, and passed UNCHANGED
+        # into every entity's induction. Routing θ_N per-entity would CHANGE the
+        # score formula (different threshold per entity), which is forbidden.
         trn_err_pt = self._compute_pt_error(train_X, win_size=self.win_size)  # (T_trn, F)
-        tst_err_pt = self._compute_pt_error(test_X_n, win_size=self.win_size)  # (T_full, F)
-        # M_seq errors
         trn_err_seq = self._compute_seq_error(train_X)                          # (N*delta, F)
-        tst_err_seq = self._compute_seq_error(test_X_n)                         # (N'*delta, F)
-
-        # Align M_pt errors to the same temporal span as M_seq for both train/test
         trn_pt_aligned = self._align_pt_to_seq(trn_err_pt, len(trn_err_seq))
-        tst_pt_aligned = self._align_pt_to_seq(tst_err_pt, len(tst_err_seq))
-
-        # Nominality scores
         trn_Nt = _nominality_score(delta_xp=trn_pt_aligned, delta_x0=trn_err_seq)
-        tst_Nt = _nominality_score(delta_xp=tst_pt_aligned, delta_x0=tst_err_seq)
-        # Anomaly base score = (Δ_xp²).mean(axis=-1) — reference's tst_At
-        trn_At = (trn_pt_aligned ** 2).mean(axis=-1)
-        tst_At = (tst_pt_aligned ** 2).mean(axis=-1)
-        del trn_At  # only used implicitly via θ_N; kept above for clarity
-
-        # θ_N from training nominality
         if len(trn_Nt) == 0:
             theta_N = 1.0
         else:
@@ -583,61 +574,96 @@ class NPSRBaseline:
             theta_N = max(float(np.nanmean(trn_Nt) if len(trn_Nt) else 1.0), 1e-8)
         self._theta_N = theta_N
 
-        # Induced anomaly score (default d=16, gate='soft')
-        d_eff = max(1, min(self.induction_d, len(tst_At) - 1))
-        induced = _induced_anomaly_score(
-            nominality_score=tst_Nt,
-            anomaly_score=tst_At,
-            theta_N=theta_N,
-            d=d_eff,
-            gate_func=self.gate_func,
-        )
-
-        # ---- Reference inference behavior (re-verified 2026-05-24) ----
-        # https://raw.githubusercontent.com/andrewlai61616/NPSR/main/utils/utils.py
-        #   lab_c       = lab[pred_dl//2 : len(lab) - (len(lab)-pred_dl)%delta - pred_dl//2]
-        #   tst_use_pts = [arange(pred_dl//2, len(lab) - (len(lab)-pred_dl)%delta - pred_dl//2),  # M_pt
-        #                  arange(len(lab_c))]                                                    # M_seq
-        # Reference EXPLICIT_OTHER "gamma-trim": discards the first `pred_dl//2` ("left gamma"),
-        # last `pred_dl//2 + (len-pred_dl)%delta` ("right gamma + remainder") timesteps from
-        # BOTH the M_pt/M_seq aligned errors AND the labels — evaluation is performed on the
-        # trimmed `lab_c` length.
-        #
-        # Our `induced` already covers exactly `lab_c`'s span: [pred_dl//2, pred_dl//2 + N_pairs*delta).
-        # However, `./comparison/` cannot truncate labels (length contract: predict() -> (T_test,)),
-        # so we cannot adopt the reference's truncate behavior verbatim. Per dispatch (Option B
-        # fallback for EXPLICIT_OTHER/gamma-trim where label-truncation is not portable):
-        #   head_len timesteps (left gamma): forward-fill from first valid score
-        #   tail_len timesteps (right gamma + remainder): repeat-last per-timestep score
-        scores = np.empty(T_full, dtype=np.float32)
+        # ---- RAW per-entity producer ----------------------------------------
+        # NPSR's official evaluation is *explicitly* per-entity:
+        #   utils/evaluation.py:get_induced_anomaly_score carries the comment
+        #   "# note that for multi-entity datasets, only one entity should be
+        #    input at a time".
+        # So the entire test-side chain — non-overlap (no_rep) windowing of M_pt
+        # & M_seq, the (x_cut,y_cut) reshape, error alignment, nominality + base
+        # anomaly score, the induced-anomaly-score sliding cumulative product,
+        # and the gamma-trim head/tail fill — must run on ONE entity at a time.
+        # `per_entity_concat` runs this `raw_fn` on each entity's own test slice
+        # (TEST-LOCAL `test_segments` from `get_file_norm_segments()`, the SAME
+        # source as the per-file normalization above), so no window can cross an
+        # entity boundary, and concatenates the per-timestep raw scores.
+        # Single-entity / None / non-tiling segments -> ONE call over the whole
+        # `test_X_n` == bit-identical legacy behaviour (helper guarantees no-op).
         head_len = self.pred_dl // 2
-        valid_len = len(induced)
-        # Guard: if induction collapsed (T_full < pred_dl + delta) fall back to all-zeros
-        if valid_len == 0:
-            scores.fill(0.0)
-        else:
-            # Place valid (induced) scores at their natural offset
+        delta_dl = self.pred_dl + self.delta
+
+        def raw_fn(sub_X: np.ndarray) -> np.ndarray:
+            """Per-entity RAW NPSR scores for ``sub_X`` (Li, F) -> (Li,) float32.
+
+            Edge-safe: an entity slice too short to window for M_pt
+            (``Li < win_size``) or M_seq (``Li < pred_dl + delta``) cannot
+            produce an induced score, so it falls back to an all-zeros
+            (perfectly-nominal) score of the slice length — never crashes.
+            """
+            L = len(sub_X)
+            out = np.empty(L, dtype=np.float32)
+            # Short-slice fallback: not enough timesteps to window either branch.
+            if L < self.win_size or L < delta_dl:
+                out.fill(0.0)
+                return out
+
+            # M_pt / M_seq test errors (non-overlap windowing, this slice only).
+            err_pt = self._compute_pt_error(sub_X, win_size=self.win_size)  # (L, F)
+            err_seq = self._compute_seq_error(sub_X)                         # (N*delta, F)
+            pt_aligned = self._align_pt_to_seq(err_pt, len(err_seq))
+            Nt = _nominality_score(delta_xp=pt_aligned, delta_x0=err_seq)
+            At = (pt_aligned ** 2).mean(axis=-1)  # reference tst_At
+
+            # Induced anomaly score (default d=16, gate='soft') over THIS entity.
+            d_eff = max(1, min(self.induction_d, len(At) - 1))
+            induced = _induced_anomaly_score(
+                nominality_score=Nt,
+                anomaly_score=At,
+                theta_N=theta_N,
+                d=d_eff,
+                gate_func=self.gate_func,
+            )
+
+            # ---- Reference inference behavior (re-verified 2026-06-02) ----
+            # https://raw.githubusercontent.com/andrewlai61616/NPSR/main/utils/utils.py
+            #   lab_c = lab[pred_dl//2 : len(lab) - (len(lab)-pred_dl)%delta - pred_dl//2]
+            # Reference EXPLICIT_OTHER "gamma-trim": discards the first `pred_dl//2`
+            # ("left gamma") and last `pred_dl//2 + (len-pred_dl)%delta` ("right
+            # gamma + remainder") timesteps from BOTH the aligned errors AND the
+            # labels. Our `induced` already covers exactly `lab_c`'s span
+            # [pred_dl//2, pred_dl//2 + N_pairs*delta). `./comparison/` cannot
+            # truncate labels (length contract: predict() -> (T_test,)), so per
+            # dispatch we use Option B for the boundary timesteps:
+            #   head (left gamma): forward-fill from first valid score
+            #   tail (right gamma + remainder): repeat-last valid score
+            valid_len = len(induced)
+            if valid_len == 0:
+                out.fill(0.0)
+                return out
             valid_end = head_len + valid_len
-            # Clamp valid_end in pathological short-input cases
-            if valid_end > T_full:
-                valid_end = T_full
+            if valid_end > L:  # pathological short-input clamp
+                valid_end = L
                 valid_len_eff = valid_end - head_len
-                scores[head_len:valid_end] = induced[:valid_len_eff].astype(np.float32)
+                out[head_len:valid_end] = induced[:valid_len_eff].astype(np.float32)
                 valid_first = float(induced[0])
                 valid_last = float(induced[valid_len_eff - 1])
             else:
-                scores[head_len:valid_end] = induced.astype(np.float32)
+                out[head_len:valid_end] = induced.astype(np.float32)
                 valid_first = float(induced[0])
                 valid_last = float(induced[-1])
-            # Option B fallback — head: forward-fill from first valid score
             if head_len > 0:
-                scores[:head_len] = valid_first
-            # Option B fallback — tail: repeat-last per-timestep valid score
-            tail_len = T_full - valid_end
+                out[:head_len] = valid_first
+            tail_len = L - valid_end
             if tail_len > 0:
-                scores[valid_end:] = valid_last
+                out[valid_end:] = valid_last
+            return out
 
-        # Replace any NaN/Inf with safe values (max-finite-or-zero).
+        # Boundary-safe: each entity windowed/scored independently, then concat.
+        scores = per_entity_concat(test_X_n, test_segments, raw_fn)
+
+        # ---- Whole-test post-proc: finite safety net (granularity UNCHANGED) --
+        # Applied ONCE on the concatenated raw scores, exactly as before — a
+        # global NaN/Inf scrub, not a re-aggregation across entities.
         if not np.isfinite(scores).all():
             finite_max = float(np.nanmax(scores[np.isfinite(scores)])) if np.isfinite(scores).any() else 0.0
             scores = np.where(np.isfinite(scores), scores, finite_max)

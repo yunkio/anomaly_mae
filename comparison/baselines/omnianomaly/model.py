@@ -44,6 +44,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._boundary_safe_window import per_entity_concat
 
 
 # ---------------------------------------------------------------------------
@@ -563,21 +564,26 @@ class OmniAnomalyBaseline:
 
         return self
 
-    def predict(self, test_data: np.ndarray) -> np.ndarray:
-        """Compute (T_test,) float32 anomaly scores via last-position-in-window scoring."""
-        if self.model is None:
-            raise RuntimeError("Model not fitted. Call fit() first.")
+    def _raw_scores_one_entity(self, sub_data: np.ndarray) -> np.ndarray:
+        """RAW per-timestep scores for ONE entity's test slice, no cross-entity coupling.
 
-        self.model.eval()
-        n_samples, n_features = test_data.shape
+        This is the model's complete RAW score producer: sliding-window (stride=1) over
+        ``sub_data`` ONLY, model inference, last-position-in-window assignment, and head fill.
+        Called in isolation per entity by ``per_entity_concat`` so no window can span an
+        entity boundary. Returns ``(len(sub_data),)`` float32.
+
+        Edge-safe: if the slice is shorter than ``seq_len`` (n_windows == 0), no window can
+        be formed for this entity, so we return all-zeros for the slice (finite, non-crashing
+        — identical to the legacy whole-array behaviour when the entire test set is too short).
+        OmniAnomaly applies NO whole-test post-processing, so the concatenation of these raw
+        per-entity scores IS the final score (post-proc granularity unchanged == none).
+        """
+        sub_data = np.asarray(sub_data, dtype=np.float32)
+        n_samples, n_features = sub_data.shape
         n_windows = max(0, n_samples - self.seq_len + 1)
 
         all_scores = []
         n_batches = (n_windows + self.batch_size - 1) // self.batch_size
-        start_time = time.time()
-
-        if self.verbose:
-            print(f"  Inference: {n_windows:,} windows in {n_batches} batches")
 
         with torch.no_grad():
             for batch_idx in range(n_batches):
@@ -588,7 +594,7 @@ class OmniAnomalyBaseline:
                     (actual_bs, self.seq_len, n_features), dtype=np.float32
                 )
                 for j, w_idx in enumerate(range(batch_start, batch_end)):
-                    batch_windows[j] = test_data[w_idx:w_idx + self.seq_len]
+                    batch_windows[j] = sub_data[w_idx:w_idx + self.seq_len]
 
                 batch_x = torch.from_numpy(batch_windows).to(self.device)
                 window_scores = self.model.get_anomaly_score(
@@ -596,17 +602,6 @@ class OmniAnomalyBaseline:
                 )  # (B, T)
                 last_pos = window_scores[:, -1].cpu().numpy()
                 all_scores.append(last_pos)
-
-                if self.verbose and n_batches > 0 and (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    elapsed = time.time() - start_time
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}% | "
-                          f"Elapsed: {elapsed:.1f}s", end="")
-                    sys.stdout.flush()
-
-        if self.verbose:
-            total_time = time.time() - start_time
-            print(f"\n  Inference complete: {total_time:.1f}s")
 
         scores = np.zeros(n_samples, dtype=np.float32)
         if all_scores:
@@ -616,11 +611,43 @@ class OmniAnomalyBaseline:
                 if target_idx < n_samples:
                     scores[target_idx] = score
             # Forward-fill first (seq_len-1) positions with first window's score so the
-            # output length contract (T_test,) is preserved.
+            # output length contract is preserved for this entity slice.
             for i in range(min(self.seq_len - 1, n_samples)):
                 scores[i] = window_scores_all[0]
 
         return scores
+
+    def predict(self, test_data: np.ndarray, test_segments=None) -> np.ndarray:
+        """Compute (T_test,) float32 anomaly scores via last-position-in-window scoring.
+
+        Boundary-safe windowing (multi-file datasets): the RAW score producer
+        (sliding-window + model inference + last-position mapping + head fill) is run
+        INDEPENDENTLY on each entity's own test slice via ``per_entity_concat``, so no
+        window straddles an entity boundary (e.g. SMD machine-k tail + machine-(k+1) head).
+        ``test_segments`` are the per-entity TEST-LOCAL (lo, hi) slices from the SAME source
+        as per-entity normalization (``loader.get_file_norm_segments()`` test side).
+        ``None`` / single-entity / non-tiling -> ONE call over the whole array == EXACT
+        legacy behaviour (bit-identical NO-OP). OmniAnomaly applies no whole-test
+        post-processing, so concatenated raw scores are the final output unchanged.
+        """
+        if self.model is None:
+            raise RuntimeError("Model not fitted. Call fit() first.")
+
+        self.model.eval()
+        test_data = np.asarray(test_data, dtype=np.float32)
+
+        if self.verbose:
+            n_windows_total = max(0, len(test_data) - self.seq_len + 1)
+            print(f"  Inference: {n_windows_total:,} windows (boundary-safe per-entity)")
+        start_time = time.time()
+
+        scores = per_entity_concat(test_data, test_segments, self._raw_scores_one_entity)
+
+        if self.verbose:
+            total_time = time.time() - start_time
+            print(f"\n  Inference complete: {total_time:.1f}s")
+
+        return scores.astype(np.float32)
 
     # ------------------------------------------------------------------
     # Persistence

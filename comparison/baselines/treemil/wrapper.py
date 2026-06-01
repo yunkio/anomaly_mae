@@ -63,6 +63,7 @@ from comparison.baselines._per_file_norm import (
     fit_transform_train_per_file,
     transform_test_per_file,
 )
+from comparison.baselines._boundary_safe_window import per_entity_concat
 
 
 # Upstream effective defaults (train.py construction call + argparse; see 08_).
@@ -316,6 +317,25 @@ class TreeMILBaseline:
         is TAIL-padded with zeros to fill split_size (NEVER upstream left/head
         pad — that would shift every score). Dense scores are flattened in window
         order and TRUNCATED to len(test_X). See doc 06_.
+
+        Boundary-safe TEST windowing (2026-06-02 bswin)
+        -----------------------------------------------
+        On multi-FILE datasets (SMD machines / SMAP-MSL channels / Exathlon apps)
+        the legacy code tiled non-overlapping windows over the WHOLE concatenated
+        test array, so the window straddling two entities mixed entity-k's tail with
+        entity-(k+1)'s head and corrupted the boundary-region scores. We now route
+        the windowing + model inference + per-window→per-timestep mapping (incl. the
+        tail-pad fill) through ``per_entity_concat``: ``_raw_fn`` runs the EXACT legacy
+        per-slice logic on each entity's own test slice INDEPENDENTLY, so no window
+        can span an entity boundary, and the per-timestep RAW scores are concatenated.
+        ``test_segments`` (the per-source-FILE TEST-LOCAL (lo,hi) list, SAME source as
+        the normalization boundaries above) defines the slices. Single-entity / None /
+        non-tiling ``test_segments`` → ``per_entity_concat`` makes exactly ONE call over
+        the whole array == bit-identical legacy behaviour (NO-OP). Normalization is
+        UNCHANGED (applied on the whole array BEFORE windowing; the train-fit scalers
+        are slice-invariant). The only whole-test "post-proc" is the element-wise
+        ``nan_to_num`` sanitization, which is idempotent under concatenation and is
+        applied ONCE on the concatenated raw scores below — granularity unchanged.
         """
         if self.model is None:
             raise RuntimeError("TreeMIL.predict called before fit().")
@@ -323,31 +343,54 @@ class TreeMILBaseline:
         test_X = np.asarray(test_X, dtype=np.float32)
         if test_X.ndim != 2:
             raise ValueError(f"TreeMIL expects test_X of shape (N, F); got {test_X.shape}")
-        n = test_X.shape[0]
         T = self.split_size
 
         # Per-source-file z-score, LEAK-FREE: transform each test file by the
         # paired file's cached TRAIN StandardScaler (.transform only; no fit-on-test).
+        # Done on the WHOLE test array BEFORE per-entity windowing — the scalers are
+        # train-fit hence slice-invariant, so normalization granularity is unchanged.
         test_X = transform_test_per_file(test_X, test_segments, self._train_scalers)
 
-        n_win = (n + T - 1) // T               # ceil
-        padded_len = n_win * T
-        if padded_len > n:
-            pad = np.zeros((padded_len - n, test_X.shape[1]), dtype=np.float32)
-            test_pad = np.concatenate([test_X, pad], axis=0)   # TAIL pad
-        else:
-            test_pad = test_X
-
-        windows = test_pad.reshape(n_win, T, test_X.shape[1])   # (B, T, F)
-
         self.model.eval()
-        scores = np.empty((n_win, T), dtype=np.float32)
-        for i in range(0, n_win, self.batch_size):
-            batch = torch.from_numpy(windows[i:i + self.batch_size]).to(self.device)
-            out = self.model.get_scores(batch)
-            scores[i:i + batch.shape[0]] = out['dscore'].detach().cpu().numpy()
+        F = test_X.shape[1]
 
-        flat = scores.reshape(-1)[:n]          # flatten in window order, truncate tail pad
+        def _raw_fn(sub_X: np.ndarray) -> np.ndarray:
+            """RAW per-timestep TreeMIL score for ONE entity slice → (len(sub_X),).
+
+            Exactly the legacy non-overlap windowing (stride == split_size, ceil with
+            a zero TAIL-pad on the last window), model inference (``get_scores`` →
+            dense ``dscore``), flatten-in-window-order and truncate-to-slice-length —
+            restricted to this slice so no window crosses an entity boundary. Edge-safe
+            for a slice shorter than ``split_size``: the ceil gives ``n_win == 1`` and
+            the single window is tail-padded to ``split_size``; scores are truncated
+            back to ``len(sub_X)``, so a short entity never crashes and still receives
+            a finite per-timestep score (the padded tail steps are dropped).
+            """
+            n_sub = sub_X.shape[0]
+            n_win = (n_sub + T - 1) // T               # ceil
+            padded_len = n_win * T
+            if padded_len > n_sub:
+                pad = np.zeros((padded_len - n_sub, F), dtype=np.float32)
+                sub_pad = np.concatenate([sub_X, pad], axis=0)   # TAIL pad
+            else:
+                sub_pad = sub_X
+
+            windows = sub_pad.reshape(n_win, T, F)               # (B, T, F)
+
+            scores = np.empty((n_win, T), dtype=np.float32)
+            for i in range(0, n_win, self.batch_size):
+                batch = torch.from_numpy(windows[i:i + self.batch_size]).to(self.device)
+                out = self.model.get_scores(batch)
+                scores[i:i + batch.shape[0]] = out['dscore'].detach().cpu().numpy()
+
+            return scores.reshape(-1)[:n_sub]      # flatten in window order, truncate tail pad
+
+        # Boundary-safe: window+infer per entity (no window spans a boundary).
+        # Single-entity / None / non-tiling test_segments → ONE call over the whole
+        # array (bit-identical legacy NO-OP).
+        flat = per_entity_concat(test_X, test_segments, _raw_fn)
+
+        # Whole-test post-proc (element-wise, idempotent under concat): sanitize once.
         flat = np.nan_to_num(flat, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
         return flat
 

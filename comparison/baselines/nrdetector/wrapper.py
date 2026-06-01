@@ -82,6 +82,10 @@ import torch
 import torch.nn as nn
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+# Boundary-safe TEST windowing helper (shared single source of truth): runs the RAW
+# score producer per-entity so no window spans an entity boundary on multi-file datasets
+# (SMD machines / SMAP-MSL channels / Exathlon apps). Single-entity / None -> bit-identical no-op.
+from comparison.baselines._boundary_safe_window import per_entity_concat
 # Per-source-FILE leak-free normalization kernel (shared single source of truth).
 # nrdetector keeps its OWN scaler identity (StandardScaler) — the helper only owns
 # the per-file segment looping + leak-free fit-train / transform-test pairing.
@@ -580,59 +584,149 @@ class NRdetectorBaseline:
         #      (transductive fit-on-test = LEAK). Fix: transform the i-th test file by
         #      the i-th cached TRAIN scaler (`.transform` only, never `.fit`). Single-file
         #      / test_segments=None → the single train scaler over the whole test array
-        #      (still leak-free). nrdetector's scaler identity (StandardScaler) preserved. ----
+        #      (still leak-free). nrdetector's scaler identity (StandardScaler) preserved.
+        #      Done BEFORE windowing so the per-entity raw producer below receives an
+        #      already-normalized array (NO re-normalization). ----
         if self._scalers is None:
             raise RuntimeError("Model not fitted (no per-file scalers). Call fit() first.")
         test_X = transform_test_per_file(test_X, test_segments, self._scalers).astype(np.float32)
 
-        windows, _, _, pad = self._window(test_X, None)   # non-overlapping, front-padded
         self.encoder.eval(); self.classifier.eval()
 
-        # ---- Pass 1: per-window ACTMAP (official) + per-window segment prob.
-        #      official ACTMAP = per-window min-max of raw dense logit h=fc(out)
-        #      (extractor.py get_dpred: actmap=(h-min)/max; assigned to
-        #      self.dense_scores, solver.py "Actually is the act map"; used as
-        #      interested_instance → point_Score in rank_test). Per-window min-max
-        #      is UPSTREAM-FAITHFUL and is preserved verbatim. ----
-        act_chunks = []
-        seg_chunks = []
-        for i in range(0, len(windows), 256):
-            bx = windows[i:i + 256].to(self.device)
-            out = self.encoder.get_scores(bx)
-            h = out['dh']                                  # (B, T) raw logit (model.py get_scores)
-            actmin = torch.min(h, dim=1, keepdim=True)[0]  # extractor.py get_dpred
-            act = h - actmin
-            actmax = torch.max(act, dim=1, keepdim=True)[0]
-            act = act / (actmax + 1e-12)                   # per-window min-max → [0,1]
-            # classifier features = raw `h` (= out['h']), matching weak_scores
-            #   (extractor.py `wscores.append(out['h'])`, solver.py).
-            seg_prob, _ = self.classifier(out['h'])        # (B, 1) classifier segment prob
-            act_chunks.append(act.cpu().numpy())           # (B, T) actmap
-            seg_chunks.append(seg_prob.view(-1).cpu().numpy())  # (B,) seg prob
-        act_all = np.concatenate(act_chunks, axis=0)       # (Nw, T)
-        seg_all = np.concatenate(seg_chunks, axis=0)       # (Nw,)
+        # ==============================================================================
+        # BOUNDARY-SAFE TEST WINDOWING (2026-06-02)
+        # ------------------------------------------------------------------------------
+        # Upstream windows EACH recording FILE independently: `data_loader._load_data`
+        # loads one file's data.npy per split and `_preprocess` front-pads + splits THAT
+        # file into non-overlapping win_size windows, then the per-file windowed segments
+        # are concatenated (re-verified live: data_loader.py `_load_data` loop +
+        # `_preprocess` :52 `f.pad(..., split_size - n%split_size, 0)` :54 `cat(split(...))`).
+        # On a multi-entity concatenated test array, our previous code front-padded ONCE
+        # and chunked over the WHOLE array, so a single non-overlapping window could
+        # straddle two entities (machine-k tail + machine-(k+1) head). That corrupts both
+        # the per-window min-max ACTMAP and the classifier seg-prob for boundary windows.
+        # Fix: run the RAW score producer (windowing + encoder/classifier inference +
+        # per-window->per-timestep ACTMAP mapping incl. front-pad drop) INDEPENDENTLY on
+        # each entity's own test slice via `per_entity_concat`, so no window crosses a
+        # boundary. This is STRICTLY MORE faithful to upstream's per-file chunking.
+        #
+        # RAW-PRODUCER vs WHOLE-TEST POST-PROC split (kept identical in granularity):
+        #   RAW (per-entity, boundary-safe): per-window min-max ACTMAP -> per-timestep
+        #     (front-pad dropped), plus the window-level classifier seg-prob.
+        #   POST-PROC (whole-test, UNCHANGED): the official BINARY segment gate
+        #     `threshold = mean(seg) + anomaly_thre*(max-min)` is computed over the WHOLE
+        #     concatenated test split's WINDOW-level seg scores (solver.test :158-160
+        #     thresholds over `test_outputs[s_index:]` = all concatenated test windows;
+        #     re-verified live). We therefore collect the window-level seg scores across
+        #     ALL entities and apply the global threshold ONCE, AFTER per-entity windowing
+        #     — preserving upstream's transductive whole-test gate granularity exactly.
+        # Single-entity / None / non-tiling test_segments -> ONE call over the whole array
+        # == bit-identical legacy behaviour (per_entity_concat guarantees the no-op; the
+        # post-proc reduces to the original global mean/max/min over all windows).
+        # ==============================================================================
+        anomaly_thre = float(getattr(self, "anomaly_thre", 0.0))
 
-        # ---- official BINARY segment gate (solver.test):
+        # Side-channel: window-level seg scores + per-timestep window-membership map,
+        # captured per entity (in entity order) by raw_fn so the WHOLE-TEST gate can be
+        # applied after concatenation. `_seg_blocks[k]` = (seg_e (Nw_e,), win_idx_e (Li,))
+        # where win_idx_e[t] = the GLOBAL window index of real timestep t.
+        _seg_blocks = []
+        _win_offset = [0]   # running global window counter (mutable closure cell)
+
+        def raw_fn(sub_X: np.ndarray) -> np.ndarray:
+            """RAW per-timestep ACTMAP for ONE entity slice (boundary-safe windowing+inference).
+
+            Reproduces upstream's per-FILE chunking (data_loader `_preprocess`:52-54):
+            front-pad to a whole number of win_size windows, encoder -> per-window min-max
+            ACTMAP (extractor.py get_dpred), classifier -> per-window seg-prob, flatten the
+            ACTMAP and drop the FRONT pad -> exactly len(sub_X) per-timestep scores.
+            The window-level seg-prob + a global per-timestep window index are stashed in
+            `_seg_blocks` for the WHOLE-TEST gate (applied after concat, NOT here). Edge-safe:
+            a slice shorter than win_size front-pads to ONE full window (`_window` pads to
+            win_size), so short entities never crash. `sub_X` is already normalized."""
+            sub_X = np.asarray(sub_X, dtype=np.float32)
+            li = len(sub_X)
+            if li == 0:
+                _seg_blocks.append((np.zeros(0, np.float32), np.zeros(0, np.int64)))
+                return np.zeros(0, dtype=np.float32)
+
+            windows, _, _, pad = self._window(sub_X, None)   # non-overlapping, front-padded
+            act_chunks = []
+            seg_chunks = []
+            for i in range(0, len(windows), 256):
+                bx = windows[i:i + 256].to(self.device)
+                out = self.encoder.get_scores(bx)
+                h = out['dh']                                  # (B, T) raw logit (model.py get_scores)
+                actmin = torch.min(h, dim=1, keepdim=True)[0]  # extractor.py get_dpred
+                act = h - actmin
+                actmax = torch.max(act, dim=1, keepdim=True)[0]
+                act = act / (actmax + 1e-12)                   # per-window min-max → [0,1]
+                # classifier features = raw `h` (= out['h']), matching weak_scores
+                #   (extractor.py `wscores.append(out['h'])`, solver.py).
+                seg_prob, _ = self.classifier(out['h'])        # (B, 1) classifier segment prob
+                act_chunks.append(act.cpu().numpy())           # (B, T) actmap
+                seg_chunks.append(seg_prob.view(-1).cpu().numpy())  # (B,) seg prob
+            act_e = np.concatenate(act_chunks, axis=0)         # (Nw_e, T)
+            seg_e = np.concatenate(seg_chunks, axis=0)         # (Nw_e,)
+            nw_e = act_e.shape[0]
+
+            # per-timestep ACTMAP for this entity (front-pad dropped) — RAW producer output.
+            act_flat = act_e.reshape(-1)[pad:pad + li].astype(np.float32)
+            if len(act_flat) < li:                             # safety (shouldn't trigger)
+                fill = act_flat[-1] if len(act_flat) else 0.0
+                act_flat = np.concatenate([act_flat, np.full(li - len(act_flat), fill, np.float32)])
+            act_flat = act_flat[:li]
+
+            # GLOBAL per-timestep window index (front-pad dropped) for the whole-test gate.
+            base = _win_offset[0]
+            win_idx_full = np.repeat(np.arange(base, base + nw_e, dtype=np.int64), self.win_size)
+            win_idx_e = win_idx_full[pad:pad + li]
+            if len(win_idx_e) < li:                            # safety mirror of act fill
+                last = win_idx_e[-1] if len(win_idx_e) else base
+                win_idx_e = np.concatenate([win_idx_e, np.full(li - len(win_idx_e), last, np.int64)])
+            win_idx_e = win_idx_e[:li]
+            _win_offset[0] = base + nw_e
+            _seg_blocks.append((seg_e.astype(np.float32), win_idx_e))
+            return act_flat
+
+        # Boundary-safe: per-entity windowing+inference of the ACTMAP, concatenated to
+        # (N_test,). Single-entity / None / non-tiling test_segments -> ONE raw_fn(test_X)
+        # == legacy behaviour (helper no-op; _seg_blocks holds a single block).
+        act_ts = per_entity_concat(test_X, test_segments, raw_fn)   # (N_test,) per-timestep actmap
+
+        # ---- WHOLE-TEST POST-PROC: official BINARY segment gate (solver.test:158-160).
         #        threshold = mean(seg) + anomaly_thre*(max-min)   (anomaly_thre=0, main.py)
         #        flagged_window = seg_prob >= threshold
-        #      computed TRANSDUCTIVELY over the whole test split's segment scores
-        #      (solver.test thresholds over test_outputs[s_index:]). Only flagged
-        #      windows contribute candidate points (interested_instance); the
-        #      per-window min-max actmap ranks points WITHIN flagged windows
-        #      (rank_test global argsort over the flagged pool). Non-flagged
-        #      windows score 0 (= least anomalous), the contract-safe continuous
-        #      analog of upstream's binary pred=0 on non-flagged windows. ----
-        anomaly_thre = float(getattr(self, "anomaly_thre", 0.0))
-        seg_thr = seg_all.mean() + anomaly_thre * (seg_all.max() - seg_all.min())
-        gate = (seg_all >= seg_thr).astype(np.float32).reshape(-1, 1)  # (Nw,1) binary
-        gated = act_all * gate                              # actmap × binary window gate
-        flat = gated.reshape(-1)                            # (Nw*T,)
+        #      Computed over the WHOLE concatenated test split's WINDOW-level seg scores,
+        #      EXACTLY as upstream (transductive whole-test gate). Only flagged windows
+        #      contribute candidate points; the per-window min-max actmap ranks points
+        #      WITHIN flagged windows. Non-flagged windows score 0 (= least anomalous),
+        #      the contract-safe continuous analog of upstream's binary pred=0. ----
+        seg_all = (np.concatenate([blk[0] for blk in _seg_blocks])
+                   if _seg_blocks else np.zeros(0, np.float32))   # (Nw_total,) window-level
+        if len(seg_all) > 0:
+            seg_thr = seg_all.mean() + anomaly_thre * (seg_all.max() - seg_all.min())
+            gate_win = (seg_all >= seg_thr).astype(np.float32)    # (Nw_total,) binary, window-level
+        else:
+            gate_win = np.zeros(0, np.float32)
 
-        # drop the leading front-pad so length == len(test_X)
-        flat = flat[pad:pad + n_test]
-        if len(flat) < n_test:                             # safety (shouldn't trigger)
-            flat = np.concatenate([flat, np.full(n_test - len(flat), flat[-1] if len(flat) else 0.0)])
-        scores = np.nan_to_num(flat[:n_test], nan=0.0, posinf=0.0, neginf=0.0)
+        # Broadcast the global binary window gate back to each entity's timesteps via the
+        # stashed GLOBAL window index, then multiply with the concatenated actmap. This
+        # reproduces the original `act_all * gate` -> reshape -> pad-drop mapping exactly,
+        # now boundary-safe (per-entity windowing) with an UNCHANGED whole-test gate.
+        gate_ts = np.empty(n_test, dtype=np.float32)
+        pos = 0
+        for (_seg_e, win_idx_e) in _seg_blocks:
+            li = len(win_idx_e)
+            if li == 0:
+                continue
+            gate_ts[pos:pos + li] = gate_win[win_idx_e] if len(gate_win) else 0.0
+            pos += li
+        if pos != n_test:                                   # safety (shouldn't trigger)
+            gate_ts = np.resize(gate_ts, n_test)
+
+        scores = act_ts * gate_ts
+        scores = np.nan_to_num(scores[:n_test], nan=0.0, posinf=0.0, neginf=0.0)
         return scores.astype(np.float32)
 
     # ------------------------------------------------------------------ resume (2026-05-31, B)

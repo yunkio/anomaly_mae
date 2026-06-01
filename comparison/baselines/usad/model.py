@@ -16,6 +16,7 @@ import torch.nn as nn
 import numpy as np
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._boundary_safe_window import per_entity_concat
 from typing import Optional, List
 from pathlib import Path
 import json
@@ -334,69 +335,101 @@ class USADBaseline:
 
         return self
 
-    def predict(self, test_data: np.ndarray) -> np.ndarray:
+    def predict(self, test_data: np.ndarray, test_segments=None) -> np.ndarray:
         """
         Compute anomaly scores for test data.
 
+        Boundary-safe TEST windowing: on multi-entity datasets (SMD machines /
+        SMAP-MSL channels / Exathlon apps) the sliding windows + USAD inference +
+        per-window→per-timestep mapping run INDEPENDENTLY per entity slice via
+        ``per_entity_concat``, so no sliding window spans an entity boundary. The
+        per-entity RAW scores are concatenated to ``(n_test,)``. USAD has NO
+        whole-test score post-processing (the reconstruction-error score is
+        already per-timestep), so the concatenated array is returned as-is —
+        nothing changes for single-file datasets (None / single-entity
+        ``test_segments`` -> ONE call over the whole array == bit-identical NO-OP).
+
         Args:
             test_data: Test data (n_samples, n_features)
+            test_segments: Per-entity (lo, hi) TEST-LOCAL half-open slices from
+                ``loader.get_file_norm_segments()`` (the SAME source as per-file
+                norm). None / single-entity -> legacy whole-array behaviour.
 
         Returns:
-            Anomaly scores for each timestamp
+            Anomaly scores for each timestamp, shape ``(n_samples,)``.
         """
         if self.model is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
 
         self.model.eval()
 
-        # Create windows
-        windows = self._create_windows(test_data)
-        n_windows = len(windows)
+        def raw_fn(sub_X: np.ndarray) -> np.ndarray:
+            """RAW per-timestep USAD scores for ONE entity slice (windowing +
+            inference + last-timestamp mapping + head-fill). Edge-safe: a slice
+            shorter than ``seq_len`` yields no window -> all-zero fallback for
+            that slice (documented; cannot crash)."""
+            n_samples = len(sub_X)
+            scores_out = np.zeros(n_samples, dtype=np.float32)
 
-        # Compute scores in batches
-        all_scores = []
-        n_batches = (n_windows + self.batch_size - 1) // self.batch_size
-        start_time = time.time()
+            # Edge case: an entity slice shorter than the window produces NO
+            # window (``_create_windows`` would compute a negative count). Return
+            # all-zeros for this slice — sensible fallback (the helper writes it
+            # into the slice's own [lo:hi] range only, so no other entity is
+            # affected, and the contract (len == n_samples, finite) holds).
+            if n_samples < self.seq_len:
+                return scores_out
 
-        if self.verbose:
-            print(f"  Inference: {n_windows:,} windows in {n_batches} batches")
+            # Create windows (sliding, stride=1) for this entity slice only
+            windows = self._create_windows(sub_X)
+            n_windows = len(windows)
+            if n_windows <= 0:
+                return scores_out
 
-        with torch.no_grad():
-            for batch_idx, i in enumerate(range(0, n_windows, self.batch_size)):
-                batch_x = torch.FloatTensor(windows[i:i + self.batch_size]).to(self.device)
-                scores = self.model.get_anomaly_score(batch_x, self.alpha, self.beta)
-                all_scores.append(scores.cpu().numpy())
+            # Compute scores in batches
+            all_scores = []
+            n_batches = (n_windows + self.batch_size - 1) // self.batch_size
+            start_time = time.time()
 
-                if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    elapsed = time.time() - start_time
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}% | "
-                          f"Elapsed: {elapsed:.1f}s", end="")
-                    sys.stdout.flush()
+            if self.verbose:
+                print(f"  Inference: {n_windows:,} windows in {n_batches} batches")
 
-        if self.verbose:
-            total_time = time.time() - start_time
-            print(f"\n  Inference complete: {total_time:.1f}s")
+            with torch.no_grad():
+                for batch_idx, i in enumerate(range(0, n_windows, self.batch_size)):
+                    batch_x = torch.FloatTensor(windows[i:i + self.batch_size]).to(self.device)
+                    scores = self.model.get_anomaly_score(batch_x, self.alpha, self.beta)
+                    all_scores.append(scores.cpu().numpy())
 
-        window_scores = np.concatenate(all_scores)
+                    if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
+                        progress = (batch_idx + 1) / n_batches * 100
+                        elapsed = time.time() - start_time
+                        print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}% | "
+                              f"Elapsed: {elapsed:.1f}s", end="")
+                        sys.stdout.flush()
 
-        # Map window scores to point-level
-        # Each window at position i covers timestamps [i, i+seq_len)
-        # Assign score to the last timestamp of the window
-        n_samples = len(test_data)
-        scores = np.zeros(n_samples, dtype=np.float32)
+            if self.verbose:
+                total_time = time.time() - start_time
+                print(f"\n  Inference complete: {total_time:.1f}s")
 
-        for i, score in enumerate(window_scores):
-            target_idx = i + self.seq_len - 1
-            if target_idx < n_samples:
-                scores[target_idx] = score
+            window_scores = np.concatenate(all_scores)
 
-        # Fill first timestamps with first available score
-        if len(window_scores) > 0:
-            for i in range(min(self.seq_len - 1, n_samples)):
-                scores[i] = window_scores[0]
+            # Map window scores to point-level
+            # Each window at position i covers timestamps [i, i+seq_len)
+            # Assign score to the last timestamp of the window
+            for i, score in enumerate(window_scores):
+                target_idx = i + self.seq_len - 1
+                if target_idx < n_samples:
+                    scores_out[target_idx] = score
 
-        return scores
+            # Fill first timestamps with first available score
+            if len(window_scores) > 0:
+                for i in range(min(self.seq_len - 1, n_samples)):
+                    scores_out[i] = window_scores[0]
+
+            return scores_out
+
+        # Route the RAW producer per-entity (boundary-safe). USAD has NO
+        # whole-test post-processing, so the concatenated array is the result.
+        return per_entity_concat(test_data, test_segments, raw_fn)
 
     def save(self, save_dir: Path) -> None:
         """Save model weights and config."""

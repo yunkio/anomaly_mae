@@ -42,6 +42,7 @@ from comparison.baselines._per_file_norm import (
     fit_transform_train_per_file,
     transform_test_per_file,
 )
+from comparison.baselines._boundary_safe_window import per_entity_concat
 
 
 def _adjust_learning_rate_type1(optimizer: torch.optim.Optimizer, epoch_one_indexed: int, lr_base: float) -> float:
@@ -279,6 +280,20 @@ class AnomalyTransformerBaseline:
             trailing `T_test mod W` timesteps are filled by repeating the LAST
             per-timestep valid score (no head padding needed since non-overlap
             walk starts at index 0).
+
+        BOUNDARY-SAFE TEST WINDOWING (multi-entity datasets — SMD machines / SMAP-MSL
+        channels / Exathlon apps): the RAW score producer (non-overlap windowing + model
+        inference + per-window->per-timestep concat + tail fill) is run INDEPENDENTLY on
+        each entity's own (already-normalized) test slice via
+        ``per_entity_concat(test_X, test_segments, raw_fn)``, so no non-overlap window
+        ever spans an entity boundary (which would mix two entities and corrupt the
+        boundary-region scores). Single-entity / None / non-tiling test_segments ->
+        ONE call over the whole array == bit-identical legacy behaviour (the helper
+        guarantees the no-op). AnomalyTransformer has NO whole-test score post-processing
+        (the per-window softmax is local to each window; the percentile threshold +
+        anomaly-state propagation in upstream solver.test live DOWNSTREAM of our
+        ``(T_test,)`` continuous-score harness contract), so there is nothing to apply
+        after concatenation — the concatenated per-entity raw scores ARE the final scores.
         """
         if self.model is None:
             raise RuntimeError("Model not trained. Call fit() first.")
@@ -289,77 +304,125 @@ class AnomalyTransformerBaseline:
         # train, .transform applied to test). `test_segments` is the per-file TEST-LOCAL
         # segment list paired 1:1 with the train files. Single-file / None / mismatch =>
         # the single train scaler over the whole test array (bit-identical to legacy).
+        # Normalization is done HERE, before windowing — unchanged by the boundary-safe
+        # refactor (the per_entity_concat below re-windows the ALREADY-normalized array;
+        # it does NOT re-normalize).
         if self._scalers:
             test_X = transform_test_per_file(
                 test_X, test_segments, self._scalers
             ).astype(np.float32, copy=False)
+        test_X = np.asarray(test_X, dtype=np.float32)
 
-        N_test, n_features = test_X.shape
-        if N_test < self.win_size:
-            raise ValueError(f"Test sequence length {N_test} shorter than win_size {self.win_size}")
-
-        # Upstream `SegLoader(mode='thre')` window count + non-overlap walk:
-        #   n_windows = (T - W) // W + 1
-        #   window i covers test[i*W : i*W + W]
-        n_windows = (N_test - self.win_size) // self.win_size + 1
+        _, n_features = test_X.shape
         T = self.k_temperature
         self.model.eval()
-        n_batches = (n_windows + self.batch_size - 1) // self.batch_size
-        per_window_scores: list = []  # each entry: (B, win_size) np.float32
 
-        with torch.no_grad():
-            for batch_idx in range(n_batches):
-                batch_start = batch_idx * self.batch_size
-                batch_end = min(batch_start + self.batch_size, n_windows)
-                actual_bs = batch_end - batch_start
+        def _raw_score_slice(sub_X: np.ndarray) -> np.ndarray:
+            """RAW per-timestep scores for a SINGLE entity's test slice (no cross-entity
+            dependence, no whole-test post-proc). Reproduces the exact legacy windowing +
+            inference + per-window->per-timestep concat + tail fill on ``sub_X`` alone.
 
-                batch_windows = np.zeros((actual_bs, self.win_size, n_features), dtype=np.float32)
-                for j, w_idx in enumerate(range(batch_start, batch_end)):
-                    start = w_idx * self.win_size  # non-overlap stride = win_size
-                    batch_windows[j] = test_X[start : start + self.win_size]
+            Edge-safe: if this entity slice is shorter than ``win_size`` no non-overlap
+            window can be formed; we edge-pad the slice up to ``win_size`` (repeat the last
+            row), score that single window, and return only the first ``len(sub_X)``
+            per-timestep scores. This keeps the score finite and length-correct without
+            crashing (the legacy whole-array path raised ValueError; per-entity slicing
+            can now legitimately yield a short slice, e.g. a tiny SMD test entity).
+            """
+            sub_X = np.asarray(sub_X, dtype=np.float32)
+            L = sub_X.shape[0]
 
-                input_x = torch.from_numpy(batch_windows).to(self.device)
-                output, series_list, prior_list, _ = self.model(input_x)
+            if L < self.win_size:
+                # Edge-pad up to one full window by repeating the last timestep.
+                pad = self.win_size - L
+                last_row = sub_X[-1:].repeat(pad, axis=0) if L > 0 else \
+                    np.zeros((pad, n_features), dtype=np.float32)
+                padded = np.concatenate([sub_X, last_row], axis=0)  # (win_size, F)
+                win_X = padded[None, :, :]  # (1, win_size, F)
+                input_x = torch.from_numpy(win_X).to(self.device)
+                with torch.no_grad():
+                    output, series_list, prior_list, _ = self.model(input_x)
+                    recon_mse = ((output - input_x) ** 2).mean(dim=-1)  # (1, win_size)
+                    series_loss = None
+                    prior_loss = None
+                    for u in range(len(prior_list)):
+                        prior_norm = self._normalize_prior(prior_list[u])
+                        s_u = my_kl_loss(series_list[u], prior_norm.detach()) * T
+                        p_u = my_kl_loss(prior_norm, series_list[u].detach()) * T
+                        if u == 0:
+                            series_loss = s_u
+                            prior_loss = p_u
+                        else:
+                            series_loss = series_loss + s_u
+                            prior_loss = prior_loss + p_u
+                    metric = torch.softmax((-series_loss - prior_loss), dim=-1)
+                    cri = (metric * recon_mse).cpu().numpy().astype(np.float32, copy=False)
+                return cri.reshape(-1)[:L].copy()
 
-                # Per-timestep recon MSE: mean over feature dim
-                recon_mse = ((output - input_x) ** 2).mean(dim=-1)  # (B, L)
+            # Upstream `SegLoader(mode='thre')` window count + non-overlap walk:
+            #   n_windows = (L - W) // W + 1 ; window i covers sub_X[i*W : i*W + W]
+            n_windows = (L - self.win_size) // self.win_size + 1
+            n_batches = (n_windows + self.batch_size - 1) // self.batch_size
+            per_window_scores: list = []  # each entry: (B, win_size) np.float32
 
-                # Per-timestep AssocDis (upstream solver.test pattern)
-                series_loss = None
-                prior_loss = None
-                for u in range(len(prior_list)):
-                    prior_norm = self._normalize_prior(prior_list[u])
-                    s_u = my_kl_loss(series_list[u], prior_norm.detach()) * T
-                    p_u = my_kl_loss(prior_norm, series_list[u].detach()) * T
-                    if u == 0:
-                        series_loss = s_u
-                        prior_loss = p_u
-                    else:
-                        series_loss = series_loss + s_u
-                        prior_loss = prior_loss + p_u
+            with torch.no_grad():
+                for batch_idx in range(n_batches):
+                    batch_start = batch_idx * self.batch_size
+                    batch_end = min(batch_start + self.batch_size, n_windows)
+                    actual_bs = batch_end - batch_start
 
-                metric = torch.softmax((-series_loss - prior_loss), dim=-1)  # (B, L)
-                cri = metric * recon_mse  # (B, L)
-                per_window_scores.append(cri.cpu().numpy().astype(np.float32, copy=False))
+                    batch_windows = np.zeros((actual_bs, self.win_size, n_features), dtype=np.float32)
+                    for j, w_idx in enumerate(range(batch_start, batch_end)):
+                        start = w_idx * self.win_size  # non-overlap stride = win_size
+                        batch_windows[j] = sub_X[start : start + self.win_size]
 
-                if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}%", end="")
+                    input_x = torch.from_numpy(batch_windows).to(self.device)
+                    output, series_list, prior_list, _ = self.model(input_x)
+
+                    # Per-timestep recon MSE: mean over feature dim
+                    recon_mse = ((output - input_x) ** 2).mean(dim=-1)  # (B, L)
+
+                    # Per-timestep AssocDis (upstream solver.test pattern)
+                    series_loss = None
+                    prior_loss = None
+                    for u in range(len(prior_list)):
+                        prior_norm = self._normalize_prior(prior_list[u])
+                        s_u = my_kl_loss(series_list[u], prior_norm.detach()) * T
+                        p_u = my_kl_loss(prior_norm, series_list[u].detach()) * T
+                        if u == 0:
+                            series_loss = s_u
+                            prior_loss = p_u
+                        else:
+                            series_loss = series_loss + s_u
+                            prior_loss = prior_loss + p_u
+
+                    metric = torch.softmax((-series_loss - prior_loss), dim=-1)  # (B, L)
+                    cri = metric * recon_mse  # (B, L)
+                    per_window_scores.append(cri.cpu().numpy().astype(np.float32, copy=False))
+
+                    if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
+                        progress = (batch_idx + 1) / n_batches * 100
+                        print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}%", end="")
+
+            # Upstream aggregation: `np.concatenate(attens_energy, axis=0).reshape(-1)`
+            valid_scores = np.concatenate(per_window_scores, axis=0).reshape(-1)
+            valid_len = valid_scores.shape[0]  # == n_windows * win_size
+
+            # Option B fallback: pad trailing `L mod win_size` timesteps by
+            # repeating the last valid per-timestep score (no head pad — non-overlap
+            # walk starts at index 0).
+            point_scores = np.empty(L, dtype=np.float32)
+            point_scores[:valid_len] = valid_scores
+            if valid_len < L:
+                point_scores[valid_len:] = valid_scores[-1]
+            return point_scores
+
+        # Boundary-safe TEST windowing: run the RAW producer per-entity (no window spans
+        # an entity boundary), concat to (n_test,). No whole-test post-proc to apply.
+        point_scores = per_entity_concat(test_X, test_segments, _raw_score_slice)
 
         if self.verbose:
             print()
-
-        # Upstream aggregation: `np.concatenate(attens_energy, axis=0).reshape(-1)`
-        valid_scores = np.concatenate(per_window_scores, axis=0).reshape(-1)
-        valid_len = valid_scores.shape[0]  # == n_windows * win_size
-
-        # Option B fallback: pad trailing `T_test mod win_size` timesteps by
-        # repeating the last valid per-timestep score (no head pad — non-overlap
-        # walk starts at index 0).
-        point_scores = np.empty(N_test, dtype=np.float32)
-        point_scores[:valid_len] = valid_scores
-        if valid_len < N_test:
-            point_scores[valid_len:] = valid_scores[-1]
         return point_scores
 
     def save(self, save_dir: Path) -> None:

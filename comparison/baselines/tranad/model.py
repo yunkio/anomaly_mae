@@ -395,11 +395,33 @@ class TranADBaseline:
 
         return self
 
-    def predict(self, test_data: np.ndarray) -> np.ndarray:
+    def predict(self, test_data: np.ndarray, test_segments=None) -> np.ndarray:
         """Compute anomaly scores (upstream-faithful: Phase 2 only, last-timestep MSE).
+
+        Boundary-safe TEST windowing
+        ----------------------------
+        Upstream `convert_to_windows` (main.py) slides ONE window stream over the
+        WHOLE concatenated test array with NO per-entity reset, so on multi-file
+        datasets (SMD machines / SMAP-MSL channels / Exathlon apps) windows at an
+        entity boundary mix two entities and corrupt the boundary-region scores.
+        We keep the model's score formula UNCHANGED and instead route the RAW
+        producer (sliding-window + inference + per-window→per-timestep mapping +
+        head fill) through ``per_entity_concat``, which runs it INDEPENDENTLY on
+        each entity's own test slice so no window spans a boundary. The result is
+        concatenated to ``(n_test,)``.
+
+        TranAD has NO whole-test score post-processing (upstream reduces to a
+        per-window last-timestep MSE and feeds POT thresholding directly — no
+        median/IQR, smoothing, EMA, or max-over-features). So the entire body IS
+        the raw producer and there is nothing to apply after concatenation.
+
+        Single-entity / None / non-tiling ``test_segments`` -> exactly one call
+        over the whole array == bit-identical legacy behaviour (helper no-op).
 
         Args:
             test_data: (n_samples, n_features) float32.
+            test_segments: per-entity (lo, hi) TEST-LOCAL slices (same source as
+                per-entity normalization). None/single-entity -> whole-array.
 
         Returns:
             scores: (n_samples,) float32.
@@ -407,61 +429,85 @@ class TranADBaseline:
         if self.model is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
 
+        from comparison.baselines._boundary_safe_window import per_entity_concat
+
         self.model.eval()
-
-        windows = self._create_windows(test_data, stride=1)
-        n_windows = len(windows)
-
-        all_scores = []
-        n_batches = (n_windows + self.batch_size - 1) // self.batch_size
+        n_samples = len(test_data)
         start_time = time.time()
 
+        def raw_fn(sub_X: np.ndarray) -> np.ndarray:
+            """RAW per-timestep score producer for a SINGLE entity slice.
+
+            Exactly the legacy per-slice logic (sliding stride=1 windows +
+            two-phase inference + last-timestep MSE + last-position mapping +
+            head forward-fill), with no cross-entity dependence.
+
+            Edge-safe for short slices (Li < seq_len): upstream `convert_to_windows`
+            left-pads early indices with `data[0]`; we mirror that by left-padding
+            the slice with its first row up to `seq_len` so we still produce ONE
+            window for the slice's last timestep, then the head fill spreads that
+            single score across the whole (short) slice. Never crashes, never
+            returns NaN.
+            """
+            sub_X = np.asarray(sub_X, dtype=np.float32)
+            Li = len(sub_X)
+
+            # Build windows; edge-pad short slices (Li < seq_len) upstream-style.
+            if Li >= self.seq_len:
+                windows = self._create_windows(sub_X, stride=1)
+            else:
+                # Left-pad with the first row (upstream convert_to_windows form):
+                # data[0].repeat(w_size - i, 1) for early indices. One window only.
+                pad = np.repeat(sub_X[0:1], self.seq_len - Li, axis=0)
+                padded = np.concatenate([pad, sub_X], axis=0)            # (seq_len, F)
+                windows = padded[np.newaxis, :, :].astype(np.float32)    # (1, seq_len, F)
+
+            n_windows = len(windows)
+            all_scores = []
+            with torch.no_grad():
+                for i in range(0, n_windows, self.batch_size):
+                    batch_x = torch.FloatTensor(windows[i:i + self.batch_size]).to(self.device)  # (B, seq, F)
+                    # Upstream-faithful: (seq, B, F) + elem = last timestep.
+                    window = batch_x.permute(1, 0, 2).contiguous()       # (seq, B, F)
+                    elem = window[-1, :, :].unsqueeze(0)                 # (1, B, F)
+                    _, x2 = self.model(window, elem)                     # x2: (1, B, F)
+                    # Upstream score: MSE on last-timestep only, per-feature → mean over features.
+                    err = ((x2 - elem) ** 2).mean(dim=2)                 # (1, B)
+                    err = err.squeeze(0)                                  # (B,)
+                    all_scores.append(err.cpu().numpy())
+
+            window_scores = np.concatenate(all_scores) if all_scores else np.zeros(0, dtype=np.float32)
+
+            # Map window scores to point-level — last-position assignment.
+            sub_scores = np.zeros(Li, dtype=np.float32)
+            if Li >= self.seq_len:
+                for w_i, score in enumerate(window_scores):
+                    target_idx = w_i + self.seq_len - 1
+                    if target_idx < Li:
+                        sub_scores[target_idx] = score
+                # Forward-fill first seq_len-1 timestamps with first window's score.
+                if len(window_scores) > 0:
+                    first_score = float(window_scores[0])
+                    for k in range(min(self.seq_len - 1, Li)):
+                        sub_scores[k] = first_score
+            else:
+                # Short slice: the single padded window scores the last timestep;
+                # spread it across the whole slice (degenerate head-fill).
+                fill = float(window_scores[0]) if len(window_scores) > 0 else 0.0
+                sub_scores[:] = fill
+
+            return sub_scores
+
         if self.verbose:
-            print(f"  Inference: {n_windows:,} windows in {n_batches} batches")
+            print(f"  Inference: {n_samples:,} timesteps (boundary-safe per-entity windowing)")
 
-        with torch.no_grad():
-            for batch_idx, i in enumerate(range(0, n_windows, self.batch_size)):
-                batch_x = torch.FloatTensor(windows[i:i + self.batch_size]).to(self.device)  # (B, seq, F)
-
-                # Upstream-faithful: (seq, B, F) + elem = last timestep.
-                window = batch_x.permute(1, 0, 2).contiguous()           # (seq, B, F)
-                elem = window[-1, :, :].unsqueeze(0)                     # (1, B, F)
-
-                _, x2 = self.model(window, elem)                         # x2: (1, B, F)
-
-                # Upstream score: MSE on last-timestep only (`(z - elem)**2`), per-feature → mean over features.
-                err = ((x2 - elem) ** 2).mean(dim=2)                     # (1, B)
-                err = err.squeeze(0)                                      # (B,)
-
-                all_scores.append(err.cpu().numpy())
-
-                if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    elapsed = time.time() - start_time
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}% | "
-                          f"Elapsed: {elapsed:.1f}s", end="")
-                    sys.stdout.flush()
+        # RAW producer runs per-entity (no window crosses a boundary), concatenated to (n_test,).
+        # NO whole-test post-processing for TranAD — the raw scores ARE the final scores.
+        scores = per_entity_concat(test_data, test_segments, raw_fn)
 
         if self.verbose:
             total_time = time.time() - start_time
             print(f"\n  Inference complete: {total_time:.1f}s")
-
-        window_scores = np.concatenate(all_scores) if all_scores else np.zeros(0, dtype=np.float32)
-
-        # Map window scores to point-level — last-position assignment.
-        n_samples = len(test_data)
-        scores = np.zeros(n_samples, dtype=np.float32)
-
-        for i, score in enumerate(window_scores):
-            target_idx = i + self.seq_len - 1
-            if target_idx < n_samples:
-                scores[target_idx] = score
-
-        # Forward-fill first seq_len-1 timestamps with first window's score (boundary handling).
-        if len(window_scores) > 0:
-            first_score = float(window_scores[0])
-            for i in range(min(self.seq_len - 1, n_samples)):
-                scores[i] = first_score
 
         return scores.astype(np.float32)
 

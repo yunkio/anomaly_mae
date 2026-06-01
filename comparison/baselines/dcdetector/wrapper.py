@@ -208,47 +208,40 @@ class DCdetectorBaseline:
                 pg["lr"] = new_lr
         return self
 
-    def predict(self, test_X: np.ndarray) -> np.ndarray:
-        """1D anomaly score per timestep — paper-faithful upstream `mode='thre'` aggregation.
+    def _raw_scores(self, sub_X: np.ndarray) -> np.ndarray:
+        """RAW per-timestep score producer for ONE entity slice (no cross-entity dependence).
 
-        Upstream (`solver.py::Solver.test()` + `data_factory/data_loader.py`):
-          - Test windowing uses `mode='thre'` loader → non-overlap stride = `win_size`
-            (effective stride; `self.step=1` is overridden by `index // step * win_size`
-            arithmetic in __getitem__).
-          - `__len__` (thre) = `(T_test - win_size) // win_size + 1`
-          - Aggregation: per-window `metric = softmax(-series_loss - prior_loss, dim=-1)` →
-            `attens_energy.append(cri)` → `np.concatenate(attens_energy, axis=0).reshape(-1)`
-            flatten → 1D length `((T_test - win_size) // win_size + 1) * win_size`
-            ≈ `T_test - (T_test mod win_size)`.
-          - Tail handling: IMPLICIT_NONE — upstream silently drops last `T_test mod win_size`
-            timesteps and their labels.
+        Runs the upstream-faithful `mode='thre'` test path on `sub_X` ALONE:
+          - Non-overlap windowing (stride = win_size; matches upstream
+            `data_loader.py` thre `__getitem__`: `index*win_size : index*win_size+win_size`,
+            `__len__ = (L - win_size)//win_size + 1`).
+          - Per-window metric `softmax(-series_loss - prior_loss, dim=-1)` (temperature T),
+            series/prior losses SUMMED over the `len(prior)` attention maps (upstream
+            `solver.py::test`). This softmax is taken over the WITHIN-WINDOW axis, so it is
+            intrinsically per-window — there is NO cross-window / whole-test post-processing.
+          - Flatten (`np.concatenate(...).reshape(-1)`), then Option-B repeat-last tail pad to
+            `len(sub_X)` (no head pad; upstream's first valid score maps to t=0).
 
-        Pipeline (`./comparison/`) length contract: `(T_test,)` 1D scores aligned to
-        original timesteps — cannot drop tail. **Option B fallback (user-directed,
-        2026-05-24 Phase 2.5)**:
-          - Place upstream-faithful valid scores at indices [0, valid_len)
-          - Tail [valid_len, T_test) ← repeat last valid score (`valid_scores[-1]`)
-          - (No head padding — upstream's first valid score corresponds to t=0.)
+        `sub_X` is ALREADY scaler-transformed (caller transforms the whole test once, before
+        slicing; the train-fit StandardScaler is a fixed transform and is slice-invariant, and
+        the model's internal RevIN is per-window — so per-entity slicing cannot change either
+        normalization). This method does exactly what the legacy whole-array predict did, just
+        on one entity's slice → no window can cross an entity boundary.
+
+        Edge case (entity slice shorter than win_size): cannot form a single non-overlap
+        window. Fall back to a uniform `1/L` constant score over the slice. This is the natural
+        degenerate of the per-window softmax (every window's `win_size` scores sum to 1, so a
+        length-`L` window would assign `1/L` each); it keeps the output finite, the correct
+        length, and on the same scale as real windows. Documented, never crashes.
         """
-        if self.model is None:
-            raise RuntimeError("Model not trained. Call fit() first.")
-        if self.scaler is None:
-            raise RuntimeError("Scaler not fit. Call fit() first.")
+        L, n_features = sub_X.shape
+        if L < self.win_size:
+            # Boundary-safe fallback for a short entity (no full window available).
+            return np.full(L, 1.0 / max(L, 1), dtype=np.float32)
 
-        # Apply paper-faithful StandardScaler.transform on test data (train-only fit).
-        test_X = self.scaler.transform(test_X).astype(np.float32)
-
-        N_test, n_features = test_X.shape
-        if N_test < self.win_size:
-            raise ValueError(
-                f"Test sequence length {N_test} shorter than win_size {self.win_size}"
-            )
-
-        # Non-overlap windowing: matches upstream `mode='thre'` effective stride = win_size.
-        # n_windows = (N_test - win_size) // win_size + 1  (matches upstream __len__ thre)
-        n_windows = (N_test - self.win_size) // self.win_size + 1
         T = self.k_temperature
-        self.model.eval()
+        # Non-overlap windowing: matches upstream `mode='thre'` effective stride = win_size.
+        n_windows = (L - self.win_size) // self.win_size + 1
         n_batches = (n_windows + self.batch_size - 1) // self.batch_size
 
         attens_energy = []  # list of [B, win_size] arrays, concat+flatten per upstream
@@ -262,10 +255,10 @@ class DCdetectorBaseline:
                 batch_windows = np.zeros(
                     (actual_bs, self.win_size, n_features), dtype=np.float32
                 )
-                # Non-overlap walk: window j covers test_X[j*win_size : (j+1)*win_size]
+                # Non-overlap walk: window j covers sub_X[j*win_size : (j+1)*win_size]
                 for j, w_idx in enumerate(range(batch_start, batch_end)):
                     start = w_idx * self.win_size
-                    batch_windows[j] = test_X[start : start + self.win_size]
+                    batch_windows[j] = sub_X[start : start + self.win_size]
 
                 input_x = torch.from_numpy(batch_windows).to(self.device)
                 series, prior = self.model(input_x)
@@ -291,26 +284,82 @@ class DCdetectorBaseline:
                 cri = metric.detach().cpu().numpy()  # [B, win_size]
                 attens_energy.append(cri)
 
-                if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}%", end="")
+        # Upstream-faithful aggregation: np.concatenate(..., axis=0).reshape(-1) flatten.
+        valid_scores = np.concatenate(attens_energy, axis=0).reshape(-1).astype(np.float32)
+        valid_len = valid_scores.shape[0]  # = n_windows * win_size = L - (L % win_size)
+
+        # Option B fallback (user-directed 2026-05-24 Phase 2.5): repeat-last tail to satisfy
+        # the per-entity length contract. No head padding (upstream starts at t=0).
+        point_scores = np.empty(L, dtype=np.float32)
+        point_scores[:valid_len] = valid_scores
+        if valid_len < L:
+            # Repeat last per-timestep valid score for tail [valid_len, L)
+            point_scores[valid_len:] = valid_scores[-1]
+
+        return point_scores
+
+    def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
+        """1D anomaly score per timestep — paper-faithful upstream `mode='thre'` aggregation.
+
+        Boundary-safe TEST windowing: on multi-entity datasets (SMD machines / SMAP-MSL
+        channels / Exathlon apps) NO non-overlap window may span an entity boundary. The
+        windowing + inference + per-window→per-timestep mapping is routed PER ENTITY through
+        ``per_entity_concat`` (see ``_boundary_safe_window.py``). ``test_segments`` is the
+        per-entity (lo,hi) TEST-LOCAL list from ``loader.get_file_norm_segments()`` (same
+        source as normalization). ``None`` / single-entity / non-tiling segments → ONE call
+        over the whole array == bit-identical legacy behaviour (helper-guaranteed NO-OP).
+
+        Upstream (`solver.py::Solver.test()` + `data_factory/data_loader.py`, verified @main):
+          - Test windowing uses `mode='thre'` loader → non-overlap stride = `win_size`
+            (effective stride; `self.step` is overridden by `index // step * win_size`
+            arithmetic in __getitem__).
+          - `__len__` (thre) = `(L - win_size) // win_size + 1`
+          - Aggregation: per-window `metric = softmax(-series_loss - prior_loss, dim=-1)` →
+            `attens_energy.append(cri)` → `np.concatenate(attens_energy, axis=0).reshape(-1)`
+            flatten. This per-window softmax is the ENTIRE score — there is NO whole-test score
+            post-processing (no global re-normalization, no smoothing), so per-entity slicing of
+            the windowing leaves the score formula and its granularity UNCHANGED.
+          - Tail handling: IMPLICIT_NONE upstream — silently drops last `L mod win_size`
+            timesteps. Our pipeline's `(T_test,)` contract forbids dropping; Option-B repeat-last
+            tail pad fills it (per entity).
+
+        Normalization (untouchable-norm class): WHOLE-ARRAY train-fit StandardScaler.transform
+        is applied ONCE here, BEFORE per-entity slicing. The scaler is a fixed train-derived
+        transform (slice-invariant), and the model's internal RevIN is per-window
+        (slice-invariant) — so boundary-safe windowing does NOT alter normalization.
+        """
+        if self.model is None:
+            raise RuntimeError("Model not trained. Call fit() first.")
+        if self.scaler is None:
+            raise RuntimeError("Scaler not fit. Call fit() first.")
+
+        from comparison.baselines._boundary_safe_window import per_entity_concat
+
+        # Apply paper-faithful StandardScaler.transform on test data (train-only fit), ONCE
+        # over the WHOLE test (whole-array norm preserved; slice-invariant fixed transform).
+        test_X = self.scaler.transform(test_X).astype(np.float32)
+
+        N_test, n_features = test_X.shape
+        # Legacy guard preserved for the single-entity / None path: the WHOLE test shorter than
+        # win_size is still an error (matches pre-edit behaviour). Multi-entity short slices are
+        # handled gracefully inside _raw_scores (per-entity fallback) and never reach this.
+        from comparison.baselines._boundary_safe_window import is_multi_entity
+        if N_test < self.win_size and not is_multi_entity(N_test, test_segments):
+            raise ValueError(
+                f"Test sequence length {N_test} shorter than win_size {self.win_size}"
+            )
+
+        self.model.eval()
+
+        # Route windowing + inference + per-window→per-timestep mapping (incl. tail pad) through
+        # the shared per-entity helper. Each entity is windowed in isolation → no cross-boundary
+        # window. Single-entity / None → exactly one call on the whole array (NO-OP).
+        point_scores = per_entity_concat(test_X, test_segments, self._raw_scores)
 
         if self.verbose:
             print()
 
-        # Upstream-faithful aggregation: np.concatenate(..., axis=0).reshape(-1) flatten.
-        valid_scores = np.concatenate(attens_energy, axis=0).reshape(-1).astype(np.float32)
-        valid_len = valid_scores.shape[0]  # = n_windows * win_size = T_test - (T_test % win_size)
-
-        # Option B fallback (user-directed 2026-05-24 Phase 2.5): repeat-last tail to satisfy
-        # (T_test,) length contract. No head padding (upstream starts at t=0).
-        point_scores = np.empty(N_test, dtype=np.float32)
-        point_scores[:valid_len] = valid_scores
-        if valid_len < N_test:
-            # Repeat last per-timestep valid score for tail [valid_len, N_test)
-            point_scores[valid_len:] = valid_scores[-1]
-
-        return point_scores
+        return point_scores.astype(np.float32)
 
     def save(self, save_dir: Path) -> None:
         if self.model is None:

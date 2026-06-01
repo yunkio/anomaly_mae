@@ -36,6 +36,7 @@ from typing import Optional, Tuple
 import numpy as np
 
 from comparison.segment_utils import compute_segment_safe_window_indices
+from comparison.baselines._boundary_safe_window import entity_test_slices
 import scipy.stats
 import torch
 import torch.nn as nn
@@ -590,8 +591,57 @@ class GDNBaseline:
 
         return self
 
+    # ------------------------------------------------------------------
+    # RAW per-entity window producer (boundary-safe).
+    #
+    # This is the *raw score producer* in the sense of _boundary_safe_window:
+    # windowing (stride=1) + model inference + per-window |pred-gt| for ONE
+    # entity's test slice in ISOLATION, so no window's seq_len rows can ever span
+    # an entity boundary. It returns the per-WINDOW (n_win, F) per-sensor absolute
+    # error AND the GLOBAL target timestep of each window (i+seq_len, offset by the
+    # entity's lo). It does NOT apply any whole-test post-processing — the per-sensor
+    # median/IQR, the 4-window MA and the MAX over sensors are applied ONCE on the
+    # CONCATENATED per-window delta in predict(), so post-proc granularity is UNCHANGED.
+    # ------------------------------------------------------------------
+    def _raw_window_delta(self, sub_X: np.ndarray, lo: int):
+        """Per-entity raw producer.
+
+        Returns (win_delta, tgt_idx, head_target):
+          win_delta  : (n_win, F) per-window per-sensor |pred-gt| (float64), window order.
+          tgt_idx    : (n_win,)   GLOBAL target timestep of each window = lo + i + seq_len.
+          head_target: GLOBAL index range end for the entity's head fill = lo + seq_len
+                       (head timesteps [lo, lo+seq_len) lack a forecast → filled from this
+                       entity's first window score downstream; bounded to the entity).
+        Edge-safe: an entity slice shorter than seq_len+1 (no full window) yields an EMPTY
+        per-window delta (n_win=0); its head fill is handled downstream (zeros → finite).
+        """
+        sub_X = np.asarray(sub_X, dtype=np.float32)
+        Li = sub_X.shape[0]
+        head_target = lo + min(self.seq_len, Li)
+
+        # Edge case: slice too short for even one forecasting window → no windows.
+        if Li < self.seq_len + 1:
+            empty = np.zeros((0, sub_X.shape[1]), dtype=np.float64)
+            return empty, np.zeros((0,), dtype=np.int64), head_target
+
+        windows, targets = self._create_windows(sub_X, stride=1)  # boundary-safe: only this entity
+        n_windows = len(windows)
+
+        pred_list = []
+        for i in range(0, n_windows, self.batch_size):
+            batch_x = torch.from_numpy(windows[i:i + self.batch_size]).to(self.device)
+            pred = self.model(batch_x).cpu().numpy()  # (B, F)
+            pred_list.append(pred)
+        preds = np.concatenate(pred_list, axis=0).astype(np.float64)   # (n_windows, F)
+        gts = targets.astype(np.float64)                               # (n_windows, F)
+        win_delta = np.abs(preds - gts)                                # (n_windows, F)
+
+        # GLOBAL target timestep of window i within this entity = lo + i + seq_len.
+        tgt_idx = lo + self.seq_len + np.arange(n_windows, dtype=np.int64)
+        return win_delta, tgt_idx, head_target
+
     @torch.no_grad()
-    def predict(self, test_data: np.ndarray) -> np.ndarray:
+    def predict(self, test_data: np.ndarray, test_segments=None) -> np.ndarray:
         """
         Compute per-timestamp anomaly scores using upstream evaluate.py formula
         (d-ailin/GDN main, fetched 2026-05-24):
@@ -604,14 +654,22 @@ class GDNBaseline:
                 smoothed[i<before_num, f] = 0                    (reference boundary: ZEROS,
                                                                   np.zeros(err_scores.shape))
             (4) MAX across sensor axis (main.py: np.max(full_scores, axis=0)) → (N_windows,)
-            (5) Map window i → timestamp (i + seq_len). Output length per sensor before
-                MAX = T_test - seq_len (reference IMPLICIT_NONE; sliding window stride=1
-                starting at index slide_win → produces one score per forecastable target
-                index in [seq_len, T_test-1]). The tail is naturally covered (the last
-                window targets the last timestep). The first seq_len indices have NO
-                computed score in the reference. We apply OPTION B fallback (forward-fill
-                head from the first valid post-boundary smoothed aggregate) to preserve
-                the T_test length contract required by ./comparison/.
+            (5) Map window i → timestamp (i + seq_len), then OPTION-B head fill.
+
+        Boundary-safe TEST windowing (test_segments):
+            On multi-entity test arrays (SMD machines / SMAP-MSL channels / Exathlon apps,
+            concatenated by the harness), a single sliding window's seq_len history rows must
+            NEVER span two entities. We therefore run ONLY the RAW producer — windowing +
+            inference + per-window |pred-gt| — INDEPENDENTLY on each entity's test slice
+            (_raw_window_delta), then CONCATENATE the per-window deltas (in window order).
+            The WHOLE-TEST post-processing — per-sensor median/IQR robust normalisation,
+            4-window MA, MAX over sensors — is applied ONCE on that concatenated per-window
+            delta, EXACTLY as before, so its granularity is UNCHANGED (median/IQR/MA/MAX over
+            the full concatenated per-window error series). Each window's score is then scattered
+            to its GLOBAL target timestep, with the per-entity OPTION-B head fill bounded to the
+            entity. ``test_segments`` are TEST-LOCAL (lo,hi) per-entity ranges from the same
+            source as per-entity normalisation; None / single-entity → ONE entity slice covering
+            the whole array == bit-identical legacy behaviour (helper guarantees the no-op).
 
         Returns:
             scores: np.ndarray shape (T_test,), dtype float32.
@@ -620,42 +678,52 @@ class GDNBaseline:
             raise RuntimeError("Model not fitted. Call fit() first.")
 
         self.model.eval()
+        test_data = np.asarray(test_data, dtype=np.float32)
         n_samples = test_data.shape[0]
+        n_feat = test_data.shape[1]
 
-        # ---- collect per-sensor predictions and targets across all test windows
-        windows, targets = self._create_windows(test_data, stride=1)
-        n_windows = len(windows)
-        if self.verbose:
-            n_batches = (n_windows + self.batch_size - 1) // self.batch_size
-            print(f"  Inference: {n_windows:,} windows in {n_batches} batches")
+        slices = entity_test_slices(n_samples, test_segments)
 
-        pred_list = []
+        # ---- RAW producer (boundary-safe): per-entity windowing + inference + |pred-gt|.
+        # Each entity is windowed in isolation, then per-window deltas are concatenated in
+        # window order — identical to the legacy single windowing pass when there is one
+        # entity (the no-op), and free of cross-entity windows when there are many.
         start_time = time.time()
-        for batch_idx, i in enumerate(range(0, n_windows, self.batch_size)):
-            batch_x = torch.from_numpy(windows[i:i + self.batch_size]).to(self.device)
-            pred = self.model(batch_x).cpu().numpy()  # (B, F)
-            pred_list.append(pred)
+        win_delta_parts = []      # list of (n_win_i, F) per-window deltas
+        tgt_idx_parts = []        # list of (n_win_i,) GLOBAL target timesteps
+        head_targets = []         # per-entity (lo, head_end)
+        for (lo, hi) in slices:
+            wd, tgt, head_end = self._raw_window_delta(test_data[lo:hi], lo)
+            head_targets.append((lo, head_end))
+            win_delta_parts.append(wd)
+            tgt_idx_parts.append(tgt)
+
+        if win_delta_parts and sum(len(p) for p in win_delta_parts) > 0:
+            delta = np.concatenate(win_delta_parts, axis=0)            # (N_windows_total, F)
+            tgt_idx = np.concatenate(tgt_idx_parts, axis=0)            # (N_windows_total,)
+        else:
+            # No entity produced any window (every slice shorter than seq_len+1). Return a
+            # finite all-zero score of the required length (sensible "no evidence" fallback).
             if self.verbose:
-                n_batches = (n_windows + self.batch_size - 1) // self.batch_size
-                if (batch_idx + 1) % max(1, n_batches // 10) == 0:
-                    progress = (batch_idx + 1) / n_batches * 100
-                    elapsed = time.time() - start_time
-                    print(f"\r  Inference: [{batch_idx + 1}/{n_batches}] {progress:5.1f}% | "
-                          f"Elapsed: {elapsed:.1f}s", end="")
-                    sys.stdout.flush()
+                print("  Inference: no forecastable windows; returning zero scores")
+            return np.zeros(n_samples, dtype=np.float32)
 
+        n_windows = len(delta)
         if self.verbose:
-            print(f"\n  Inference complete: {time.time() - start_time:.1f}s")
+            multi = f" across {len(slices)} entities (boundary-safe)" if len(slices) > 1 else ""
+            print(f"  Inference complete: {n_windows:,} windows in "
+                  f"{time.time() - start_time:.1f}s{multi}")
 
-        preds = np.concatenate(pred_list, axis=0).astype(np.float64)   # (N_windows, F)
-        gts = targets.astype(np.float64)                                # (N_windows, F)
+        # ============================================================
+        # WHOLE-TEST POST-PROCESSING (UNCHANGED granularity — applied ONCE on the
+        # concatenated per-window delta, NOT per entity). Per-sensor median/IQR over the
+        # ENTIRE test-error distribution, MA along the full window axis, MAX over sensors —
+        # identical to legacy (when single-entity, this IS the legacy computation verbatim).
+        # ============================================================
 
-        # ---- per-sensor absolute error + robust normalisation
-        delta = np.abs(preds - gts)                                     # (N_windows, F)
-        # per-sensor median and IQR over the entire test-error distribution
+        # ---- per-sensor robust normalisation over the entire test-error distribution
         # (mirrors upstream util/data.py:get_err_median_and_iqr called per sensor in
         # evaluate.py:get_err_scores)
-        n_feat = delta.shape[1]
         median_per_sensor = np.median(delta, axis=0)                    # (F,)
         iqr_per_sensor = scipy.stats.iqr(delta, axis=0)                 # (F,)
         epsilon = 1e-2
@@ -664,8 +732,6 @@ class GDNBaseline:
         # ---- 4-window moving average (before_num = 3)
         # Reference (evaluate.py:50-54) initialises smoothed = np.zeros(...) and only
         # assigns indices i >= before_num. Indices [0, before_num) therefore remain 0.
-        # We replicate that boundary policy exactly (was previously raw err — corrected
-        # in Phase 2.5 inference-aggregation correction).
         before_num = 3
         smoothed = np.zeros_like(err)
         # vectorised moving average over axis 0:
@@ -677,31 +743,35 @@ class GDNBaseline:
         # ---- MAX across sensor axis → (N_windows,)
         aggregated = np.max(smoothed, axis=1)                           # (N_windows,)
 
-        # ---- map window index → timestamp (target index = i + seq_len)
-        # Window i predicts test_data[i + seq_len]. With stride=1 and i ∈ [0, N_windows),
-        # this covers timestamps [seq_len, T_test-1] — exactly N_windows = T_test - seq_len
-        # indices. The reference produces no scores for indices [0, seq_len-1] (no context
-        # to forecast from). Tail is naturally covered (last window targets last timestep).
+        # ---- map each window → its GLOBAL target timestamp (vectorised scatter).
+        # Window k (concatenated order) targets global index tgt_idx[k]; covers each
+        # entity's [lo+seq_len, hi-1]. Head indices [lo, lo+seq_len) per entity lack a
+        # forecast and are filled below (OPTION B), bounded to the entity (no leak).
         scores = np.zeros(n_samples, dtype=np.float32)
-        for i, s in enumerate(aggregated):
-            tgt = i + self.seq_len
-            if tgt < n_samples:
-                scores[tgt] = s
+        valid = tgt_idx < n_samples
+        scores[tgt_idx[valid]] = aggregated[valid].astype(np.float32)
 
-        # ---- Option B fallback: forward-fill head from first valid post-boundary score
-        # Head indices [0, seq_len-1] lack reference scores. The first reference-valid
-        # smoothed aggregate is aggregated[before_num] (since aggregated[:before_num] = 0
-        # by reference boundary). Map: target timestamp of aggregated[before_num] is
-        # seq_len + before_num. We forward-fill all head indices [0, seq_len + before_num)
-        # from that first valid aggregate, satisfying the T_test length contract while
-        # preserving Option B semantics (never inject misleading zero/no-anomaly priors).
-        if n_windows > before_num:
-            first_valid_score = aggregated[before_num]
-            fill_end = min(self.seq_len + before_num, n_samples)
-            scores[:fill_end] = first_valid_score
-        elif n_windows > 0:
-            # Edge case: fewer than before_num+1 windows; use first available aggregate.
-            scores[: min(self.seq_len, n_samples)] = aggregated[0]
+        # ---- OPTION-B head fill, per entity (bounded — never reaches across a boundary).
+        # This mirrors the legacy head policy VERBATIM, applied to each entity's own global
+        # window-slot range [w0, w0+n_win_i) and head start `lo` (head_end = lo+seq_len):
+        #   legacy, n_windows>before_num : scores[0 : seq_len+before_num] = aggregated[before_num]
+        #   legacy, 0<n_windows<=before_num: scores[0 : seq_len]          = aggregated[0]
+        # For a single entity (lo=0, head_end=seq_len, w0=0) this is bit-identical to legacy.
+        cursor = 0
+        for part_i, (lo, head_end) in enumerate(head_targets):
+            n_win_i = len(win_delta_parts[part_i])
+            if n_win_i == 0:
+                # Entity produced no window; its whole slice [lo, hi) stays 0 (finite).
+                continue
+            w0 = cursor                      # this entity's first global window slot
+            cursor += n_win_i
+            if n_win_i > before_num:
+                first_valid = aggregated[w0 + before_num]
+                fill_end = min(head_end + before_num, n_samples)
+            else:
+                first_valid = aggregated[w0]
+                fill_end = min(head_end, n_samples)
+            scores[lo:fill_end] = np.float32(first_valid)
 
         return scores
 

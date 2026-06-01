@@ -65,6 +65,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
+from comparison.baselines._boundary_safe_window import per_entity_concat
 from comparison.segment_utils import compute_segment_safe_window_indices
 
 
@@ -431,12 +432,38 @@ class DAGMMBaseline:
     # Inference
     # ------------------------------------------------------------------
 
-    def predict(self, test_X: np.ndarray) -> np.ndarray:
+    def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
         """Per-timestep anomaly score (TranAD ``backprop`` training=False branch).
 
         Score at timestep ``t`` = mean over features of ``(x_hat - x)^2`` taken on
         the LAST row of the window that ends at ``t`` (the current-step row,
         ``data.shape[1] - feats : data.shape[1]`` slice in upstream).
+
+        Boundary-safe TEST windowing
+        ----------------------------
+        ``_convert_to_windows`` builds a length-preserving window for every timestep
+        ``i`` from ``data[i - n_window:i]`` (history) with a head-fill (repeat
+        ``data[0]``) for ``i < n_window``. On a multi-entity test array (SMD machines,
+        SMAP-MSL channels, Exathlon apps), the history slice of a window near an entity
+        boundary would otherwise pull rows from the PREVIOUS entity, corrupting the
+        boundary-region scores. We therefore route the ENTIRE raw-score producer —
+        windowing + inference + last-row squared-error per-timestep mapping (incl. the
+        head-fill) — through ``per_entity_concat``, which runs ``_raw`` INDEPENDENTLY on
+        each entity's own test slice (so no window can span a boundary) and concatenates.
+
+        ``test_segments``: per-entity ``(lo, hi)`` TEST-LOCAL list from the SAME unified
+        source as per-entity normalization (``get_file_norm_segments()`` test side).
+        ``None`` / single-entity / non-tiling -> exactly ONE call over the whole array
+        == bit-identical legacy behaviour (the helper guarantees the no-op).
+
+        There is NO whole-test score post-processing in DAGMM (the per-timestep raw
+        squared-error IS the final score), so nothing is applied after concatenation —
+        the score granularity is identical to before for the single-entity path.
+
+        Edge case: an entity slice shorter than ``n_window`` does NOT crash —
+        ``_convert_to_windows`` only ever indexes ``data[0:i]`` / ``data[i-n_window:i]``
+        with ``i < len(slice)``, and head-fills the remainder from that entity's own
+        ``data[0]`` (faithful to upstream's first-row repeat, now entity-local).
 
         Returns:
             ``(T_test,)`` float32. Domain B contract — no trimming, no padding.
@@ -445,24 +472,34 @@ class DAGMMBaseline:
             raise RuntimeError("DAGMMBaseline.predict called before fit()")
 
         self.model.eval()
-        test_X = test_X.astype(np.float32)
-        windows = _convert_to_windows(test_X, self.n_window)
+        test_X = np.asarray(test_X, dtype=np.float32)
         n_feats = self.n_features
-        T = len(windows)
-        scores = np.zeros(T, dtype=np.float32)
 
-        with torch.no_grad():
-            for start in range(0, T, self.batch_size):
-                stop = min(start + self.batch_size, T)
-                batch_x_np = windows[start:stop]
-                batch_x = torch.from_numpy(batch_x_np).to(self.device)
-                _, x_hat, _, _ = self.model(batch_x)
-                last_x = batch_x[:, -n_feats:]      # (B, F)
-                last_hat = x_hat[:, -n_feats:]      # (B, F)
-                sq = (last_hat - last_x) ** 2       # (B, F)
-                scores[start:stop] = sq.mean(dim=1).detach().cpu().numpy().astype(np.float32)
+        def _raw(sub_X: np.ndarray) -> np.ndarray:
+            """RAW per-timestep score for ONE entity's test slice (no cross-entity dep).
 
-        return scores
+            Mirrors the upstream per-slice logic exactly: length-preserving windowing,
+            batched inference, last-row squared error mean over features.
+            """
+            sub_X = np.asarray(sub_X, dtype=np.float32)
+            windows = _convert_to_windows(sub_X, self.n_window)
+            T = len(windows)
+            scores = np.zeros(T, dtype=np.float32)
+            with torch.no_grad():
+                for start in range(0, T, self.batch_size):
+                    stop = min(start + self.batch_size, T)
+                    batch_x_np = windows[start:stop]
+                    batch_x = torch.from_numpy(batch_x_np).to(self.device)
+                    _, x_hat, _, _ = self.model(batch_x)
+                    last_x = batch_x[:, -n_feats:]      # (B, F)
+                    last_hat = x_hat[:, -n_feats:]      # (B, F)
+                    sq = (last_hat - last_x) ** 2       # (B, F)
+                    scores[start:stop] = sq.mean(dim=1).detach().cpu().numpy().astype(np.float32)
+            return scores
+
+        # Boundary-safe: run _raw per-entity (no window spans a boundary), then concat.
+        # No whole-test post-processing in DAGMM -> the concatenated raw IS the score.
+        return per_entity_concat(test_X, test_segments, _raw)
 
     # ------------------------------------------------------------------
     # Persistence (optional — pipeline-owned best-epoch handling supersedes this)

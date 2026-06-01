@@ -56,6 +56,7 @@ from comparison.baselines._per_file_norm import (
     fit_transform_train_per_file,
     transform_test_per_file,
 )
+from comparison.baselines._boundary_safe_window import per_entity_concat
 
 
 class WETASBaseline:
@@ -389,6 +390,20 @@ class WETASBaseline:
           2. Encoder -> dscore (n_chunks, split_size); flatten to padded length.
           3. Drop the `pad` front entries -> exactly N_test timesteps (`flatten[pad:]`).
         np.nan_to_num applied. len(out) == len(test_X) guaranteed.
+
+        BOUNDARY-SAFE TEST WINDOWING (2026-06-02): upstream `timeseries.py:17-38` chunks
+        EACH recording FILE independently (the `split_size` non-overlapping chunking at
+        :33-38 runs once per file inside the `_load_data` loop at :17-22, re-verified live).
+        On a multi-entity concatenated test array, chunking over the WHOLE array would let a
+        single non-overlapping chunk straddle two entities (machine-k tail + machine-(k+1)
+        head), corrupting boundary-region dscores. We therefore route the RAW score producer
+        (windowing + encoder inference + per-chunk->per-timestep mapping incl. front-pad drop)
+        through `per_entity_concat`, running it on each entity's own test slice in isolation —
+        this is STRICTLY MORE faithful to upstream's per-file chunking, not less. Normalization
+        is UNCHANGED (still per-file, applied BEFORE windowing); the per-element post-processing
+        (length safeguard + nan_to_num) runs ONCE on the concatenated raw scores, exactly as
+        before. Single-entity / None / non-tiling `test_segments` -> ONE call over the whole
+        array == bit-identical legacy behaviour (helper guarantees the no-op).
         """
         if self.model is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
@@ -397,25 +412,54 @@ class WETASBaseline:
 
         # Original-paper normalization at test time (timeseries.py:33-34): per-source-FILE,
         # LEAK-FREE — each test recording transformed by its PAIRED cached TRAIN StandardScaler
-        # (.transform only). Removes the previous transductive fit-on-test.
+        # (.transform only). Removes the previous transductive fit-on-test. Done BEFORE windowing
+        # so the per-entity raw_fn below receives an already-normalized array (NO re-normalization).
         test_X = self._normalize_per_file_test(test_X, test_segments)
 
-        chunks, pad = self._nonoverlap_chunks_leftpad(test_X)   # (n_chunks, L, F), pad
         self.model.eval()
 
-        all_dscore = []
-        with torch.no_grad():
-            for i in range(0, len(chunks), self.batch_size):
-                batch = torch.from_numpy(chunks[i:i + self.batch_size]).to(self.device)  # (B, L, F)
-                out = self.model.get_scores(batch)
-                dscore = out['dscore']                  # (B, L) continuous, model.py:134
-                all_dscore.append(dscore.detach().cpu().numpy())
+        def raw_fn(sub_X: np.ndarray) -> np.ndarray:
+            """RAW per-timestep dscore for ONE entity slice (boundary-safe windowing+inference).
 
-        flat = np.concatenate(all_dscore, axis=0).reshape(-1).astype(np.float32)  # padded length
-        # Drop the FRONT zero-pad to recover the original timeline (timeseries.py:44 pads front).
-        scores = flat[pad:]
+            Reproduces upstream's per-FILE chunking (timeseries.py:33-38): non-overlapping
+            split_size chunks with FRONT zero-pad, encoder -> dscore, flatten, drop the front
+            pad -> exactly len(sub_X) scores. `sub_X` is already normalized. Edge-safe: a slice
+            shorter than split_size yields ONE front-padded chunk (`_nonoverlap_chunks_leftpad`
+            front-pads to one full chunk, then `flat[pad:]` recovers the Li real timesteps), so
+            short entities never crash. The per-element nan_to_num + length safeguard are applied
+            ONCE on the concatenation by the caller, NOT here.
+            """
+            sub_X = np.asarray(sub_X, dtype=np.float32)
+            li = len(sub_X)
+            if li == 0:
+                return np.zeros(0, dtype=np.float32)
 
-        # Length integrity safeguard (forward/tail-fill any residual mismatch).
+            chunks, pad = self._nonoverlap_chunks_leftpad(sub_X)   # (n_chunks, L, F), pad
+            seg_dscore = []
+            with torch.no_grad():
+                for i in range(0, len(chunks), self.batch_size):
+                    batch = torch.from_numpy(chunks[i:i + self.batch_size]).to(self.device)  # (B, L, F)
+                    out = self.model.get_scores(batch)
+                    dscore = out['dscore']                  # (B, L) continuous, model.py:134
+                    seg_dscore.append(dscore.detach().cpu().numpy())
+
+            flat = np.concatenate(seg_dscore, axis=0).reshape(-1).astype(np.float32)  # padded length
+            # Drop the FRONT zero-pad to recover this entity's timeline (timeseries.py:44 pads front).
+            seg = flat[pad:]
+            # Guarantee exactly li scores for this entity (per_entity_concat asserts len==li).
+            if len(seg) > li:
+                seg = seg[:li]
+            elif len(seg) < li:
+                fill = seg[-1] if len(seg) > 0 else 0.0
+                seg = np.concatenate([seg, np.full(li - len(seg), fill, dtype=np.float32)])
+            return seg.astype(np.float32)
+
+        # Boundary-safe: per-entity windowing+inference, concatenated to (N_test,). Single-entity /
+        # None / non-tiling test_segments -> ONE raw_fn(test_X) == legacy behaviour (helper no-op).
+        scores = per_entity_concat(test_X, test_segments, raw_fn)
+
+        # Whole-test post-processing (per-element, granularity-UNCHANGED): final length integrity
+        # safeguard + nan_to_num, applied ONCE on the concatenated raw scores.
         if len(scores) > n:
             scores = scores[:n]
         elif len(scores) < n:

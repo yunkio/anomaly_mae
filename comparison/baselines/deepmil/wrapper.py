@@ -58,6 +58,7 @@ from comparison.baselines._per_file_norm import (
     fit_transform_train_per_file,
     transform_test_per_file,
 )
+from comparison.baselines._boundary_safe_window import per_entity_concat
 
 
 class DeepMILBaseline:
@@ -291,21 +292,58 @@ class DeepMILBaseline:
         # datasets only). The i-th test file is z-scored by the i-th cached TRAIN scaler via
         # .transform ONLY (never fit on test). Single-file / None -> the single cached train
         # scaler transforms the whole test array (leak-free; matches the other self-norm models'
-        # regime — no test-statistic leakage).
+        # regime — no test-statistic leakage). Normalization is done BEFORE windowing and stays
+        # UNCHANGED — the boundary-safe routing below operates on the already-normalized array.
         test_X = transform_test_per_file(test_X, test_segments, self._scalers).astype(np.float32)
 
-        n = len(test_X)
         self.model.eval()
+
+        # --- Boundary-safe TEST windowing (2026-06-02). The RAW score producer
+        # (windowing + DiCNN/MIL inference + overlap aggregation + head/tail fill) is run
+        # INDEPENDENTLY on each entity's own test slice via `per_entity_concat`, so on
+        # multi-file datasets (SMD machines / SMAP-MSL channels / Exathlon apps) NO sliding
+        # window can span an entity boundary (the old code slid over the WHOLE concatenated
+        # test array — boundary windows mixed two entities and corrupted the boundary-region
+        # scores). `test_segments` is the SAME per-entity (lo,hi) TEST-local list used for
+        # per-file normalization above, so windowing and normalization stay consistent.
+        # Single-entity / None / non-tiling segments -> ONE call over the whole array ==
+        # bit-identical legacy behaviour (helper-guaranteed NO-OP). Within one entity the
+        # window/aggregation/fill logic is byte-for-byte the previous code.
+        scores = per_entity_concat(test_X, test_segments, self._raw_scores)
+
+        # --- Whole-test post-processing: pointwise NaN/inf cleanup, applied ONCE on the
+        # concatenated raw scores (granularity unchanged — nan_to_num is per-timestep and
+        # therefore invariant to whether it runs before or after concatenation).
+        scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+        return scores.astype(np.float32)
+
+    def _raw_scores(self, sub_X: np.ndarray) -> np.ndarray:
+        """RAW per-timestep score producer for ONE (already-normalized) entity slice.
+
+        Runs the model's windowing + dense MIL inference + overlap aggregation + head/tail
+        fill on ``sub_X`` (Li, F) in ISOLATION (so no window crosses into a neighbouring
+        entity) and returns a length-``Li`` float64 array. Edge-safe: an entity slice shorter
+        than ``seq_len`` yields zero valid windows (`_build_bag_windows` returns empty), so
+        every timestep is uncovered and `_fill_uncovered` returns all-zeros for that slice
+        (documented fallback — a too-short entity gets a flat baseline score rather than
+        crashing). NO whole-test post-processing here (the caller applies `nan_to_num` once
+        after concatenation), and NO re-normalization (`sub_X` is already normalized).
+        """
+        sub_X = np.asarray(sub_X, dtype=np.float32)
+        n = len(sub_X)
 
         sum_scores = np.zeros(n, dtype=np.float64)
         cnt_scores = np.zeros(n, dtype=np.float64)
         max_scores = np.full(n, -np.inf, dtype=np.float64)
 
-        starts = self._build_bag_windows(test_X, self.test_stride, segments=None)
+        # segments=None: WITHIN a single entity the slice is windowed contiguously; the
+        # cross-entity boundary safety is provided by per_entity_concat (each entity is a
+        # separate call), exactly as the train side drops only inter-recording crossings.
+        starts = self._build_bag_windows(sub_X, self.test_stride, segments=None)
 
         with torch.no_grad():
             for s in starts:
-                window = test_X[s:s + self.seq_len]                    # (L, F)
+                window = sub_X[s:s + self.seq_len]                    # (L, F)
                 bag = torch.from_numpy(window[None].astype(np.float32)).to(self.device)
                 # Dense per-timestep score for the window (C2) — no segment broadcast.
                 point = self.model(bag).squeeze(0).cpu().numpy().astype(np.float64)  # (L,)
@@ -322,10 +360,10 @@ class DeepMILBaseline:
             scores = np.where(cnt_scores > 0, sum_scores / np.maximum(cnt_scores, 1.0), np.nan)
 
         # Head/tail fill: timesteps never covered by any window (only possible when
-        # n < seq_len) get the nearest covered value via forward/back fill.
+        # this entity slice's length < seq_len) get the nearest covered value via
+        # forward/back fill (all-zeros if the whole slice is uncovered).
         scores = self._fill_uncovered(scores)
-        scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
-        return scores.astype(np.float32)
+        return scores
 
     @staticmethod
     def _fill_uncovered(scores: np.ndarray) -> np.ndarray:
