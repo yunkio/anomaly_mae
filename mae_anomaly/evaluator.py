@@ -686,7 +686,11 @@ def compute_extra_metrics(
         dict with keys vus_roc, vus_pr, affiliation_precision, affiliation_recall,
         affiliation_f1, r_based_f1. Returns zeros for degenerate input.
     """
-    from vus.metrics import get_metrics as _vus_get
+    # Make vus import optional so missing package doesn't break aff/r-F1 computation.
+    try:
+        from vus.metrics import get_metrics as _vus_get
+    except ImportError:
+        _vus_get = None
 
     out = {
         'vus_roc': 0.0, 'vus_pr': 0.0,
@@ -706,14 +710,16 @@ def compute_extra_metrics(
     pred = (s >= float(threshold)).astype(int)
 
     # VUS — official example normalizes scores to [0,1] via MinMaxScaler.
-    smin, smax = float(s.min()), float(s.max())
-    s_norm = (s - smin) / (smax - smin + 1e-12)
-    try:
-        vr = _vus_get(s_norm, y, metric='all', slidingWindow=sliding_window)
-        out['vus_roc'] = float(vr.get('VUS_ROC', 0.0))
-        out['vus_pr']  = float(vr.get('VUS_PR', 0.0))
-    except Exception as e:
-        print(f"  [VUS warn] {type(e).__name__}: {e}")
+    if _vus_get is not None:
+        smin, smax = float(s.min()), float(s.max())
+        s_norm = (s - smin) / (smax - smin + 1e-12)
+        try:
+            vr = _vus_get(s_norm, y, metric='all', slidingWindow=sliding_window)
+            out['vus_roc'] = float(vr.get('VUS_ROC', 0.0))
+            out['vus_pr']  = float(vr.get('VUS_PR', 0.0))
+        except Exception as e:
+            print(f"  [VUS warn] {type(e).__name__}: {e}")
+    # else: vus_roc/vus_pr stay 0.0 (vus module not installed — aff/r-F1 still computed)
 
     # Aff + R-F1 at given threshold
     out.update(_compute_threshold_dependent(s, y, pred))

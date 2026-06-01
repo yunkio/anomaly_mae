@@ -90,3 +90,62 @@ dataset/
 
 # Marimo
 __marimo__/
+
+# ============================================================
+# Cross-machine consistency (machineB, 2026-06-01)
+# Track ALL scripts (.py) and docs (.md) repo-wide so two machines stay in sync,
+# even inside otherwise-ignored directories. Experiment results / temp / trash / data stay ignored.
+# Per dir: un-ignore the tree, re-ignore its contents, then re-include ONLY .py/.md.
+# ============================================================
+
+# comparison/ framework
+!comparison/
+comparison/**
+!comparison/**/
+!comparison/**/*.py
+!comparison/**/*.md
+
+# scripts/ablation/
+!scripts/ablation/
+scripts/ablation/**
+!scripts/ablation/**/
+!scripts/ablation/**/*.py
+!scripts/ablation/**/*.md
+
+# mae_anomaly/visualization/
+!mae_anomaly/visualization/
+mae_anomaly/visualization/**
+!mae_anomaly/visualization/**/
+!mae_anomaly/visualization/**/*.py
+!mae_anomaly/visualization/**/*.md
+
+# docs/ablation/
+!docs/ablation/
+docs/ablation/**
+!docs/ablation/**/
+!docs/ablation/**/*.py
+!docs/ablation/**/*.md
+
+# .claude/ (markdown agent/skill/doc files only; machine-local settings*.json stay untracked)
+!.claude/
+.claude/**
+!.claude/**/
+!.claude/**/*.md
+
+# dataset/ (loader scripts only; large data files stay ignored)
+!dataset/
+dataset/**
+!dataset/**/
+!dataset/**/*.py
+!dataset/**/*.md
+
+# file-pattern-excluded scripts + root docs (run_*.py, eval_*.py, visualize_all.py, CLAUDE.md, ...)
+!scripts/*.py
+!CLAUDE.md
+!ablation_guideline.md
+
+# --- hard re-exclude: these MUST stay ignored regardless of the negations above ---
+temp/
+.trash/
+trash/
+results/*/
