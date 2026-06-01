@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-02: Comparison **boundary-safe per-entity TEST windowing** (21 windowing baselines)
+
+**문제 (test-time cross-entity window)**: 정규화는 per-entity로 고쳤으나, **test 추론의 sliding/non-overlap window는 여전히 전체 concat test를 경계 무시하고 분할**했다. multi-entity 데이터셋(SMD 28머신·SMAP 54채널·MSL 27채널·Exathlon 6앱)에서 entity 경계를 가로지르는 window가 두 entity 데이터를 섞어 그 경계 부근 score를 오염시킨다. harness는 **train**만 boundary-safe(`create_train_windows_boundary_safe`/`train_segments`)였고 **test-side 메커니즘은 전무**했다 (검증 결과: 21개 windowing 모델 전부 test-boundary-unsafe — `test_segments`는 정규화에만 쓰이고 windowing은 전체 분할).
+
+**수정 (per-entity test windowing, side-effect-free)**:
+- 공유 helper `comparison/baselines/_boundary_safe_window.py::per_entity_concat(test_X, test_segments, raw_fn)`: 각 entity의 test slice에서 **windowing+inference를 독립 수행** → 어떤 window도 경계를 안 넘음 → raw per-timestep score를 concat. **score 후처리(median-IQR/smooth/max/softmax-axis)는 concat 후 전체 test 기준 그대로** → granularity 불변. 단일 entity/단일파일/None → **1회 호출 = bit-identical NO-OP**.
+- 21개 wrapper가 windowing+inference를 per-entity로 경유. **정규화는 클래스별로 전부 불변**: harness-norm(이미 per-entity), self-norm(기존 per-entity transform 유지 후 per-entity window), **6 RevIN SOTA**(timesnet/tfmae/memto/moderntcn/dcdetector/catch — whole-test StandardScaler를 slice 전 1회 적용, slice-invariant, **windowing만** per-entity). NEURAL은 `test_segments`를 `run_dl_baseline_with_epoch_eval`+`_predict_gated`로 plumbing.
+- **official 충실**: upstream이 entity를 개별 처리함을 재확인 (npsr `evaluation.py` "only one entity should be input at a time", wetas/deepmil per-file chunking, omnianomaly single-entity). 즉 per-entity windowing이 곧 official 충실이고 기존 concat-naive가 deviation.
+
+**train boundary-safety 재검증**: dispatch+`create_train_windows_boundary_safe`(실제 `start<b<end` skip) 추적 → **dagmm만 train-unsafe**(SOTA지만 fit이 train_segments 미수용). mlp/mlpmixer/transformer는 NEURAL boundary-safe window 사용 → safe.
+
+**검증**: 19/19 파일 adversarial gate **GREEN** — single-entity **bit-identical**(side-effect 없음), 경계 미crossing, 후처리·정규화 granularity 불변, contract, py_compile/import OK. **영향**: SMD/MSL/SMAP/Exathlon(multi-entity)은 재실행 시 corrected 수치; 단일파일(PSM/SWaT/WaDi)은 bit-identical.
+
 ## 2026-06-02: Comparison 파이프라인 **per-entity 정규화 일원화** + baseline faithfulness 재감사 fix
 
 MAE 파이프라인 fix(아래 항목, `f94d7dc`)는 `comparison/` baseline 경로를 고치지 않았다(comparison은 자체
