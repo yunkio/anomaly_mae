@@ -38,6 +38,31 @@ Sources: [QuoVadisTAD](https://arxiv.org/abs/2405.02678) (ICML 2024 Position Pap
 
 Datasets covered (9): Simulation, SWaT A1+A2, WaDi A1, WaDi A2, SMD (28 machines), PSM, Exathlon (6 apps {1,2,4,5,6,9}), SMAP (54 channels), MSL (27 channels). (SMAP/MSL = NASA Telemanom, Hundman et al. KDD 2018, 2026-05-26 통합; Pattern A whole + Pattern B per-channel — `docs/DATASET.md` 참조.) All 22 active models are evaluated on each dataset under Q1 (minmax full) and Q3 (minmax normalonly) conditions.
 
+> **Normalization (2026-06-02 per-entity unification):** the minmax/zscore label above denotes the
+> *scaler identity*; the *fitting granularity* is now **per source file / entity** for the multi-entity
+> concatenated datasets — **SMD (28 machines), SMAP (54 channels), MSL (27 channels), Exathlon (6 apps)**.
+> Each entity's scaler is fit on its OWN train slice and transforms its OWN test slice (leak-free), then
+> the concat layout is kept. THE PRINCIPLE: per-entity normalization is applied consistently **regardless
+> of how a dataset is set up** (smd_concat / smd / smap / msl / exathlon_concat all → per-entity); genuinely
+> single-entity datasets (PSM, SWaT A1+A2, WaDi A1/A2, Simulation, *_simple, single-machine SMD) are a
+> bit-identical NO-OP (per-entity ≡ whole-array). The segmentation source is the SAME for the comparison
+> harness (`comparison/data/unified_loader.get_file_norm_segments` + `comparison/baselines/_per_file_norm.py`)
+> and the MAE pipeline (`mae_anomaly/dataset_sliding.SlidingWindowDataset._normalize_per_entity`), both
+> reading `data_info['entity_norm_segments']`. **Two intentional exceptions are preserved:** (a) minmax
+> uses **clip=False** (paper-faithful sklearn default); (b) per-model scaler identity (npsr =
+> MinMaxScaler(−1,1)+clamp, others = StandardScaler, 14 harness-minmax models = minmax). **6 "untouchable"
+> SOTA** — timesnet, tfmae, memto, moderntcn, dcdetector, catch — take the raw `none` branch and
+> self-normalize **whole-array internally** (their official upstream ships a single pre-concatenated train
+> array + one global scaler, often + per-window RevIN); per-entity is NOT applied to them, by design.
+
+> **Results invalidation (2026-06-02 — re-run NOT yet performed):** prior numbers on the **multi-entity
+> concat datasets — SMD / MSL / SMAP / Exathlon** are invalidated for all models EXCEPT the 6 untouchable
+> (timesnet, tfmae, memto, moderntcn, dcdetector, catch), due to the per-entity normalization change.
+> Additionally, **moderntcn & nrdetector** are invalidated on **ALL** datasets (score-formula fix), and
+> **wetas / treemil / deepmil** on single-file datasets too (test-side leak fix). **Unaffected (no re-run
+> needed):** the 6 untouchable on any dataset; single-file datasets (PSM / SWaT / WaDi / Simulation) for
+> the 16 non-leak-fixed models.
+
 ---
 
 ## Simple Baselines
@@ -705,6 +730,8 @@ Input: (win_size × n_features)
 
 **Description:** Patch-based pure-conv structure with large-kernel depthwise convolution (+ small kernel branch) and dual ConvFFN mixers (D-mixer per-variate, M-mixer per-feature). RevIN-wrapped reconstruction autoencoder.
 
+**Anomaly Score (2026-06-01 faithfulness fix — was MAJOR_DEVIATION → now faithful):** per-test-window **per-position** reconstruction MSE (mean over features, exactly upstream), **overlap-averaged across all stride=1 windows covering each timestep** → `(T_test,)`. The previous implementation scored only the **last window position** (`err[:, -1]`), discarding 99/100 of upstream's reconstruction signal; the fix restores upstream ModernTCN-detection's flatten-all-positions behavior (`comparison/baselines/moderntcn/wrapper.py:33-38, 263-274`). moderntcn is one of the **6 "untouchable"** models for normalization (raw `none` branch + internal whole-array RevIN; NOT per-entity'd).
+
 **Configuration:** win_size=96, patch_size=8, patch_stride=4, dims=[32], num_blocks=[1], large_size=[13], small_size=[5], ffn_ratio=1, dropout=0.3, lr=1e-4, batch_size=128, epochs=10.
 
 **Reference:** [luodhhh/ModernTCN](https://github.com/luodhhh/ModernTCN) (MIT).
@@ -912,7 +939,7 @@ from .new_model import NewModelBaseline
 
 기존 22개와 달리 학습 시 `train_y` 사용. 약 label = `max(train_y over window)` (train split 한정, leak-free). 전용 실행 경로 `run_weak_sota_baseline_with_epoch_eval`. **Q1-only (Q3 = N/A — `train_y` 전부 0 → positive bag 없음 → `RuntimeError`).** 상태 = **구현 완료 · CPU dry-test 통과 · GPU 미실행** (결과표 weak 행 수치 0개). 독립 리뷰 verdict 병기. 상세 work-log: `temp/ssl_official_baseline_porting_0529/`.
 
-**Normalization fidelity (2026-05-30 핵심 수정):** 4종 모두 이전엔 pipeline **global MinMax** 를 받아 원논문과 불일치(fidelity 결함)했으나, 현재 `run_baseline.py` `SELF_NORMALIZING_WEAK={wetas, treemil, nrdetector, deepmil}` 등록으로 **raw 데이터 수신 + 원논문 normalization 자체 적용**: WETAS/TreeMIL/DeepMIL = per-recording/per-file StandardScaler(z-score), NRdetector = per-split z-score StandardScaler. predict 측은 test segment 경계 미수신 contract 라 transductive whole-test 로 대체(leakage 없음, residual = granularity). 모델별 상세는 각 §의 **Normalization** 항목.
+**Normalization fidelity (2026-05-30 핵심 수정):** 4종 모두 이전엔 pipeline **global MinMax** 를 받아 원논문과 불일치(fidelity 결함)했으나, 현재 `run_baseline.py` `SELF_NORMALIZING_WEAK={wetas, treemil, nrdetector, deepmil}` 등록으로 **raw 데이터 수신 + 원논문 normalization 자체 적용**: WETAS/TreeMIL/DeepMIL = per-recording/per-file StandardScaler(z-score), NRdetector = per-split z-score StandardScaler. 4종 모두 2026-06-02 leak-free per-source-file rework 적용: fit() 이 각 source file 의 TRAIN slice 에 자신의 scaler 를 fit 후 캐시하고, predict() 는 PAIRED test file 을 그 캐시된 TRAIN scaler 로 `.transform` (절대 fit-on-test 안 함, 공유 kernel `comparison/baselines/_per_file_norm.py`). 이는 이전 4건의 fit-on-test leak (wetas/treemil/deepmil/nrdetector predict 경로) 을 제거한 것. 단일 파일 데이터셋에서는 per-file ≡ whole-array NO-OP. 모델별 상세는 각 §의 **Normalization** 항목.
 
 **Provenance gate (G1–G5):** 본 4종은 `GUIDE.md §7.1` 의 baseline 포팅 재발방지 gate (G1 출처 라벨+source locus / G2 NON_OFFICIAL ≥5-round source-chain / G3 in-project sibling cross-check / G4 provenance≠comparability / G5 vendored VCS 가시성) 를 적용. 각 §의 **Provenance** 항목에 라벨 기록 — DeepMIL encoder(DERIVATIVE_CITED, G3 WETAS DiCNN 재사용)·NRdetector encoder schedule(NON_OFFICIAL/IMPL-INVENTED)이 대표 사례.
 
@@ -926,7 +953,7 @@ from .new_model import NewModelBaseline
 - **head+loss = FAITHFUL (clean-room):** 공식 repo [WaqasSultani/AnomalyDetectionCVPR2018](https://github.com/WaqasSultani/AnomalyDetectionCVPR2018) 은 **무 LICENSE · legacy Keras 1.1.0/Theano · video/C3D · 실행 불가**. vendoring 불가 → MIL ranking head+loss 를 paper 로부터 clean-room 재구현 (DAGMM §13-style reference substitution; 공식 repo 코드 미복사, ekosman MIT PyTorch port 는 교차검증용으로만 참조).
 - **encoder = DERIVATIVE_CITED (NOT OFFICIAL):** Sultani 원논문은 frozen C3D fc6 4096-d feature 를 소비하는 **video** 방법이라 학습형 TS encoder 가 없다. DeepMIL-on-TS encoder 의 canonical 정의는 후속 WS-TSAD 논문 **WETAS (Lee et al., ICCV'21, CVF p.7360)** 의 verbatim 문장: *"DeepMIL employs the same model architecture with WETAS (i.e., DiCNN)"* + *"DeepMIL-4,8,16"*. 따라서 in-project vendored **WETAS `DilatedCNN`** (`comparison/baselines/wetas/model.py`) 을 encoder 로 재사용 (input=n_features, hidden=output=128, kernel=2, n_layers=7 → RF=2^7=128). **OFFICIAL Sultani encoder 아님** (공식 video 방법엔 TS encoder 부재). 이전 bespoke `TSSegmentEncoder` 은퇴.
 
-**Normalization:** per-recording StandardScaler (z-score, WETAS-lineage; `timeseries.py`). wrapper 가 raw 데이터에 자체 적용 (`run_baseline.py` `SELF_NORMALIZING_WEAK`) — 이전 global-minmax 결함 수정. train = train recording fit/transform, predict = transductive whole-test (test segment 경계 미수신 contract 제약).
+**Normalization:** per-recording StandardScaler (z-score, WETAS-lineage; `timeseries.py`). wrapper 가 raw 데이터에 자체 적용 (`run_baseline.py` `SELF_NORMALIZING_WEAK`) — 이전 global-minmax 결함 수정. train = train recording fit/transform, predict = PAIRED test file 마다 캐시된 TRAIN scaler 로 `.transform` (per-source-file leak-free kernel `_per_file_norm.transform_test_per_file`; 이전 transductive whole-test leak 제거).
 
 **Architecture:** encoder = WETAS DiCNN (위 DERIVATIVE_CITED, dense per-timestep feature map `(B,L,128)`) + MIL ranking head `D→512(ReLU,Dropout0.6)→32(Dropout0.6)→1(Sigmoid)`, xavier init, L2=0.001 (FAITHFUL). bag = window.
 
@@ -938,7 +965,7 @@ from .new_model import NewModelBaseline
 
 **Provenance (G1–G5, `GUIDE.md §7.1`):** encoder=DERIVATIVE_CITED (G3 sibling 재사용), head+loss=FAITHFUL, optimizer=encoder-sourced (G1, "design choice" 아님), dense scoring=NON_OFFICIAL (G1 disclosed).
 
-**Phase 4 verdict:** head/loss/optimizer VERIFIED_SAME; encoder = literature-sanctioned DiCNN (DERIVATIVE_CITED, NEEDS_REVIEW → ACCEPT). F-1 LOW: paired vs all-pairs hinge (동일 objective).
+**Phase 4 verdict:** head/loss/optimizer VERIFIED_SAME; encoder = literature-sanctioned DiCNN (DERIVATIVE_CITED, NEEDS_REVIEW → ACCEPT). F-1 LOW: paired vs all-pairs hinge (동일 objective). 또한 deep DiCNN encoder 와 Sultani 의 Adagrad(lr=0.01) joint 학습 시 **epoch-1 collapse** (logits→ −200/−440, score 붕괴) 관측 → encoder-출처 Adam(lr=1e-4) 로 대체하여 회피 (위 Configuration 참조).
 
 ### 24. WETAS (ICCV 2021) — 공식 vendoring
 
@@ -948,13 +975,13 @@ from .new_model import NewModelBaseline
 
 **Reference:** [donalee/WETAS](https://github.com/donalee/WETAS) (GPL-3.0; bundled soft-DTW MIT), commit `cb149dc`. `model.py`+`softdtw_cuda.py` verbatim vendoring (device-agnostic 편집만, license header 보존). numba 0.61.2 기존 설치 → install 불요.
 
-**Normalization:** per-recording StandardScaler (z-score), `timeseries.py:35-40` (`_preprocess` 가 recording 파일마다 fresh `StandardScaler().fit_transform`). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전 pipeline global-minmax 결함 수정. train = `train_segments` 별 fit/transform, predict = transductive whole-test (test 경계 미수신 contract 제약, residual = granularity 뿐).
+**Normalization:** per-recording StandardScaler (z-score), `timeseries.py:35-40` (`_preprocess` 가 recording 파일마다 fresh `StandardScaler().fit_transform`). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전 pipeline global-minmax 결함 수정. train = `train_segments` 별 fit/transform, predict = PAIRED test recording 마다 캐시된 TRAIN StandardScaler 로 `.transform` (per-source-file leak-free kernel; 2026-06-02 이전 transductive fit-on-test leak 제거).
 
 **Architecture:** WaveNet-style dilated-CNN (n_layers=7, gated residual) + 공유 `fc(128,1)` head (weak pool head + dense per-timestep head).
 
 **Loss:** `BCE(wscore, wlabel) + dtw_loss` (soft-DTW triplet hinge, beta=0.1, gamma=0.1), Adam lr=1e-4, batch_size=32, split_size=500.
 
-**Score:** continuous dense `dscore` (binary `dpred` 아님) → non-overlap split flatten, front zero-pad drop → `(N_test,)`.
+**Score:** continuous dense `dscore` (binary `dpred` 아님) → non-overlap split flatten, front zero-pad drop → `(N_test,)`. dense `dscore = σ(fc(out))` 는 upstream 의 `dauc`/`dauprc` ranking-score 입력과 정확히 동일 ⇒ **본 실험의 ranking metric (pak_auc_f1/ROC/PRC) 에 대해 faithful**. WETAS 논문 headline 의 DTW-aligned point-F1/IoU (`get_dpred`) 은 **다른 segmentation metric 으로 본 실험 metric suite 에 없음 → 의도적으로 미산출** (누락 아님).
 
 **Phase 4 verdict:** CLEAN (architecture byte-identical except device edits; 17/17 HP 일치).
 
@@ -966,7 +993,7 @@ from .new_model import NewModelBaseline
 
 **Reference:** [fly-orange/TreeMIL](https://github.com/fly-orange/TreeMIL) (GPL-3.0), commit `16f166c`. N-ary-tree transformer core + window-BCE (`last_loss`) vendoring. **soft-DTW/alignment 은 학습 gradient 경로에 없는 dead code → 제외** (Phase 4 증명: `train.py:143` backward = BCE만). torch-only.
 
-**Normalization (2026-05-30 — 이전 silent, deviation 명시):** 원논문 = per-file StandardScaler (z-score), `timeseries.py:53-55` (`_preprocess` 가 input 파일마다 전체 `(T,D)` 에 fit 후 train/valid/test slice 에 transductive 적용). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전엔 pipeline global-minmax 를 받아 원논문과 불일치했고 이 deviation 이 문서에 기록되지 않았음(silent). 현재 train = `train_segments` 별 per-file z-score (windowing 前), predict = transductive whole-test (test 경계 미수신 contract 제약, residual = granularity 뿐).
+**Normalization (2026-05-30 — 이전 silent, deviation 명시):** 원논문 = per-file StandardScaler (z-score), `timeseries.py:53-55` (`_preprocess` 가 input 파일마다 전체 `(T,D)` 에 fit 후 train/valid/test slice 에 transductive 적용). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전엔 pipeline global-minmax 를 받아 원논문과 불일치했고 이 deviation 이 문서에 기록되지 않았음(silent). 현재 train = `train_segments` 별 per-file z-score (windowing 前), predict = PAIRED test file 마다 캐시된 TRAIN scaler 로 `.transform` (per-source-file leak-free kernel `_per_file_norm.transform_test_per_file`; 이전 transductive whole-test fit_transform leak 제거).
 
 **Architecture:** Conv embedding+positional → multi-scale tree nodes(=MIL instances) → masked MHA (parent/child/neighbor/self) → 공유 `Linear(d_model,1)+sigmoid`. window-score = max-pool, dense-score = gather-ancestors.
 
@@ -984,7 +1011,7 @@ from .new_model import NewModelBaseline
 
 **Reference:** [UCSC-REAL/NRdetector](https://github.com/UCSC-REAL/NRdetector) (MIT, Yang Liu lab), commit `bd5592b`. encoder + PU-LP selector + PU classifier vendoring. CLI `Solver` → in-memory `fit/predict` adapter. **HOC(이진화기)·soft-DTW(공식 encoder 학습 코드 부재) 제외.**
 
-**Normalization:** per-split z-score StandardScaler, `data_loader.py:50-55` (paper §5.2 "following Xu 2021"; `_preprocess` 가 split 마다 fresh `StandardScaler` fit/transform). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전 global-minmax 결함 수정. fit() 이 raw train 에 fit 후 scaler 저장, predict() 가 저장된 scaler 의미로 test z-score (train→test leakage 없음).
+**Normalization:** per-split z-score StandardScaler, `data_loader.py:50-55` (paper §5.2 "following Xu 2021"; `_preprocess` 가 split 마다 fresh `StandardScaler` fit/transform). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전 global-minmax 결함 수정. 현재 normalization 은 공유 leak-free per-source-file kernel (`comparison/baselines/_per_file_norm.py`) 을 NRdetector 자신의 StandardScaler identity 로 통과시킴: `fit()` 이 각 source file 의 TRAIN slice 에 scaler fit 후 `self._scalers` 에 캐시, `predict()` 가 PAIRED test file 을 그 캐시된 TRAIN scaler 로 `.transform` (절대 fit-on-test 안 함). 이전 global-minmax + 일부 fit-on-test 경로 모두 제거.
 
 **Architecture:** 2-stage PU — DilatedCNN encoder → PU-LP kNN-graph selector (`noisy_rate=0.4`) → PU classifier (`LabelDistributionLoss` + `constraint_loss`).
 
@@ -1000,7 +1027,7 @@ from .new_model import NewModelBaseline
 
   우리는 해당 `.pth` 미보유라 from-scratch 로 BCE-only 학습(`bce(wscore, wlabel)`, `extractor.py:127`; soft-DTW 는 install ban 으로 제외). 따라서 출처 없는 50/1e-3 는 feature-quality 에 영향을 줄 수 있는 **confound 로 문서화** (NON_OFFICIAL). 완전 일치는 공식 pretrained weight 필요(미가용 가능성).
 
-**Score:** per-window min-max **actmap** of raw `fc(out)` × classifier seg prob (continuous) → non-overlap flatten, leading-pad drop → `(N_test,)`.
+**Score (2026-06-01 binary-gate faithfulness fix):** per-window min-max **actmap** of raw `fc(out)` (upstream `extractor.py get_dpred actmap=(h−min)/max`), gated by the official **BINARY transductive segment decision** `seg_prob ≥ mean(seg_prob) + anomaly_thre·(max−min)` with `anomaly_thre=0` (`solver.test`, `main.py` default; `wrapper.py:625-628`) → `actmap × binary_gate` → non-overlap flatten, leading-pad drop → `(N_test,)`. The per-window min-max actmap is **upstream-faithful and KEPT** (the adjudicator's "remove it" rec was rejected — removing it would introduce a deviation). Previous impl applied the seg classifier as a **continuous** multiplier (`× sigmoid(seg_prob)` relaxation).
 
 **Provenance (G1–G5, `GUIDE.md §7.1`):** encoder schedule = NON_OFFICIAL/IMPL-INVENTED (G1 confound 문서화 + G2 source-chain: official `.pth`-load 확인). `prior` = runtime-estimated (intrinsic). `noisy_rate` = fixed experiment knob.
 
