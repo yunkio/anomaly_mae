@@ -9,7 +9,7 @@
 - 21개 wrapper가 windowing+inference를 per-entity로 경유. **정규화는 클래스별로 전부 불변**: harness-norm(이미 per-entity), self-norm(기존 per-entity transform 유지 후 per-entity window), **6 RevIN SOTA**(timesnet/tfmae/memto/moderntcn/dcdetector/catch — whole-test StandardScaler를 slice 전 1회 적용, slice-invariant, **windowing만** per-entity). NEURAL은 `test_segments`를 `run_dl_baseline_with_epoch_eval`+`_predict_gated`로 plumbing.
 - **official 충실**: upstream이 entity를 개별 처리함을 재확인 (npsr `evaluation.py` "only one entity should be input at a time", wetas/deepmil per-file chunking, omnianomaly single-entity). 즉 per-entity windowing이 곧 official 충실이고 기존 concat-naive가 deviation.
 
-**train boundary-safety 재검증**: dispatch+`create_train_windows_boundary_safe`(실제 `start<b<end` skip) 추적 → **dagmm만 train-unsafe**(SOTA지만 fit이 train_segments 미수용). mlp/mlpmixer/transformer는 NEURAL boundary-safe window 사용 → safe.
+**train boundary-safety 재검증**: dispatch+`create_train_windows_boundary_safe`(실제 `start<b<end` skip) 추적 → **non-simple 모델은 전부 train-boundary-safe.** NEURAL(mlp/mlpmixer/transformer)은 pre-built boundary-safe window(`create_train_windows_boundary_safe`), SOTA 14·WEAK 4는 `fit(train_segments=...)`에서 `compute_segment_safe_window_indices`로 cross-boundary window를 drop. (초기 재검증에서 dagmm을 train-unsafe로 적었으나 — `dagmm.fit`의 multi-line 시그니처를 단일줄로 grep한 false-negative 아티팩트였고, 실제로는 `git 0dc76ce`부터 `train_segments`를 수용·사용함을 코드로 확인. 정정함.)
 
 **검증**: 19/19 파일 adversarial gate **GREEN** — single-entity **bit-identical**(side-effect 없음), 경계 미crossing, 후처리·정규화 granularity 불변, contract, py_compile/import OK. **영향**: SMD/MSL/SMAP/Exathlon(multi-entity)은 재실행 시 corrected 수치; 단일파일(PSM/SWaT/WaDi)은 bit-identical.
 
