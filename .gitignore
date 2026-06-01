@@ -1,151 +1,46 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
-dist/
-build/
-*.backup
-*.backup_*
-*_backup*.py
-*_option*.py
+# ============================================================
+# Cross-machine consistency policy (machineB)
+# TRACK : only .py / .md / .txt  (scripts + docs + text), repo-wide.
+# IGNORE: everything else — all binaries (png/jpg/pdf/zip/pt/pth/npz/npy/csv/log),
+#         data, json/yaml/sh, notebooks, caches — are auto-ignored by the `*` rule
+#         below (they are simply not whitelisted). Plus the excluded dirs/files
+#         re-listed at the bottom (results, dataset, temp, trash, references,
+#         legacy, **/_deprecated, .claude, CLAUDE.md, ...).
+# ============================================================
 
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
+# 1) ignore everything, but keep descending into directories
+*
+!*/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# 2) whitelist scripts / docs / text only (+ keep .gitignore itself)
+!*.py
+!*.md
+!*.txt
+!.gitignore
 
-# Results
-results/*/
-!results/archived/
-*.png
-*.jpg
-*.log
+# 3) re-exclude — these WIN over the whitelist above ==========
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Claude
+# -- excluded directory trees (no .py/.md/.txt tracked inside either) --
+results/
+comparison/results/
+dataset/
+temp/
+.trash/
+trash/
+references/
+ResearchProposal/
+legacy/
+**/_deprecated/
 .claude/
+
+# -- excluded specific files --
 CLAUDE.md
 
-# Visualization (exclude from git - keep only core model)
-mae_anomaly/visualization/
-scripts/visualize_all.py
-
-# Ablation experiments (exclude from git)
-scripts/ablation/
-scripts/run_*.py
-scripts/run_*.sh
-scripts/eval_*.py
-scripts/preprocess_*.py
-scripts/prepare_*.py
-scripts/profile_*.py
-scripts/rerun_*.py
-scripts/rerun_*.sh
-scripts/resume_*.sh
-scripts/retrain_*.sh
-scripts/aggregate_*.py
-scripts/patch_*.py
-scripts/validate_*.py
-
-# Comparison framework (exclude from git)
-comparison/
-
-# Documentation (exclude generated artifacts, keep markdown docs)
-docs/ablation/
-docs/report_images/
-ablation_guideline.md
-
-# Temporary files
-temp/
-.trash/
-trash/
-
-# Research proposal (separate from codebase)
-ResearchProposal/
-
-# Reference papers
-references/
-
-# Poe config
-.poe/
-
-# Experiment queue configs (generated per-run)
-configs/
-
-# Backup files
+# -- .py / .txt junk that must stay ignored despite the whitelist --
+__pycache__/
+*_backup*.py
+*_option*.py
 *.bak
-
-# Dataset files (large binary files)
-dataset/
-
-# Marimo
-__marimo__/
-
-# ============================================================
-# Cross-machine consistency (machineB, 2026-06-01)
-# Track ALL scripts (.py) and docs (.md) repo-wide so two machines stay in sync,
-# even inside otherwise-ignored directories. Experiment results / temp / trash / data stay ignored.
-# Per dir: un-ignore the tree, re-ignore its contents, then re-include ONLY .py/.md.
-# ============================================================
-
-# comparison/ framework
-!comparison/
-comparison/**
-!comparison/**/
-!comparison/**/*.py
-!comparison/**/*.md
-
-# scripts/ablation/
-!scripts/ablation/
-scripts/ablation/**
-!scripts/ablation/**/
-!scripts/ablation/**/*.py
-!scripts/ablation/**/*.md
-
-# mae_anomaly/visualization/
-!mae_anomaly/visualization/
-mae_anomaly/visualization/**
-!mae_anomaly/visualization/**/
-!mae_anomaly/visualization/**/*.py
-!mae_anomaly/visualization/**/*.md
-
-# docs/ablation/
-!docs/ablation/
-docs/ablation/**
-!docs/ablation/**/
-!docs/ablation/**/*.py
-!docs/ablation/**/*.md
-
-# .claude/ (markdown agent/skill/doc files only; machine-local settings*.json stay untracked)
-!.claude/
-.claude/**
-!.claude/**/
-!.claude/**/*.md
-
-# dataset/ (loader scripts only; large data files stay ignored)
-!dataset/
-dataset/**
-!dataset/**/
-!dataset/**/*.py
-!dataset/**/*.md
-
-# file-pattern-excluded scripts + root docs (run_*.py, eval_*.py, visualize_all.py, CLAUDE.md, ...)
-!scripts/*.py
-!CLAUDE.md
-!ablation_guideline.md
-
-# --- hard re-exclude: these MUST stay ignored regardless of the negations above ---
-temp/
-.trash/
-trash/
-results/*/
+*.backup
+*.backup_*
+*.py.bak
