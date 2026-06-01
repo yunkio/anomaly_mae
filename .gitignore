@@ -1,46 +1,52 @@
 # ============================================================
-# Cross-machine consistency policy (machineB)
-# TRACK : only .py / .md / .txt  (scripts + docs + text), repo-wide.
-# IGNORE: everything else — all binaries (png/jpg/pdf/zip/pt/pth/npz/npy/csv/log),
-#         data, json/yaml/sh, notebooks, caches — are auto-ignored by the `*` rule
-#         below (they are simply not whitelisted). Plus the excluded dirs/files
-#         re-listed at the bottom (results, dataset, temp, trash, references,
-#         legacy, **/_deprecated, .claude, CLAUDE.md, ...).
+# Cross-machine consistency policy (machineB) — SCOPED
+# TRACK : only .py / .md that belong to the comparison + mae_anomaly
+#         experiments (their code + runner scripts + docs).
+# IGNORE: everything else (all other dirs, binaries, data, json, .txt,
+#         notebooks, caches, results, deprecated/legacy, .claude, CLAUDE.md).
 # ============================================================
 
 # 1) ignore everything, but keep descending into directories
 *
 !*/
 
-# 2) whitelist scripts / docs / text only (+ keep .gitignore itself)
-!*.py
-!*.md
-!*.txt
+# 2) whitelist .py / .md ONLY inside the experiment areas ----
+!comparison/**/*.py
+!comparison/**/*.md
+!mae_anomaly/**/*.py
+!mae_anomaly/**/*.md
+!scripts/**/*.py
+!scripts/**/*.md
+!docs/**/*.py
+!docs/**/*.md
+
+# 3) experiment-related root docs + keep .gitignore ----------
+!/README.md
+!/ablation_guideline.md
+!/set_guideline.md
 !.gitignore
 
-# 3) re-exclude — these WIN over the whitelist above ==========
-
-# -- excluded directory trees (no .py/.md/.txt tracked inside either) --
-results/
+# 4) re-exclude — WIN over the whitelist above ---------------
+# results / deprecated / caches inside the tracked areas
 comparison/results/
-dataset/
-temp/
-.trash/
-trash/
-references/
-ResearchProposal/
-legacy/
+comparison/_deprecated/
 **/_deprecated/
-.claude/
-
-# -- excluded specific files --
-CLAUDE.md
-
-# -- .py / .txt junk that must stay ignored despite the whitelist --
-__pycache__/
+**/__pycache__/
+docs/report_images/
+# .py junk
 *_backup*.py
 *_option*.py
 *.bak
-*.backup
-*.backup_*
-*.py.bak
+
+# 5) hard-exclude non-experiment dir trees entirely (root-anchored).
+#    Wins over `!*/`; also blocks embedded git repos / edge cases under them.
+/temp/
+/.trash/
+/trash/
+/dataset/
+/legacy/
+/references/
+/ResearchProposal/
+/.claude/
+/configs/
+/results/
