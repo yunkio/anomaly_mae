@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-03: 평가 코드 **decision-threshold convention 통일 + audit 확정 버그 3종 수정** (eval 정합성)
+
+공유 평가 코드(`mae_anomaly/evaluator.py`, MAE·comparison 양쪽이 사용)에서 **F1과 F1_PA가 서로 다른 예측을 입력으로 받던** 정합성 버그를 근본 수정하고, 22-agent forensic audit로 추가 확정된 버그 2종을 함께 고쳤다.
+
+**근본 원인 (F1_PA가 F1보다 작아지는 모순)**: raw F1·Aff는 `score >= thr`로 이진화하는데 point-adjust F1(`compute_pa_k_metrics_from_mean_scores`) 등은 `score > thr`(strict)였다. AR-quantile threshold가 **동률(plateau) 점수값에 걸리면**(예: random binary score는 thr=1.0=max) `>`는 0개를 flag → F1_PA=0인데 raw F1(`>=`)는 비0 → point-adjust 불변식 `F1_PA >= F1` 위반. random의 F1_PA=0이 그 증상이었다.
+- **수정**: 단일 decision-threshold 이진화 전 지점을 `>=`로 통일 (evaluator.py 200/471/723/788/925/1109/1242/1986/2160 + 두 sweep 1050/554는 linspace라 direction-invariant이나 동일 통일). comparison 측 `baseline_common.py:585`의 raw F1도 `>` → `>=`. 연속 점수(MAE 포함)는 동률이 없어 값 불변 — 코드 일관성만 확보.
+
+**Audit 확정 버그 (forensic 22-agent workflow)**:
+1. **(critical) excl22가 VUS/Affiliation/AR에서 eval_mask 무시**: `compute_full_metric_set`가 VUS·Aff·AR을 full `point_*`로 계산해 SWaT(excl22) 값이 full과 **byte-identical**(region-22 = SWaT 이상의 84%가 그대로 누설). → masked `base_scores/base_labels` 사용 (evaluator.py 970-977).
+2. **(major) K=0 point-adjust guard 누락**: `compute_pa_k_auc`·`compute_pa_k_roc_prc_from_mean_scores`가 K=0에서 `ratio>=0` 자동참 → zero-detection 구간도 검출 처리(do-nothing 모델이 F1@K=0=1.0). pak_auc_f1·**pak_auc_prc_auc(랭킹 정렬 키)**·pa_0_* inflation. → `sums>=1` guard 추가 (evaluator.py 563/1085/1115). K>0은 no-op.
+
+**저장값 일괄 재계산 + 완전성 게이트**: 26 baseline + MAE **271/274/284** × 5 데이터셋 = **전 셀**을 saved score에서 고친 코드로 재계산 (silent skip 금지 — 누락 시 LOUD 실패; 사전검증 145/145 셀 존재). 영향 지표: F1_PAK·PRC_PAK(전체, K=0 guard), VUS_PR·VUS_ROC(excl22, mask). F1·F1_PA·Aff는 uniform `>=`·masked로 별도 재계산.
+
+**검증**: 전 모델 `F1_PA >= F1` 위반 0; excl22 VUS가 full과 분리됨(pca 0.7707→0.3774); K=0 guard로 anti-correlated 모델 pak_auc_f1=0.18(≠1.0); F1_PAK sweep 변경은 영향 0 실측(random recomputed=stored=0.405516). **271/274/284 재판단: 고친 지표에서도 271이 최균형**(MeanRank 271=1.312 < 274=1.438 < 284=1.812; 271 전체 1/27위). 백업 `./.trash/0603/{evaluator,baseline_common}.py.bak_*`.
+
+
 ## 2026-06-02: Comparison **boundary-safe per-entity TEST windowing** (21 windowing baselines)
 
 **문제 (test-time cross-entity window)**: 정규화는 per-entity로 고쳤으나, **test 추론의 sliding/non-overlap window는 여전히 전체 concat test를 경계 무시하고 분할**했다. multi-entity 데이터셋(SMD 28머신·SMAP 54채널·MSL 27채널·Exathlon 6앱)에서 entity 경계를 가로지르는 window가 두 entity 데이터를 섞어 그 경계 부근 score를 오염시킨다. harness는 **train**만 boundary-safe(`create_train_windows_boundary_safe`/`train_segments`)였고 **test-side 메커니즘은 전무**했다 (검증 결과: 21개 windowing 모델 전부 test-boundary-unsafe — `test_segments`는 정규화에만 쓰이고 windowing은 전체 분할).

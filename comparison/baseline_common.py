@@ -582,7 +582,9 @@ def compute_all_metrics(
     results['optimal_threshold'] = threshold
 
     # Point-level precision/recall/F1 at optimal threshold
-    predictions = (masked_scores > threshold).astype(int)
+    # >= : consistent decision-threshold convention (matches evaluator.py and this row's own
+    # f1_t / PA%K / Aff / AR columns). Strict '>' collapses on tied/plateau thresholds.
+    predictions = (masked_scores >= threshold).astype(int)
     results['precision'] = float(precision_score(masked_labels, predictions, zero_division=0))
     results['recall'] = float(recall_score(masked_labels, predictions, zero_division=0))
     results['f1_score'] = float(sklearn_f1_score(masked_labels, predictions, zero_division=0))
