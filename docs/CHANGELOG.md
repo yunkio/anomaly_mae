@@ -1,6 +1,22 @@
 # Changelog
 
-## 2026-06-03: Correction — nrdetector test-time score (binary mean-gate was non-default → continuous ACTMAP restored)
+## 2026-06-03 (PM): Correction-of-the-correction — nrdetector classifier GATE is faithful; the no-gate `5cff9da` was a regression → **REVERTED**
+
+직전 2026-06-03 (AM) 항목과 commit `5cff9da`("binary mean-gate 제거 → continuous ACTMAP emit")는 **틀렸으며 revert**되었다. nrdetector predict()는 **classifier-gated continuous ACTMAP** = `actmap × [seg_prob ≥ mean(seg_prob)]` 으로 **복원**되었다(= 2026-06-01 형태).
+
+**증상 (실험에서 발견)**: 50 epoch의 saved score가 전부 **bit-identical**(ep1==ep25==ep50, SWaT·WaDi·PSM 모두) + 성능 급락(SWaT pak_auc_f1 0.84→0.44). 같은 run에서 deepmil/treemil/wetas는 epoch마다 변함 → nrdetector 고유 문제.
+
+**근본 원인**: nrdetector의 encoder(DilatedCNN)는 **Stage 0에서 한 번만 학습 후 frozen**이고, per-epoch 학습 루프는 **PU-classifier만** 훈련한다. `5cff9da`가 predict()의 **classifier gate를 제거**하자 score = frozen-encoder actmap만 남아 → (1) epoch마다 불변(bit-identical) → best-epoch 선택 무의미, (2) raw per-window-minmax actmap이 normal-window 점들로 ranking을 오염시켜 붕괴.
+
+**실제 upstream (live 재fetch + 독립 red-team `B_classifier_gated`, integral=yes)**: default `python main.py`(`--mode` default `'train'`)는 `solver.rank_test()`만 실행하며(main.py:44-48), 이것이 랭킹하는 `interested_instance`(solver.py:219)는 `save_instance_files`가 **classifier가 flag한 window(`instance_label[i]>0`, solver.py:198-203)의 actmap만** 모은 것이다. `instance_label` = PU-classifier의 per-window mean-gate(`test_outputs ≥ mean`, solver.py:164-171,185). 즉 **classifier gate가 ranking pool을 결정** — operating-point selector가 아니라 ranked object 자체의 일부. no-gate raw actmap은 upstream이 절대 랭킹하지 않는 점들을 주입하므로 NOT faithful.
+
+**실측 (inference-only, 저장 weights, 재학습 없음)**: SWaT pak_auc_f1 **0.440(no-gate)→0.858(gated)**, roc_auc 0.365→0.883, prc_auc 0.156→0.808. PSM roc_auc 0.356→0.598, prc_auc 0.244→0.333(pak는 30.6% 이상치+PA 관대성으로 약간 낮으나 정직한 ranking 지표는 회복). harness 재현 검증: no-gate 재계산 = saved score(0.5443) 정확 일치. (`temp/verify_nrdetector_three_versions.py`, `temp/verify_swat.py`; canonical: `temp/baseline_faithfulness_audit/NRDETECTOR_CORRECTION_v2.md`)
+
+**영향**: **INFERENCE-only**(retrain 불필요). prior no-gate run의 nrdetector/nrdetector_full score는 **STALE → 재-score 필수**. 코드에는 gate 제거 금지 경고(rank_test 추적 포함)를 docstring에 명시. boundary-safe windowing + per-file leak-free normalization 보존.
+
+> ⚠ 아래 2026-06-03 (AM) 항목은 **이 항목으로 superseded** — "binary mean-gate가 버그"라는 기술은 오판이었다(gate는 faithful, 제거가 버그였음).
+
+## 2026-06-03 (AM, SUPERSEDED — 위 PM 항목 참조): Correction — nrdetector test-time score (binary mean-gate was non-default → continuous ACTMAP restored)
 
 직전(2026-06-02, `f94d7dc`) 항목에서 nrdetector의 test-time score를 upstream `solver.test()`의 **binary transductive segment-gate**(`seg ≥ mean + thre·(max−min)`, thre=0)로 고치고 "official 충실"로 기술했으나, **그 기술은 틀렸으며 commit `5cff9da`(2026-06-03)로 superseded**된다.
 

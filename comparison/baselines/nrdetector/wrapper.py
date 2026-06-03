@@ -56,39 +56,35 @@ Key fidelity decisions (Phase-1 §06/§07/§10/§12; cite repo file:line):
     fit on test_X) — this matches the official per-split fit-on-test semantics;
     the residual gap (official is per-FILE, here test_X concatenates all test
     recordings) is documented in CODE_REWORK_NOTES.md.
-  - predict() point score = the official CONTINUOUS per-window min-max ACTMAP =
-    `actmap=(h-min)/max` where `h = fc(out)` (extractor.py get_dpred:L250-254).
-    This is EXACTLY the object upstream's DEFAULT test path ranks: get_h_scores
-    returns this actmap (extractor.py:L99 `actmap_`), solver assigns it to
-    `self.dense_scores` ("Actually is the act map", solver.py:L79), and
-    `rank_test` flattens it to `point_Score = self.interested_instance.reshape(-1)`
-    and does a global `np.argsort` over it (solver.py:L213-214). We therefore
-    emit the per-window min-max ACTMAP DIRECTLY as the continuous (T_test,) score
-    (higher = more anomalous), and let the ranking harness (ROC/PRC/pak_auc_f1)
-    pick its own operating point.
-
-    UPSTREAM OPERATING POINT (for anyone needing a hard label, NOT applied here):
-    upstream's `interested_instance` is `dense_scores` restricted to the windows
-    flagged by the segment classifier mean-gate `seg >= mean(seg)+anomaly_thre*(max-min)`
-    with `anomaly_thre=0` (the binary `self.instance_label` from solver.test:L161-179,
-    save_instance_files:L192-195) — i.e. the gate SELECTS the candidate pool, it
-    does NOT rescale the actmap. Then `rank_test` flags the top `anomaly_ratio`
-    (default 0.65, main.py) of the ranked pool and re-thresholds with the HOC
-    training-free estimator (`get_hoc_threshold`→`rank_hoc`, solver.py:L252-253).
-    Those (top-k=0.65 + HOC + mean-gate pool selection) are upstream's SINGLE
-    operating-point selectors; our ranking harness does its own thresholding, so
-    we keep the continuous score and do NOT binarize.
-
-    PRIOR BUG (fixed 2026-06-03): predict() multiplied the continuous actmap by a
-    HARD {0,1} window mean-gate (`scores = act_ts * gate_ts`), zeroing EVERY
-    below-mean window (>80% zeros on some datasets). That collapsed the continuous
-    ranking to a sparse near-binary mask, matched NEITHER upstream branch (it
-    repurposed `solver.test()`'s intermediate per-window classifier gate as the
-    FINAL point score and dropped `rank_test`+HOC), and crippled the AUC-type
-    metrics. The fix REMOVES the multiplicative gate and emits the raw continuous
-    actmap = the object `rank_test` actually sorts. Length == len(test_X).
-    (Continuous-actmap faithfulness fix 2026-06-03, see FIX_applied.md; the
-    earlier 2026-06-01 "binary-gate" change was itself the deviation.)
+  - predict() point score = the official ACTMAP = per-window min-max of
+    `h = fc(out)` (extractor.py get_dpred `actmap=(h-min)/max`; assigned to
+    `self.dense_scores`, solver.py:72 "Actually is the act map"), GATED by the
+    PU-classifier's official BINARY segment decision
+    `seg_prob >= mean(seg_prob) + anomaly_thre*(max-min)`, `anomaly_thre=0`
+    (solver.test:L164-171; main.py default 0.0), computed over the whole test
+    split. Non-flagged windows score 0; flagged windows keep their continuous
+    per-window actmap. THIS GATE IS INTEGRAL TO UPSTREAM, NOT optional:
+      default run `python main.py` (--mode default 'train') runs ONLY
+      `solver.rank_test()` (main.py:44-48; begin/train/test/pick_test all
+      commented). rank_test ranks `point_Score = self.interested_instance`
+      (solver.py:219), and `interested_instance` is built by `save_instance_files`
+      keeping ONLY windows where `instance_label[i] > 0` (solver.py:198-203),
+      where `instance_label` is the classifier's per-window mean-gate decision
+      (solver.py:164-171,185). So upstream ranks the classifier-flagged-window
+      actmap — the gate selects which points exist in the ranked pool.
+    ⚠ DO NOT REMOVE THIS GATE. Removing it (commit 5cff9da, 2026-06-03, reverted)
+      was a DOUBLE regression: (1) the encoder is trained ONCE in Stage 0 then
+      FROZEN; only the PU-classifier trains in the per-epoch loop, so an
+      encoder-only (ungated) actmap is IDENTICAL at every epoch → per-epoch
+      scores became bit-identical (best-epoch selection meaningless); (2) the
+      raw ungated actmap floods the ranking with normal-window points → ranking
+      collapses. Measured (inference-only, saved weights): SWaT pak_auc_f1
+      0.858→0.440, roc_auc 0.883→0.365 when the gate is removed. HOC top-k
+      binarization is DROPPED (the harness selects the operating point). Length
+      == len(test_X). (Classifier-gate is the faithful object; the brief
+      no-gate variant 5cff9da was the bug. Earlier `× sigmoid(seg_prob)` soft
+      relaxation also gated by the classifier but is less faithful than the
+      upstream hard mean-gate used here.)
   - device-agnostic (no cuda:N, no import-time CUDA_VISIBLE_DEVICES).
 """
 
@@ -614,83 +610,138 @@ class NRdetectorBaseline:
         self.encoder.eval(); self.classifier.eval()
 
         # ==============================================================================
-        # BOUNDARY-SAFE TEST WINDOWING (2026-06-02) + CONTINUOUS-ACTMAP SCORE (2026-06-03)
+        # BOUNDARY-SAFE TEST WINDOWING (2026-06-02)
         # ------------------------------------------------------------------------------
         # Upstream windows EACH recording FILE independently: `data_loader._load_data`
         # loads one file's data.npy per split and `_preprocess` front-pads + splits THAT
         # file into non-overlapping win_size windows, then the per-file windowed segments
         # are concatenated (re-verified live: data_loader.py `_load_data` loop +
         # `_preprocess` :52 `f.pad(..., split_size - n%split_size, 0)` :54 `cat(split(...))`).
-        # On a multi-entity concatenated test array, front-padding ONCE and chunking over
-        # the WHOLE array lets a single non-overlapping window straddle two entities
-        # (machine-k tail + machine-(k+1) head), corrupting the per-window min-max ACTMAP
-        # for boundary windows. Fix: run the RAW score producer (windowing + encoder
-        # inference + per-window->per-timestep ACTMAP mapping incl. front-pad drop)
-        # INDEPENDENTLY on each entity's own test slice via `per_entity_concat`, so no
-        # window crosses a boundary. STRICTLY MORE faithful to upstream's per-file chunking.
+        # On a multi-entity concatenated test array, our previous code front-padded ONCE
+        # and chunked over the WHOLE array, so a single non-overlapping window could
+        # straddle two entities (machine-k tail + machine-(k+1) head). That corrupts both
+        # the per-window min-max ACTMAP and the classifier seg-prob for boundary windows.
+        # Fix: run the RAW score producer (windowing + encoder/classifier inference +
+        # per-window->per-timestep ACTMAP mapping incl. front-pad drop) INDEPENDENTLY on
+        # each entity's own test slice via `per_entity_concat`, so no window crosses a
+        # boundary. This is STRICTLY MORE faithful to upstream's per-file chunking.
         #
-        # SCORE = CONTINUOUS per-window min-max ACTMAP, emitted DIRECTLY.
-        # This is the EXACT object upstream's DEFAULT test path RANKS: `get_dpred` builds
-        # `actmap=(h-min)/max` (extractor.py:L250-254), `get_h_scores` returns it
-        # (extractor.py:L99 `actmap_`), solver assigns `self.dense_scores = dscores`
-        # ("Actually is the act map", solver.py:L79), and `rank_test` flattens it to
-        # `point_Score = self.interested_instance.reshape(-1)` then global `np.argsort`
-        # (solver.py:L213-214) — re-verified live. We rank the same continuous actmap.
-        #
-        # We do NOT multiply by a binary window gate. Upstream's seg-classifier mean-gate
-        # (`seg >= mean(seg)+anomaly_thre*(max-min)`, anomaly_thre=0, solver.test:L161-179)
-        # only SELECTS which windows enter the ranked candidate pool (save_instance_files
-        # keeps actmap rows where `instance_label[i] > 0`, solver.py:L192-195) — it never
-        # rescales the actmap values that are ranked. Together with the top-`anomaly_ratio`
-        # (default 0.65, main.py) cut and the HOC re-threshold (get_hoc_threshold→rank_hoc,
-        # solver.py:L252-253), the gate is one of upstream's SINGLE OPERATING-POINT
-        # selectors for producing a hard label. Our ranking harness (ROC/PRC/pak_auc_f1)
-        # does its OWN thresholding, so we keep the continuous score and binarize NOTHING.
-        # (A prior version multiplied act_ts by a hard {0,1} mean-gate, zeroing >80% of
-        # windows and collapsing the ranking — removed 2026-06-03; see FIX_applied.md.)
+        # RAW-PRODUCER vs WHOLE-TEST POST-PROC split (kept identical in granularity):
+        #   RAW (per-entity, boundary-safe): per-window min-max ACTMAP -> per-timestep
+        #     (front-pad dropped), plus the window-level classifier seg-prob.
+        #   POST-PROC (whole-test, UNCHANGED): the official BINARY segment gate
+        #     `threshold = mean(seg) + anomaly_thre*(max-min)` is computed over the WHOLE
+        #     concatenated test split's WINDOW-level seg scores (solver.test :158-160
+        #     thresholds over `test_outputs[s_index:]` = all concatenated test windows;
+        #     re-verified live). We therefore collect the window-level seg scores across
+        #     ALL entities and apply the global threshold ONCE, AFTER per-entity windowing
+        #     — preserving upstream's transductive whole-test gate granularity exactly.
         # Single-entity / None / non-tiling test_segments -> ONE call over the whole array
-        # == bit-identical to the no-boundary path (per_entity_concat guarantees the no-op).
+        # == bit-identical legacy behaviour (per_entity_concat guarantees the no-op; the
+        # post-proc reduces to the original global mean/max/min over all windows).
         # ==============================================================================
+        anomaly_thre = float(getattr(self, "anomaly_thre", 0.0))
+
+        # Side-channel: window-level seg scores + per-timestep window-membership map,
+        # captured per entity (in entity order) by raw_fn so the WHOLE-TEST gate can be
+        # applied after concatenation. `_seg_blocks[k]` = (seg_e (Nw_e,), win_idx_e (Li,))
+        # where win_idx_e[t] = the GLOBAL window index of real timestep t.
+        _seg_blocks = []
+        _win_offset = [0]   # running global window counter (mutable closure cell)
+
         def raw_fn(sub_X: np.ndarray) -> np.ndarray:
-            """RAW per-timestep continuous ACTMAP for ONE entity slice (boundary-safe).
+            """RAW per-timestep ACTMAP for ONE entity slice (boundary-safe windowing+inference).
 
             Reproduces upstream's per-FILE chunking (data_loader `_preprocess`:52-54):
             front-pad to a whole number of win_size windows, encoder -> per-window min-max
-            ACTMAP (extractor.py get_dpred:L250-254), flatten the ACTMAP and drop the FRONT
-            pad -> exactly len(sub_X) per-timestep continuous scores. Edge-safe: a slice
-            shorter than win_size front-pads to ONE full window (`_window` pads to win_size),
-            so short entities never crash. `sub_X` is already normalized."""
+            ACTMAP (extractor.py get_dpred), classifier -> per-window seg-prob, flatten the
+            ACTMAP and drop the FRONT pad -> exactly len(sub_X) per-timestep scores.
+            The window-level seg-prob + a global per-timestep window index are stashed in
+            `_seg_blocks` for the WHOLE-TEST gate (applied after concat, NOT here). Edge-safe:
+            a slice shorter than win_size front-pads to ONE full window (`_window` pads to
+            win_size), so short entities never crash. `sub_X` is already normalized."""
             sub_X = np.asarray(sub_X, dtype=np.float32)
             li = len(sub_X)
             if li == 0:
+                _seg_blocks.append((np.zeros(0, np.float32), np.zeros(0, np.int64)))
                 return np.zeros(0, dtype=np.float32)
 
             windows, _, _, pad = self._window(sub_X, None)   # non-overlapping, front-padded
             act_chunks = []
+            seg_chunks = []
             for i in range(0, len(windows), 256):
                 bx = windows[i:i + 256].to(self.device)
                 out = self.encoder.get_scores(bx)
                 h = out['dh']                                  # (B, T) raw logit (model.py get_scores)
-                actmin = torch.min(h, dim=1, keepdim=True)[0]  # extractor.py get_dpred:L251
-                act = h - actmin                               # :L252
-                actmax = torch.max(act, dim=1, keepdim=True)[0]  # :L253
-                act = act / (actmax + 1e-12)                   # :L254 per-window min-max → [0,1]
+                actmin = torch.min(h, dim=1, keepdim=True)[0]  # extractor.py get_dpred
+                act = h - actmin
+                actmax = torch.max(act, dim=1, keepdim=True)[0]
+                act = act / (actmax + 1e-12)                   # per-window min-max → [0,1]
+                # classifier features = raw `h` (= out['h']), matching weak_scores
+                #   (extractor.py `wscores.append(out['h'])`, solver.py).
+                seg_prob, _ = self.classifier(out['h'])        # (B, 1) classifier segment prob
                 act_chunks.append(act.cpu().numpy())           # (B, T) actmap
+                seg_chunks.append(seg_prob.view(-1).cpu().numpy())  # (B,) seg prob
             act_e = np.concatenate(act_chunks, axis=0)         # (Nw_e, T)
+            seg_e = np.concatenate(seg_chunks, axis=0)         # (Nw_e,)
+            nw_e = act_e.shape[0]
 
-            # per-timestep ACTMAP for this entity (front-pad dropped) — continuous score.
+            # per-timestep ACTMAP for this entity (front-pad dropped) — RAW producer output.
             act_flat = act_e.reshape(-1)[pad:pad + li].astype(np.float32)
             if len(act_flat) < li:                             # safety (shouldn't trigger)
                 fill = act_flat[-1] if len(act_flat) else 0.0
                 act_flat = np.concatenate([act_flat, np.full(li - len(act_flat), fill, np.float32)])
-            return act_flat[:li]
+            act_flat = act_flat[:li]
+
+            # GLOBAL per-timestep window index (front-pad dropped) for the whole-test gate.
+            base = _win_offset[0]
+            win_idx_full = np.repeat(np.arange(base, base + nw_e, dtype=np.int64), self.win_size)
+            win_idx_e = win_idx_full[pad:pad + li]
+            if len(win_idx_e) < li:                            # safety mirror of act fill
+                last = win_idx_e[-1] if len(win_idx_e) else base
+                win_idx_e = np.concatenate([win_idx_e, np.full(li - len(win_idx_e), last, np.int64)])
+            win_idx_e = win_idx_e[:li]
+            _win_offset[0] = base + nw_e
+            _seg_blocks.append((seg_e.astype(np.float32), win_idx_e))
+            return act_flat
 
         # Boundary-safe: per-entity windowing+inference of the ACTMAP, concatenated to
         # (N_test,). Single-entity / None / non-tiling test_segments -> ONE raw_fn(test_X)
-        # == no-boundary behaviour (helper no-op). This continuous actmap IS the object
-        # upstream rank_test sorts; we return it directly (higher = more anomalous).
-        scores = per_entity_concat(test_X, test_segments, raw_fn)   # (N_test,) continuous actmap
+        # == legacy behaviour (helper no-op; _seg_blocks holds a single block).
+        act_ts = per_entity_concat(test_X, test_segments, raw_fn)   # (N_test,) per-timestep actmap
 
+        # ---- WHOLE-TEST POST-PROC: official BINARY segment gate (solver.test:158-160).
+        #        threshold = mean(seg) + anomaly_thre*(max-min)   (anomaly_thre=0, main.py)
+        #        flagged_window = seg_prob >= threshold
+        #      Computed over the WHOLE concatenated test split's WINDOW-level seg scores,
+        #      EXACTLY as upstream (transductive whole-test gate). Only flagged windows
+        #      contribute candidate points; the per-window min-max actmap ranks points
+        #      WITHIN flagged windows. Non-flagged windows score 0 (= least anomalous),
+        #      the contract-safe continuous analog of upstream's binary pred=0. ----
+        seg_all = (np.concatenate([blk[0] for blk in _seg_blocks])
+                   if _seg_blocks else np.zeros(0, np.float32))   # (Nw_total,) window-level
+        if len(seg_all) > 0:
+            seg_thr = seg_all.mean() + anomaly_thre * (seg_all.max() - seg_all.min())
+            gate_win = (seg_all >= seg_thr).astype(np.float32)    # (Nw_total,) binary, window-level
+        else:
+            gate_win = np.zeros(0, np.float32)
+
+        # Broadcast the global binary window gate back to each entity's timesteps via the
+        # stashed GLOBAL window index, then multiply with the concatenated actmap. This
+        # reproduces the original `act_all * gate` -> reshape -> pad-drop mapping exactly,
+        # now boundary-safe (per-entity windowing) with an UNCHANGED whole-test gate.
+        gate_ts = np.empty(n_test, dtype=np.float32)
+        pos = 0
+        for (_seg_e, win_idx_e) in _seg_blocks:
+            li = len(win_idx_e)
+            if li == 0:
+                continue
+            gate_ts[pos:pos + li] = gate_win[win_idx_e] if len(gate_win) else 0.0
+            pos += li
+        if pos != n_test:                                   # safety (shouldn't trigger)
+            gate_ts = np.resize(gate_ts, n_test)
+
+        scores = act_ts * gate_ts
         scores = np.nan_to_num(scores[:n_test], nan=0.0, posinf=0.0, neginf=0.0)
         return scores.astype(np.float32)
 
