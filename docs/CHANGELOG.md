@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-03: Correction — nrdetector test-time score (binary mean-gate was non-default → continuous ACTMAP restored)
+
+직전(2026-06-02, `f94d7dc`) 항목에서 nrdetector의 test-time score를 upstream `solver.test()`의 **binary transductive segment-gate**(`seg ≥ mean + thre·(max−min)`, thre=0)로 고치고 "official 충실"로 기술했으나, **그 기술은 틀렸으며 commit `5cff9da`(2026-06-03)로 superseded**된다.
+
+**무엇이 틀렸나 (prior "binary segment-gate fix")**: 우리 `predict()`가 test score를 `scores = actmap × binary_gate`로 산출했고, 이 gate는 `window_seg_prob ≥ mean(seg_prob) + anomaly_thre·(max−min)`(`anomaly_thre=0`)였다. 이는 upstream `solver.test()`에서 가져온 것이나, 해당 branch는 **commented-out, NON-DEFAULT `--mode test`** 경로다. hard-binarize 결과 일부 데이터셋에서 score의 **>80%가 exact-zero**가 되어 AUC/PA%K가 필요로 하는 continuous ranking이 붕괴했다.
+
+**실제 upstream (live-fetched UCSC-REAL/NRdetector — main.py + solver.py)**: DEFAULT run(`python main.py`; `--mode` argparse default=`'train'`)은 `solver.rank_test()`를 호출한다(`solver.test()`는 train block에서 주석 처리됨). `rank_test()`는 **continuous per-point min-max ACTMAP**(`point_Score = interested_instance.reshape(-1)`)를 `np.argsort`로 랭킹해 상위 `anomaly_ratio`(default **0.65**) 비율을 flag하고, training-free **HOC** auto-rate re-threshold(`get_hoc_threshold`/`rank_hoc`)를 적용한다. 랭킹되는 연속 객체 = `interested_instance` = upstream `get_dpred`의 dense per-window min-max ACTMAP `(h−min)/max`(`h = fc(out)`). 따라서 prior binary-gate-as-final-score는 **두 upstream branch 어디와도 불일치하는 MAJOR_DEVIATION**(non-default intermediate를 hard-binarize + rank_test/HOC 누락)였다.
+
+**수정 (commit `5cff9da`)**: `predict()`가 이제 **continuous per-window min-max ACTMAP를 직접 방출**한다(= upstream `get_dpred` verbatim, `rank_test`가 랭킹하는 바로 그 객체). binary mean-gate **제거**. 우리 ranking harness(ROC / PRC / pak_auc_f1 — 자체 operating-point 선택)에 충실한 객체이며, upstream의 single-operating-point selector(`anomaly_ratio=0.65` + HOC)는 hard label이 필요한 경우를 위해 in-code로 명시만 한다. `b043dd6`의 boundary-safe per-entity TEST windowing + per-entity leak-free normalization은 **보존**(gate만 제거). 검증: continuous(521/530 distinct, non-binary), `(T_test,)`/finite/higher=anomalous.
+
+**영향**: **INFERENCE-only** 변경(retrain 불필요, weights valid). 다만 prior nrdetector / nrdetector_full score(binary, >80% zeros)는 **STALE → 재-score(re-inference) 필수**. nrdetector·nrdetector_full(동일 코드) 모두 해당. unrelated soft-DTW restoration note는 그대로 유효.
+
 ## 2026-06-03: 평가 코드 **decision-threshold convention 통일 + audit 확정 버그 3종 수정** (eval 정합성)
 
 공유 평가 코드(`mae_anomaly/evaluator.py`, MAE·comparison 양쪽이 사용)에서 **F1과 F1_PA가 서로 다른 예측을 입력으로 받던** 정합성 버그를 근본 수정하고, 22-agent forensic audit로 추가 확정된 버그 2종을 함께 고쳤다.
