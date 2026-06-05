@@ -197,7 +197,7 @@ def compute_f1_t_at_threshold(
     Returns:
         (f1_t, precision_t, recall_t)
     """
-    predictions = (scores >= threshold).astype(int)  # >= : consistent decision-threshold convention
+    predictions = (scores > threshold).astype(int)  # > : paper-faithful (Kim et al. AAAI 2022, Eq. 1)
     prec, rec = ts_precision_and_recall(
         labels, predictions,
         alpha=0,
@@ -463,12 +463,8 @@ def compute_pa_k_metrics_from_mean_scores(
     if eval_mask is None:
         eval_mask = np.ones(total_length, dtype=bool)
 
-    # Use >= for consistency with the standard thresholding convention (predict anomaly
-    # if score >= threshold), matching sklearn-style raw F1 and compute_extra_metrics.
-    # With a strict > and a quantile/AR threshold that lands on a tied score value
-    # (e.g. binary random or integer sensor-range scores), > flags ZERO points and the
-    # point-adjusted F1 collapses to 0 even though raw F1 (>=) is non-zero.
-    predictions = (point_scores >= threshold).astype(int)
+    # Paper-faithful: Kim et al. AAAI 2022, Eq. 1 — A(wt) > δ (strict >).
+    predictions = (point_scores > threshold).astype(int)
     adjusted = _apply_pa_k_segment_adjustment(
         predictions, point_labels, anomaly_regions, k_percent, total_length
     )
@@ -560,9 +556,13 @@ def compute_pa_k_roc_prc_from_mean_scores(
             detection_ratios = region_sums / region_lengths
             for r_idx in range(len(region_starts)):
                 s, e = region_starts[r_idx], region_ends[r_idx]
-                # standard PA guard: require >=1 actually-detected point (else K=0's
-                # `ratio>=0` would auto-detect zero-coverage segments). Matches _apply_pa_k_segment_adjustment.
-                preds[s:e] = 1.0 if (region_sums[r_idx] >= 1 and detection_ratios[r_idx] >= k_ratio) else 0.0
+                # Paper-faithful PA%K (Kim et al. AAAI 2022): mark whole segment as 1 ONLY IF
+                # detection ratio > K (strict). Otherwise KEEP original threshold predictions
+                # (paper Eq. PA%K formula: `ŷt = 1 if A(wt) > δ OR PA-condition`).
+                # K=0 auto-handled (ratio>0 ≡ sum>=1). K=100 auto-handled (ratio>1 impossible → no PA).
+                if detection_ratios[r_idx] > k_ratio:
+                    preds[s:e] = 1.0
+                # else: leave preds[s:e] unchanged (preserves A(wt) > δ originals)
 
         preds[~eval_mask] = 0
         tp = float((preds * masked_labels).sum())
@@ -595,17 +595,20 @@ def _apply_pa_k_segment_adjustment(
     k_percent: int,
     total_length: int,
 ) -> np.ndarray:
-    """Apply PA%K segment adjustment to binary predictions.
+    """Apply PA%K segment adjustment to binary predictions — paper-faithful.
 
-    If >= K% of an anomaly segment is detected, the entire segment is marked detected.
-    Otherwise, the entire segment is marked undetected.
+    Kim et al. AAAI 2022, PA%K formula:
+        ŷt = 1, if A(wt) > δ  OR  (t ∈ Sm and |{t' ∈ Sm : A(wt') > δ}|/|Sm| > K)
+           = 0, otherwise.
 
-    Standard point-adjust (Xu et al., WWW 2018): a segment is adjusted ONLY IF it
-    contains >= 1 actually-detected point. At K=0 the fraction test `ratio >= 0` is
-    trivially true even for zero-detection segments, which would mark EVERY anomaly
-    segment as detected (so a do-nothing model that flags nothing scores F1=1.0).
-    We therefore additionally require `sums >= 1` so K=0 reduces to the original PA.
-    (K>0 already implies sums>=1, so this only corrects the K=0 endpoint.)
+    Implementation:
+      - input `predictions` already encodes A(wt) > δ from threshold step
+      - we ONLY override segments where ratio > K (strict) with all-1
+      - undetected segments KEEP original predictions (paper's `or` semantics)
+
+    Corner cases (paper Fig. 6):
+      - K=0: ratio > 0 ≡ sum > 0 ≡ sum >= 1 → conventional PA (Xu et al. WWW 2018).
+      - K=100 (k_ratio=1.0): ratio > 1 impossible → no PA applied → F1 = raw F1.
     """
     adjusted = predictions.copy()
     k_ratio = k_percent / 100.0
@@ -623,8 +626,10 @@ def _apply_pa_k_segment_adjustment(
         ratios = sums / lengths
 
         for i in range(len(starts)):
-            # Standard PA: require >=1 detected point AND >= K% coverage.
-            adjusted[starts[i]:ends[i]] = 1.0 if (sums[i] >= 1 and ratios[i] >= k_ratio) else 0.0
+            # Paper-faithful: strict `>` AND no `else 0.0` (preserve A(wt) > δ originals).
+            if ratios[i] > k_ratio:
+                adjusted[starts[i]:ends[i]] = 1.0
+            # else: keep original predictions[s:e] (already in `adjusted` via copy)
 
     return adjusted
 
@@ -722,7 +727,7 @@ def compute_extra_metrics(
     if n_pos == 0 or n_pos == len(y):
         return out  # degenerate
 
-    pred = (s >= float(threshold)).astype(int)
+    pred = (s > float(threshold)).astype(int)  # > : paper-faithful (Kim et al. AAAI 2022, Eq. 1)
 
     # VUS — official example normalizes scores to [0,1] via MinMaxScaler.
     # Skipped during per-epoch training eval / bg-worker scan: VUS costs ~40s/call
@@ -785,9 +790,8 @@ def compute_ar_threshold_metric_set(
     ar_th = float(np.quantile(s, 1.0 - ar))
     out['anomaly_ratio_threshold'] = ar_th
 
-    # >= so the AR threshold flags the top anomaly-ratio fraction inclusively; a strict >
-    # flags zero points when the quantile lands on tied score values (binary/integer scores).
-    pred = (s >= ar_th).astype(int)
+    # Paper-faithful: Kim et al. AAAI 2022, Eq. 1 — A(wt) > δ (strict >).
+    pred = (s > ar_th).astype(int)
 
     # point-strict (sklearn)
     out['f1_ar']        = float(f1_score(y, pred, zero_division=0))
@@ -924,7 +928,7 @@ def compute_full_metric_set(
     fpr, tpr, thresholds = roc_curve(base_labels, base_scores)
     optimal_idx = find_f1_optimal_idx(fpr, tpr, base_labels)
     threshold = thresholds[optimal_idx]
-    predictions = (base_scores >= threshold).astype(int)  # >= : consistent decision-threshold convention
+    predictions = (base_scores > threshold).astype(int)  # > : paper-faithful (Kim et al. AAAI 2022, Eq. 1)
 
     f1_t, precision_t, recall_t = compute_f1_t_at_threshold(
         base_labels, base_scores, threshold
@@ -1047,11 +1051,34 @@ def compute_pa_k_auc(
     n_negative = int(normal_eval_mask.sum())
     has_both_classes = n_positive > 0 and n_negative > 0
 
-    scores_range = point_scores[eval_mask]
-    thresh_arr = np.linspace(scores_range.min() - 0.01, scores_range.max() + 0.01, n_thresholds)
+    # Issue 6 (tadpak-faithful): use precision_recall_curve threshold sequence sampled at
+    # uniform interval. Auto-collapses plateau scores (each unique value → single threshold),
+    # vs linspace which generates redundant identical predictions on plateaus.
+    # Reference: tuslkkk/tadpak/evaluate.py lines 47-50.
+    masked_scores = point_scores[eval_mask]
+    masked_labels_for_th = point_labels[eval_mask].astype(np.int64)
+    from sklearn.metrics import precision_recall_curve as _prc
+    if masked_labels_for_th.sum() > 0 and (masked_labels_for_th == 0).any():
+        _, _, prc_thresholds = _prc(masked_labels_for_th, masked_scores)
+    else:
+        # degenerate (single class) → fall back to linspace
+        prc_thresholds = np.array([])
+    if len(prc_thresholds) >= n_thresholds:
+        # Sample n_thresholds at uniform interval (tadpak: interval = len/N)
+        step = max(1, len(prc_thresholds) // n_thresholds)
+        thresh_arr = prc_thresholds[::step][:n_thresholds]
+    elif len(prc_thresholds) > 0:
+        thresh_arr = prc_thresholds  # fewer than requested
+    else:
+        thresh_arr = np.linspace(masked_scores.min() - 0.01, masked_scores.max() + 0.01, n_thresholds)
+    # Ensure ascending order (PRC returns ascending) and convert to ndarray
+    thresh_arr = np.asarray(thresh_arr, dtype=np.float64)
+    if thresh_arr.size == 0:
+        thresh_arr = np.linspace(masked_scores.min() - 0.01, masked_scores.max() + 0.01, n_thresholds)
+    n_thresholds = len(thresh_arr)  # may have shrunk; update for downstream loops
 
     # (T, N) bool — largest array. e.g. SWaT (200×224K) = 45 MB.
-    preds_raw_TN = (point_scores[None, :] >= thresh_arr[:, None])  # >= : uniform convention (linspace sweep -> direction-invariant)
+    preds_raw_TN = (point_scores[None, :] > thresh_arr[:, None])  # > : paper-faithful (Kim et al. AAAI 2022, Eq. 1)
 
     # Per-region pred count via direct slice sum (no big cumsum buffer)
     if n_regions > 0:
@@ -1080,18 +1107,37 @@ def compute_pa_k_auc(
         region_mask[v_starts[_ri]:v_ends[_ri]] = True
     outside_label = (~region_mask) & label_in_eval
     outside_normal = (~region_mask) & normal_in_eval
-    del region_mask, label_in_eval, normal_in_eval
 
     TP_outside_T = (preds_raw_TN & outside_label[None, :]).sum(axis=1).astype(np.int64)
     FP_outside_T = (preds_raw_TN & outside_normal[None, :]).sum(axis=1).astype(np.int64)
 
+    # Per-threshold, per-region THRESHOLD-positive count (NOT PA-adjusted) — needed
+    # for paper-faithful OR-merge: undetected segments keep A(wt)>δ originals.
     if n_regions > 0:
-        # standard PA guard: '& dr>0' requires >=1 detected point so K=0 (k_ratio=0) does NOT
-        # auto-detect zero-coverage segments. No-op for K>0 (k_ratio>0 already implies dr>0).
-        detected_TKR = (dr_TR[:, None, :] >= k_ratios[None, :, None]) & (dr_TR[:, None, :] > 0)
+        region_thr_TP_TR = np.empty((n_thresholds, n_regions), dtype=np.int64)
+        region_thr_FP_TR = np.empty((n_thresholds, n_regions), dtype=np.int64)
+        for _ri in range(n_regions):
+            in_label_slice = label_in_eval[v_starts[_ri]:v_ends[_ri]]
+            in_normal_slice = normal_in_eval[v_starts[_ri]:v_ends[_ri]]
+            region_thr_TP_TR[:, _ri] = (preds_raw_TN[:, v_starts[_ri]:v_ends[_ri]] & in_label_slice[None, :]).sum(axis=1)
+            region_thr_FP_TR[:, _ri] = (preds_raw_TN[:, v_starts[_ri]:v_ends[_ri]] & in_normal_slice[None, :]).sum(axis=1)
+    else:
+        region_thr_TP_TR = np.zeros((n_thresholds, 0), dtype=np.int64)
+        region_thr_FP_TR = np.zeros((n_thresholds, 0), dtype=np.int64)
+    del region_mask, label_in_eval, normal_in_eval
+
+    if n_regions > 0:
+        # Paper formula (Kim et al. AAAI 2022, PA%K): strict `>` for K comparison.
+        # K=0: dr>0 ≡ sum>=1 (= conventional PA, Xu et al. WWW 2018).
+        # K=100 (k_ratio=1.0): dr>1 impossible → no PA → F1 = raw F1.
+        detected_TKR = (dr_TR[:, None, :] > k_ratios[None, :, None])
         det_int = detected_TKR.astype(np.int64)
-        TP_inside_TK = det_int @ region_label_R
-        FP_inside_TK = det_int @ region_normal_R
+        # Paper-faithful OR-merge: ŷt = 1 if A(wt) > δ OR PA-condition.
+        #   Detected segment → contributes region_label_R (= all label=1 in region) as TP
+        #   Undetected segment → contributes region_thr_TP_TR (= threshold-positive label=1 in region)
+        # Algebraically: TP = det × region_label + (1-det) × region_thr_TP
+        TP_inside_TK = det_int @ region_label_R + (region_thr_TP_TR[:, None, :] * (1 - det_int)).sum(axis=2)
+        FP_inside_TK = det_int @ region_normal_R + (region_thr_FP_TR[:, None, :] * (1 - det_int)).sum(axis=2)
         del det_int
     else:
         detected_TKR = np.zeros((n_thresholds, n_k, 0), dtype=bool)
@@ -1112,15 +1158,27 @@ def compute_pa_k_auc(
     del denom_pr, denom_f1
 
     # ---- RAW mode (fixed threshold from input) ----
-    base_preds = (point_scores >= threshold).astype(np.int64)  # >= : consistent decision-threshold convention
+    base_preds = (point_scores > threshold).astype(np.int64)  # > : paper-faithful (Kim et al. AAAI 2022, Eq. 1)
     if n_regions > 0:
         base_region_preds_R = np.empty(n_regions, dtype=np.int64)
         for _ri in range(n_regions):
             base_region_preds_R[_ri] = int(base_preds[v_starts[_ri]:v_ends[_ri]].sum())
         base_dr_R = base_region_preds_R.astype(np.float64) / v_lengths
-        base_detected_KR = (base_dr_R[None, :] >= k_ratios[:, None]) & (base_dr_R[None, :] > 0)  # PA guard: >=1 detected point
-        base_TP_K_inside = base_detected_KR.astype(np.int64) @ region_label_R
-        base_FP_K_inside = base_detected_KR.astype(np.int64) @ region_normal_R
+        # Paper-faithful strict `>`. K=0: dr>0 ≡ sum>=1. K=100: dr>1 impossible.
+        base_detected_KR = (base_dr_R[None, :] > k_ratios[:, None])
+        base_det_int = base_detected_KR.astype(np.int64)
+        # OR-merge: detected → region_label_R; undetected → preserve threshold-TP inside region.
+        # base_region_thr_TP_R = original threshold-positive count inside region (= region_label_R if detected, else preds count masked to label)
+        # base_region_preds_R already counts preds=1 inside region (label/normal mixed)
+        # We need separation: TP-inside-region from threshold = preds=1 AND label=1 inside region
+        base_region_thr_TP_R = np.empty(n_regions, dtype=np.int64)
+        base_region_thr_FP_R = np.empty(n_regions, dtype=np.int64)
+        for _ri in range(n_regions):
+            sl = slice(v_starts[_ri], v_ends[_ri])
+            base_region_thr_TP_R[_ri] = int((base_preds[sl] & (point_labels[sl] == 1) & eval_mask[sl]).sum())
+            base_region_thr_FP_R[_ri] = int((base_preds[sl] & (point_labels[sl] == 0) & eval_mask[sl]).sum())
+        base_TP_K_inside = base_det_int @ region_label_R + ((1 - base_det_int) * base_region_thr_TP_R[None, :]).sum(axis=1)
+        base_FP_K_inside = base_det_int @ region_normal_R + ((1 - base_det_int) * base_region_thr_FP_R[None, :]).sum(axis=1)
     else:
         base_detected_KR = np.zeros((n_k, 0), dtype=bool)
         base_TP_K_inside = np.zeros(n_k, dtype=np.int64)
@@ -1145,7 +1203,9 @@ def compute_pa_k_auc(
         adjusted = base_preds.astype(np.float64).copy()
         if n_regions > 0:
             for _ri in range(n_regions):
-                adjusted[v_starts[_ri]:v_ends[_ri]] = 1.0 if base_detected_KR[ki, _ri] else 0.0
+                # Paper-faithful: only override (set all-1) if PA condition met; otherwise keep originals.
+                if base_detected_KR[ki, _ri]:
+                    adjusted[v_starts[_ri]:v_ends[_ri]] = 1.0
         adjusted[~eval_mask] = 0
         prec_t, rec_t = ts_precision_and_recall(masked_labels, adjusted.astype(int), alpha=0)
         f1_ts_raw[ki] = 2 * prec_t * rec_t / (prec_t + rec_t) if (prec_t + rec_t) > 0 else 0.0
@@ -1176,7 +1236,9 @@ def compute_pa_k_auc(
             best_preds_ki = preds_raw_TN[ti].astype(np.float64).copy()
             if n_regions > 0:
                 for _ri in range(n_regions):
-                    best_preds_ki[v_starts[_ri]:v_ends[_ri]] = 1.0 if detected_TKR[ti, ki, _ri] else 0.0
+                    # Paper-faithful: only override (set all-1) if PA condition met; otherwise keep originals.
+                    if detected_TKR[ti, ki, _ri]:
+                        best_preds_ki[v_starts[_ri]:v_ends[_ri]] = 1.0
             best_preds_ki[~eval_mask] = 0
             prec_t_b, rec_t_b = ts_precision_and_recall(masked_labels, best_preds_ki.astype(int), alpha=0)
             f1_ts_best[ki] = 2 * prec_t_b * rec_t_b / (prec_t_b + rec_t_b) if (prec_t_b + rec_t_b) > 0 else 0.0
@@ -1245,7 +1307,7 @@ def compute_segment_pa_k_detection_rate(
         Fraction of anomaly segments detected (0.0 to 1.0)
     """
     point_scores = np.asarray(point_scores)
-    predictions = (point_scores >= threshold).astype(int)  # >= : consistent decision-threshold convention
+    predictions = (point_scores > threshold).astype(int)  # > : paper-faithful (Kim et al. AAAI 2022, Eq. 1)
 
     regions = [r for r in anomaly_regions if r.anomaly_type == anomaly_type]
     if len(regions) == 0:
@@ -1989,7 +2051,7 @@ class Evaluator:
         fpr, tpr, thresholds_arr = roc_curve(pt_labels, point_scores)
         optimal_idx = find_f1_optimal_idx(fpr, tpr, pt_labels)
         threshold = thresholds_arr[optimal_idx]
-        point_predictions = (point_scores >= threshold).astype(int)  # >= : consistent decision-threshold convention
+        point_predictions = (point_scores > threshold).astype(int)  # > : paper-faithful (Kim et al. AAAI 2022, Eq. 1)
 
         # Build per-point anomaly_type array
         point_anomaly_types = np.full(total_len, -1, dtype=int)
