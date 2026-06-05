@@ -1051,27 +1051,32 @@ def compute_pa_k_auc(
     n_negative = int(normal_eval_mask.sum())
     has_both_classes = n_positive > 0 and n_negative > 0
 
-    # Issue 6 (tadpak-faithful): use precision_recall_curve threshold sequence sampled at
-    # uniform interval. Auto-collapses plateau scores (each unique value → single threshold),
-    # vs linspace which generates redundant identical predictions on plateaus.
-    # Reference: tuslkkk/tadpak/evaluate.py lines 47-50.
+    # tadpak-official: PRC threshold sequence sampled at fixed `INTERVAL=10`, no upper cap.
+    # Reference: tuslkkk/tadpak/evaluate.py:
+    #   if len(scores) // interval < 1:
+    #       ths = threshold
+    #   else:
+    #       ths = [threshold[interval*i] for i in range(len(threshold)//interval)]
+    # Memory safety cap MAX_THRESHOLDS prevents OOM on very large datasets.
+    INTERVAL = 10
+    MAX_THRESHOLDS = 2000
     masked_scores = point_scores[eval_mask]
     masked_labels_for_th = point_labels[eval_mask].astype(np.int64)
     from sklearn.metrics import precision_recall_curve as _prc
     if masked_labels_for_th.sum() > 0 and (masked_labels_for_th == 0).any():
         _, _, prc_thresholds = _prc(masked_labels_for_th, masked_scores)
     else:
-        # degenerate (single class) → fall back to linspace
         prc_thresholds = np.array([])
-    if len(prc_thresholds) >= n_thresholds:
-        # Sample n_thresholds at uniform interval (tadpak: interval = len/N)
-        step = max(1, len(prc_thresholds) // n_thresholds)
-        thresh_arr = prc_thresholds[::step][:n_thresholds]
-    elif len(prc_thresholds) > 0:
-        thresh_arr = prc_thresholds  # fewer than requested
+    if len(prc_thresholds) // INTERVAL < 1:
+        thresh_arr = prc_thresholds  # use all if fewer than INTERVAL
     else:
-        thresh_arr = np.linspace(masked_scores.min() - 0.01, masked_scores.max() + 0.01, n_thresholds)
-    # Ensure ascending order (PRC returns ascending) and convert to ndarray
+        n_sample = len(prc_thresholds) // INTERVAL
+        if n_sample > MAX_THRESHOLDS:
+            # Re-stride to respect memory cap (preserve full PRC range coverage)
+            stride = len(prc_thresholds) // MAX_THRESHOLDS
+            thresh_arr = np.array([prc_thresholds[stride * i] for i in range(MAX_THRESHOLDS)])
+        else:
+            thresh_arr = np.array([prc_thresholds[INTERVAL * i] for i in range(n_sample)])
     thresh_arr = np.asarray(thresh_arr, dtype=np.float64)
     if thresh_arr.size == 0:
         thresh_arr = np.linspace(masked_scores.min() - 0.01, masked_scores.max() + 0.01, n_thresholds)
