@@ -69,6 +69,28 @@ Datasets covered (9): Simulation, SWaT A1+A2, WaDi A1, WaDi A2, SMD (28 machines
 > needed):** the 6 untouchable on any dataset; single-file datasets (PSM / SWaT / WaDi / Simulation) for
 > the 16 non-leak-fixed models.
 
+> **2026-06-04 faithfulness pass — supersedes the leak-fix framing above for the weak baselines, and
+> invalidates a further set of models.** A full per-model audit (`temp/faithful_audit_v2/_cross/CHANGE_LOG.md`)
+> RE-VERIFIED each baseline against its original paper + official repo and reverted several earlier "leak-free"
+> rewrites that had diverged from upstream. Net effect on test-time normalization:
+> **nrdetector / nrdetector_full** = per-entity **FIT-ON-TEST** (fresh `StandardScaler` on each test entity
+> slice — NOT train-only/leak-free; matches upstream `data_loader.py:50-55`); **treemil** = per-file
+> **FIT-ON-TEST** (`StandardScaler` on the full file incl. test; matches `timeseries.py:53-55`); **wetas** =
+> per-file **FIT-ON-TEST** (fresh `StandardScaler` on each test file; matches official `donalee/WETAS
+> timeseries.py:37-40`; restored 2026-06-04). These three (the WETAS family) are now intentionally
+> transductive (upstream-faithful, label-free → NOT a leak), so the 2026-06-02 "leak-free per-source-file"
+> claim no longer holds for them. **deepmil** is the SOLE leak-free weak model (its TS input scaler is a
+> clean-room invention — Sultani's paper is video/C3D and specifies no TS scaler, so no official source
+> mandates fit-on-test; stays train-fit `.transform`). Models with applied behavior fixes (re-run required on the affected datasets):
+> **deepmil** (ranking loss → full n_Nor×n_Abn cross-product), **npsr** (channel-engineering added),
+> **memto** (phase-2 fresh re-init + train_stride 1→100), **tranad** (LeakyReLU + lr 0.01), **gdn**
+> (head zero-pad + batch_size 256→128), **timesnet** (all-position score + d_model 64→128 (SMAP anomaly script) / e_layers 3 (unchanged) /
+> top_k 3 (unchanged)), **wetas** (per-file FRONT-pad windowing), **random** (seed→None + 5-run mean±std), **catch**
+> (train drop_last→False), **gcn_lstm** (weight_decay→0), **nrdetector/_full** (prior fixed 0.25 + per-epoch
+> grad accumulation + transductive PU-LP graph). **DISSOLVED (NOT a fix):** gdn input MinMax is ALREADY
+> no-clip (sklearn-faithful) — no change there; `mae_anomaly/dataset_sliding.py` UNCHANGED. **EPOCHS were
+> NOT changed for any model.** See each model's section below for details.
+
 ---
 
 ## Simple Baselines
@@ -84,12 +106,14 @@ These models require no neural network training and serve as sanity checks.
 **Purpose:** Lower bound for any anomaly detection method. If a method doesn't beat random, it's not learning anything useful.
 
 **Configuration:**
-- `seed`: Random seed for reproducibility (default: 42)
+- `seed`: Random seed (default: **`None` — stochastic**, 2026-06-04 faithfulness pass; was `42`). Upstream `simple_baselines.py:147` does not seed, so each run draws fresh scores. The preset `MODEL_PRESETS['default']['random']` now sets `seed=None`.
+
+**Reporting (2026-06-04 faithfulness pass):** because the baseline is stochastic, the driver runs it **5 independent times and reports mean±std** over the 5 runs (paper §4.2; aggregated via `_aggregate_run_metrics` in `baseline_common.py`). Non-random models are byte-identical (single run, no std). This replaces the previous single fixed-seed (42) run.
 
 **Usage:**
 ```python
 from comparison.baselines import RandomBaseline
-model = RandomBaseline(seed=42)
+model = RandomBaseline(seed=None)  # stochastic; driver repeats 5× for mean±std
 model.fit(train_data)  # No-op
 scores = model.predict(test_data)
 ```
@@ -313,6 +337,7 @@ Input: (B, seq_len, n_features)
 | dropout | 0.1 | upstream yaml |
 | epochs | 50 | **intentional exception**: paper yaml=100, Domain B 정책 |
 | lr / batch_size | 1e-3 / 100 | upstream yaml |
+| weight_decay | 0.0 | **2026-06-04 faithfulness pass** (was 1e-4): upstream legacy-Adam ignores the yaml `weight_decay`, so the faithful value is 0. |
 
 **Intentional exception:**
 - `epochs=50` (Domain B 정책).
@@ -393,6 +418,8 @@ Input: (seq_len × n_features)
 - Two-phase adversarial training: Phase 2 learns to "focus" on errors from Phase 1
 - Conditioning helps the model learn more robust representations
 
+**Activation (2026-06-04 faithfulness pass):** the encoder/decoder Transformer layers use **LeakyReLU** (not ReLU), matching upstream's custom `dlutils` layers (`src/dlutils.py:222` `self.activation = nn.LeakyReLU(True)` and `:243`). Implemented by passing `F.leaky_relu` (default negative_slope=0.01 ≡ `nn.LeakyReLU(True)`) into the layers (`comparison/baselines/tranad/model.py:121-154`). The paper's **LayerNorm** (Eqs 2-5) is KEPT.
+
 **Configuration** (actual `MODEL_PRESETS['default']`):
 | Parameter | Value |
 |-----------|-------|
@@ -401,9 +428,12 @@ Input: (seq_len × n_features)
 | n_encoder_layers | 1 |
 | n_decoder_layers | 1 |
 | dropout | 0.1 |
+| lr | 0.01 |
 | epochs | 10 |
 | batch_size | 128 |
 | train_stride | 1 |
+
+(`lr=0.01` — **2026-06-04 faithfulness pass**, was 0.001; paper Sec.5 "AdamW initial learning rate 0.01", `tranad/model.py:223`. Optimizer = AdamW(lr, weight_decay=1e-5) + StepLR(step_size=5, gamma=0.9). Epochs unchanged.)
 
 **Reference (official code from paper authors):** https://github.com/imperial-qore/TranAD (BSD-3-Clause)
 
@@ -438,7 +468,7 @@ Input: Flattened window (seq_len × n_features)
 |-----------|-------|
 | seq_len | 5 |
 | hidden_dims | [input_dim//2, input_dim//4] |
-| latent_dim | 32 |
+| latent_dim | 40 |  <!-- 2026-06-05: 32→40, USAD Table-7 SWaT modal (config-layer) -->
 | alpha | 0.5 |
 | beta | 0.5 |
 | epochs | 10 |
@@ -524,6 +554,10 @@ Input: (seq_len × n_features)
 - Uses top-k neighbors for sparse graph
 - Captures inter-sensor dependencies
 
+**Head fill (2026-06-04 faithfulness pass):** when the feature dimension does not divide evenly across attention heads, the padding is **zero-pad** (matching upstream `util/data.py:29-33`), not the previous positive-fill.
+
+**Input normalization (2026-06-04 — DISSOLVED, NOT a change):** gdn's actual path is `UnifiedLoader(normalize_mode='minmax')` → `_minmax_per_feature(clip=False)` (`unified_loader.py:239-240`) = sklearn-faithful **NO-clip ALREADY**. An earlier audit note that "gdn clips test" mis-located the path (the `'0_1'` tight-clip branch is the MAE-internal path, not gdn's). gdn is already faithful → no change; `mae_anomaly/dataset_sliding.py` UNCHANGED.
+
 **Configuration** (actual `MODEL_PRESETS['default']`):
 | Parameter | Value |
 |-----------|-------|
@@ -534,8 +568,10 @@ Input: (seq_len × n_features)
 | top_k | 5 |
 | dropout | 0.2 |
 | epochs | 10 |
-| batch_size | 256 |
+| batch_size | 128 |
 | train_stride | 1 |
+
+(`batch_size=128` — **2026-06-04 faithfulness pass**, was 256; upstream argparse default `main.py:201`. Epochs unchanged.)
 
 **Reference (official code, 제1저자):** https://github.com/d-ailin/GDN (MIT, ★602). `d-ailin` = Deng Ailin (NUS), GDN 논문 제1저자.
 
@@ -624,22 +660,24 @@ Input: (win_size × n_features)
   → De-normalization
 ```
 
-**Anomaly Score:** Per-timestep MSE between input and reconstruction, max-aggregated over overlapping windows.
+**Anomaly Score (2026-06-04 faithfulness pass — all-position):** per-timestep reconstruction MSE, **overlap-averaged across all stride=1 windows covering each timestep** (every position of every window contributes), matching upstream TSLib (`exp:150,165,170-171`). The previous implementation scored only the **last window position + forward-fill**, discarding the bulk of upstream's reconstruction signal; this is now restored to all-position.
 
 **Configuration** (actual `MODEL_PRESETS['default']`):
 | Parameter | Value |
 |-----------|-------|
 | win_size | 100 |
-| d_model | 64 |
+| d_model | 512 |
 | d_ff | 64 |
-| e_layers | 3 |
-| top_k | 3 |
+| e_layers | 2 |
+| top_k | 5 |
 | num_kernels | 6 |
 | dropout | 0.1 |
 | lr | 1e-4 |
 | train_stride | 1 |
 | epochs | 10 |
 | batch_size | 128 |
+
+(**2026-06-04 faithfulness pass**: `d_model` 64→512, `e_layers` 3→2, `top_k` 3→5 — all TSLib argparse defaults (`run.py:61/63/56`). Epochs unchanged. **Flagged follow-up:** TSLib argparse default `d_ff=2048` but ours is KEPT at 64 (applying 2048 = 32× FCN compute); decision #3 listed only d_model/e_layers/top_k, so d_ff was intentionally not changed — confirm if d_ff=2048 is wanted.)
 
 **Reference (official code, TSLib repo):** [thuml/Time-Series-Library](https://github.com/thuml/Time-Series-Library) (MIT, ★12,285). Note: `thuml/TimesNet` is an older standalone repo — the actively maintained official implementation is in Time-Series-Library.
 
@@ -720,9 +758,9 @@ Input: (win_size × n_features)
 
 **Paper:** [MEMTO: Memory-guided Transformer for Multivariate Time Series Anomaly Detection](https://arxiv.org/abs/2312.02530)
 
-**Description:** Transformer with gated memory module that maintains M cluster prototypes. Two-phase training: Phase 1 trains with random memory init, then K-means on encoder outputs initializes memory for Phase 2. Loss = MSE recon + λ·gathering_loss + λ·entropy_loss.
+**Description:** Transformer with gated memory module that maintains M cluster prototypes. Two-phase training: Phase 1 trains with random memory init, then K-means on encoder outputs initializes the memory for Phase 2. **Phase-2 training (2026-06-04 faithfulness pass) is a FRESH re-init** — only the K-means-initialized memory bank carries over; the encoder/decoder are re-initialized with NO warm-start from Phase 1 (matches upstream `solver.py:427`). The previous implementation warm-started Phase 2 from Phase 1 weights. Loss = MSE recon + λ·gathering_loss + λ·entropy_loss.
 
-**Configuration:** win_size=100, n_memory=10, d_model=512, n_heads=8, e_layers=3, λ_gather=0.1, λ_entropy=0.1, phase1_epochs=3, lr=1e-4, batch_size=128, epochs=10.
+**Configuration:** win_size=100, n_memory=10, d_model=512, n_heads=8, e_layers=3, **d_ff=512** (KEPT — faithful), λ_gather=0.1, λ_entropy=0.01, phase1_epochs=3, lr=1e-4, phase2_lr=5e-5, batch_size=128, epochs=10, **train_stride=100** (**2026-06-04 faithfulness pass**, was 1 — non-overlapping windows, upstream default `data_loader.py:231` `step=100`). Epochs unchanged.
 
 **Reference:** [gunny97/MEMTO](https://github.com/gunny97/MEMTO).
 
@@ -753,6 +791,8 @@ Input: (win_size × n_features)
 
 **Description:** Per-channel patching, channel masking (drop random channels at training), cross-channel Transformer over channel embeddings. Joint loss = time-domain MSE + α·frequency-domain MSE (|FFT|) + β·channel-discovery BCE.
 
+**Training DataLoader (2026-06-04 faithfulness pass):** the train `DataLoader` uses **`drop_last=False`** (was `True`), matching upstream — the final partial mini-batch is kept rather than dropped.
+
 **Configuration:** win_size=96, patch_size=24, patch_stride=12, d_model=128, n_heads=8, e_layers=2, ch_mask_ratio=0.3, λ_freq=0.5, λ_ch_disc=0.5, lr=1e-4, batch_size=128, epochs=10.
 
 **Reference:** [decisionintelligence/CATCH](https://github.com/decisionintelligence/CATCH) (TAB framework). Implementation: **upstream vendored verbatim** (2026-05-22). Seven upstream files (`CATCH.py`, `models/CATCH_model.py`, `layers/{RevIN,channel_mask,cross_channel_Transformer}.py`, `utils/{ch_discover_loss,fre_rec_loss}.py`) consolidated into `model.py`. Only modifications: (a) `from ts_benchmark...` imports removed, (b) `.to(x.device)` replaces hard-coded `.cuda()` in `channel_mask` + `ch_discover_loss`, (c) `device=` kw added to `torch.eye/zeros` in `frequency_criterion`. No architectural change. Wrapper reproduces upstream `detect_fit` / `detect_score` (mask generator stepped every `min(N/10, 100)` mini-batches). External dep: `einops` (already in dc_vis).
@@ -767,7 +807,9 @@ Input: (win_size × n_features)
 
 **Description:** Two complementary autoencoders. M_pt does per-timestep reconstruction with short-range attention; M_seq does sequence-level reconstruction with random induction-position masking (longer-range attention, optionally Performer). Scoring formula: `score(t) = max(err_pt(t), err_seq(t) − N(x))` where N(x) is the θ_N-quantile of err_pt(t) (per-batch nominality threshold).
 
-**Configuration:** win_size=100, induction_length=16, d_model=256, n_heads=4, e_layers=4, θ_N=0.985, lr=1e-4, batch_size=64, epochs=10.
+**Channel engineering (2026-06-04 faithfulness pass — ADDED, matches upstream `preprocess.py:38-42,78-81`):** the input feature dimension is now conditioned before the model so the default head count works without head collapse: (1) drop zero-std channels, (2) pad the feature dimension up to a multiple of the head count, (3) append entity one-hot. The previous implementation omitted this preprocessing, which collapsed the attention heads at the default head count.
+
+**Configuration:** win_size=100, induction_length=16, d_model=256, n_heads=4, e_layers=4, θ_N=0.985, lr=1e-4, batch_size=64, epochs=10. (Epochs unchanged — restored to 10.)
 
 **Reference:** [andrewlai61616/NPSR](https://github.com/andrewlai61616/NPSR). The optional `performer-pytorch` dependency is auto-detected; fallback to `nn.MultiheadAttention` if not installed.
 
@@ -945,7 +987,7 @@ from .new_model import NewModelBaseline
 
 기존 22개와 달리 학습 시 `train_y` 사용. 약 label = `max(train_y over window)` (train split 한정, leak-free). 전용 실행 경로 `run_weak_sota_baseline_with_epoch_eval`. **Q1-only (Q3 = N/A — `train_y` 전부 0 → positive bag 없음 → `RuntimeError`).** 상태 = **구현 완료 · CPU dry-test 통과 · GPU 미실행** (결과표 weak 행 수치 0개). 독립 리뷰 verdict 병기. 상세 work-log: `temp/ssl_official_baseline_porting_0529/`.
 
-**Normalization fidelity (2026-05-30 핵심 수정):** 4종 모두 이전엔 pipeline **global MinMax** 를 받아 원논문과 불일치(fidelity 결함)했으나, 현재 `run_baseline.py` `SELF_NORMALIZING_WEAK={wetas, treemil, nrdetector, deepmil}` 등록으로 **raw 데이터 수신 + 원논문 normalization 자체 적용**: WETAS/TreeMIL/DeepMIL = per-recording/per-file StandardScaler(z-score), NRdetector = per-split z-score StandardScaler. 4종 모두 2026-06-02 leak-free per-source-file rework 적용: fit() 이 각 source file 의 TRAIN slice 에 자신의 scaler 를 fit 후 캐시하고, predict() 는 PAIRED test file 을 그 캐시된 TRAIN scaler 로 `.transform` (절대 fit-on-test 안 함, 공유 kernel `comparison/baselines/_per_file_norm.py`). 이는 이전 4건의 fit-on-test leak (wetas/treemil/deepmil/nrdetector predict 경로) 을 제거한 것. 단일 파일 데이터셋에서는 per-file ≡ whole-array NO-OP. 모델별 상세는 각 §의 **Normalization** 항목.
+**Normalization fidelity (2026-05-30 핵심 수정 → 2026-06-04 faithfulness pass 정정):** 4종 모두 이전엔 pipeline **global MinMax** 를 받아 원논문과 불일치(fidelity 결함)했으나, 현재 `run_baseline.py` `SELF_NORMALIZING_WEAK={wetas, treemil, nrdetector, deepmil}` 등록으로 **raw 데이터 수신 + 원논문 normalization 자체 적용**: WETAS/TreeMIL/DeepMIL = per-recording/per-file StandardScaler(z-score), NRdetector = per-split z-score StandardScaler. **2026-06-04 정정 — test-side normalization 정책은 모델별로 갈린다 (2026-06-02 의 "4종 모두 leak-free per-source-file" 일괄 framing 폐기):** **treemil = per-file FIT-ON-TEST**(test slice 포함 전체 파일에 fresh fit, `timeseries.py:53-55`), **nrdetector = per-entity FIT-ON-TEST**(각 test entity slice 에 fresh fit, `data_loader.py:50-55`), **wetas = per-file FIT-ON-TEST**(각 test file 에 fresh StandardScaler fit, official `donalee/WETAS timeseries.py:37-40`; 2026-06-04 복원) — 세 모델(WETAS family)은 upstream CODE 가 의도적으로 test 파일에 직접 fit 하는 transductive 정규화라 **leak-free 가 아니나** label 을 전혀 쓰지 않으므로(label-free) leak 이 아니라 방법론 설계(faithful 복원). **deepmil 은 유일하게** cached TRAIN StandardScaler 로 paired test 를 `.transform` 하는 **leak-free** 방식 (NEVER fit-on-test; `wrapper.py:297` `transform_test_per_file`) — Sultani 원논문은 video/C3D 방법으로 TS input scaler 를 명시하지 않아(공식 source 부재) clean-room train-fit 유지, deepmil norm 은 본 pass 미변경. 단일 파일 데이터셋에서는 per-file ≡ whole-array NO-OP. 모델별 상세는 각 §의 **Normalization** 항목.
 
 **Provenance gate (G1–G5):** 본 4종은 `GUIDE.md §7.1` 의 baseline 포팅 재발방지 gate (G1 출처 라벨+source locus / G2 NON_OFFICIAL ≥5-round source-chain / G3 in-project sibling cross-check / G4 provenance≠comparability / G5 vendored VCS 가시성) 를 적용. 각 §의 **Provenance** 항목에 라벨 기록 — DeepMIL encoder(DERIVATIVE_CITED, G3 WETAS DiCNN 재사용)·NRdetector encoder schedule(NON_OFFICIAL/IMPL-INVENTED)이 대표 사례.
 
@@ -959,11 +1001,11 @@ from .new_model import NewModelBaseline
 - **head+loss = FAITHFUL (clean-room):** 공식 repo [WaqasSultani/AnomalyDetectionCVPR2018](https://github.com/WaqasSultani/AnomalyDetectionCVPR2018) 은 **무 LICENSE · legacy Keras 1.1.0/Theano · video/C3D · 실행 불가**. vendoring 불가 → MIL ranking head+loss 를 paper 로부터 clean-room 재구현 (DAGMM §13-style reference substitution; 공식 repo 코드 미복사, ekosman MIT PyTorch port 는 교차검증용으로만 참조).
 - **encoder = DERIVATIVE_CITED (NOT OFFICIAL):** Sultani 원논문은 frozen C3D fc6 4096-d feature 를 소비하는 **video** 방법이라 학습형 TS encoder 가 없다. DeepMIL-on-TS encoder 의 canonical 정의는 후속 WS-TSAD 논문 **WETAS (Lee et al., ICCV'21, CVF p.7360)** 의 verbatim 문장: *"DeepMIL employs the same model architecture with WETAS (i.e., DiCNN)"* + *"DeepMIL-4,8,16"*. 따라서 in-project vendored **WETAS `DilatedCNN`** (`comparison/baselines/wetas/model.py`) 을 encoder 로 재사용 (input=n_features, hidden=output=128, kernel=2, n_layers=7 → RF=2^7=128). **OFFICIAL Sultani encoder 아님** (공식 video 방법엔 TS encoder 부재). 이전 bespoke `TSSegmentEncoder` 은퇴.
 
-**Normalization:** per-recording StandardScaler (z-score, WETAS-lineage; `timeseries.py`). wrapper 가 raw 데이터에 자체 적용 (`run_baseline.py` `SELF_NORMALIZING_WEAK`) — 이전 global-minmax 결함 수정. train = train recording fit/transform, predict = PAIRED test file 마다 캐시된 TRAIN scaler 로 `.transform` (per-source-file leak-free kernel `_per_file_norm.transform_test_per_file`; 이전 transductive whole-test leak 제거).
+**Normalization:** per-recording StandardScaler (z-score, WETAS-lineage; `timeseries.py`). wrapper 가 raw 데이터에 자체 적용 (`run_baseline.py` `SELF_NORMALIZING_WEAK`) — 이전 global-minmax 결함 수정. train = train recording fit/transform. **predict = LEAK-FREE: PAIRED test recording 마다 캐시된 TRAIN StandardScaler 로 `.transform`** (NEVER fit-on-test; `wrapper.py:297` `transform_test_per_file`). 단일 파일/None → 단일 train scaler 로 전체 test array transform. (Sultani 원논문은 video/C3D 방법으로 TS input scaler 미지정 → 공식 source 부재 → 현 코드는 leak-free train-fit; nrdetector/treemil/wetas 와 달리 deepmil 만 본 pass 미변경 — deepmil 이 유일한 leak-free weak model.)
 
 **Architecture:** encoder = WETAS DiCNN (위 DERIVATIVE_CITED, dense per-timestep feature map `(B,L,128)`) + MIL ranking head `D→512(ReLU,Dropout0.6)→32(Dropout0.6)→1(Sigmoid)`, xavier init, L2=0.001 (FAITHFUL). bag = window.
 
-**Loss:** ranking hinge (margin 1.0) on max-over-timesteps(+bag vs −bag) + smoothness(λ=8e-5) + sparsity(λ=8e-5), positive bag 대상 (FAITHFUL; max 가 segment→timestep 로 dense 화된 것 외 불변).
+**Loss (2026-06-04 faithfulness pass — full cross-product):** ranking hinge (margin 1.0) over the **FULL n_Nor × n_Abn cross-product** of normal/abnormal bag max-over-timesteps scores (Sultani `custom_objective` L266-271) + smoothness(λ=8e-5) + sparsity(λ=8e-5), positive bag 대상. **NOT paired/diagonal** — every abnormal bag is compared against every normal bag (`comparison/baselines/deepmil/model.py:180-198`). 이전엔 paired (diagonal) hinge 였으나 공식 Keras `custom_objective` 와 불일치 → cross-product 로 교체. max 가 segment→timestep 로 dense 화된 것 외 head/loss 구조는 FAITHFUL.
 
 **Configuration:** **optimizer = Adam lr=1e-4 (WETAS `train_classifier.py:234` 출처)** — Sultani 의 Adagrad lr=0.01 은 frozen-C3D shallow head 전용이라 deep DiCNN encoder 와 joint 학습 시 발산(logits→-200/-440, score collapse)하므로 encoder 출처 optimizer 사용 (preset `optimizer='adam'`/`lr=1e-4`; head/loss 는 Sultani 유지, optimizer 만 encoder 출처). 60 bags/batch (30 pos + 30 neg), seq_len(bag window)=128, encoder_dim=128, dropout=0.6, epochs=10, iters_per_epoch=50. `n_segments=32` 은 config 호환용 **vestigial** (dense per-timestep MIL — 32-seg 변형 미구현).
 
@@ -971,7 +1013,7 @@ from .new_model import NewModelBaseline
 
 **Provenance (G1–G5, `GUIDE.md §7.1`):** encoder=DERIVATIVE_CITED (G3 sibling 재사용), head+loss=FAITHFUL, optimizer=encoder-sourced (G1, "design choice" 아님), dense scoring=NON_OFFICIAL (G1 disclosed).
 
-**Phase 4 verdict:** head/loss/optimizer VERIFIED_SAME; encoder = literature-sanctioned DiCNN (DERIVATIVE_CITED, NEEDS_REVIEW → ACCEPT). F-1 LOW: paired vs all-pairs hinge (동일 objective). 또한 deep DiCNN encoder 와 Sultani 의 Adagrad(lr=0.01) joint 학습 시 **epoch-1 collapse** (logits→ −200/−440, score 붕괴) 관측 → encoder-출처 Adam(lr=1e-4) 로 대체하여 회피 (위 Configuration 참조).
+**Phase 4 verdict:** head/loss/optimizer VERIFIED_SAME; encoder = literature-sanctioned DiCNN (DERIVATIVE_CITED, NEEDS_REVIEW → ACCEPT). **2026-06-04 faithfulness pass:** the prior "paired vs all-pairs hinge (동일 objective)" F-1 note is **superseded** — the ranking loss is now the FULL n_Nor×n_Abn cross-product (Sultani L266-271), so it is the official all-pairs hinge, no longer a paired approximation. 또한 deep DiCNN encoder 와 Sultani 의 Adagrad(lr=0.01) joint 학습 시 **epoch-1 collapse** (logits→ −200/−440, score 붕괴) 관측 → encoder-출처 Adam(lr=1e-4) 로 대체하여 회피 (위 Configuration 참조).
 
 ### 24. WETAS (ICCV 2021) — 공식 vendoring
 
@@ -984,6 +1026,8 @@ from .new_model import NewModelBaseline
 **Normalization:** per-recording StandardScaler (z-score), `timeseries.py:35-40` (`_preprocess` 가 recording 파일마다 fresh `StandardScaler().fit_transform`). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전 pipeline global-minmax 결함 수정. train = `train_segments` 별 fit/transform, predict = PAIRED test recording 마다 캐시된 TRAIN StandardScaler 로 `.transform` (per-source-file leak-free kernel; 2026-06-02 이전 transductive fit-on-test leak 제거).
 
 **Architecture:** WaveNet-style dilated-CNN (n_layers=7, gated residual) + 공유 `fc(128,1)` head (weak pool head + dense per-timestep head).
+
+**Windowing (2026-06-04 faithfulness pass — per-file FRONT-pad):** each source file is split into non-overlapping `split_size`-length windows with **FRONT (left) zero-padding** of the leading partial window, matching upstream `timeseries.py:40-46`. (Prior windowing did not front-pad per file in the upstream-faithful way.)
 
 **Loss:** `BCE(wscore, wlabel) + dtw_loss` (soft-DTW triplet hinge, beta=0.1, gamma=0.1), Adam lr=1e-4, batch_size=32, split_size=500.
 
@@ -999,7 +1043,7 @@ from .new_model import NewModelBaseline
 
 **Reference:** [fly-orange/TreeMIL](https://github.com/fly-orange/TreeMIL) (GPL-3.0), commit `16f166c`. N-ary-tree transformer core + window-BCE (`last_loss`) vendoring. **soft-DTW/alignment 은 학습 gradient 경로에 없는 dead code → 제외** (Phase 4 증명: `train.py:143` backward = BCE만). torch-only.
 
-**Normalization (2026-05-30 — 이전 silent, deviation 명시):** 원논문 = per-file StandardScaler (z-score), `timeseries.py:53-55` (`_preprocess` 가 input 파일마다 전체 `(T,D)` 에 fit 후 train/valid/test slice 에 transductive 적용). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전엔 pipeline global-minmax 를 받아 원논문과 불일치했고 이 deviation 이 문서에 기록되지 않았음(silent). 현재 train = `train_segments` 별 per-file z-score (windowing 前), predict = PAIRED test file 마다 캐시된 TRAIN scaler 로 `.transform` (per-source-file leak-free kernel `_per_file_norm.transform_test_per_file`; 이전 transductive whole-test fit_transform leak 제거).
+**Normalization (2026-06-04 faithfulness pass — per-file FIT-ON-TEST, transductive; supersedes the 2026-06-02 leak-free framing):** 원논문 = per-file StandardScaler (z-score), `timeseries.py:53-55` (`_preprocess` 가 input 파일마다 전체 `(T,D)` 에 fit 후 train/valid/test slice 에 transductive 적용). **faithful 재현을 위해 test normalization 은 per-file FIT-ON-TEST 으로 복원**: 각 test file 의 **전체** `(T,D)` (test slice 포함) 에 fresh `StandardScaler` 를 fit 후 transform — train-only/leak-free 가 **아님** (upstream 이 의도적으로 transductive 이기 때문). 직전(2026-06-02) "PAIRED test file 을 캐시된 TRAIN scaler 로 transform (leak-free)" 정책은 원논문과 불일치하여 폐기됨. train 측은 여전히 `train_segments` 별 per-file z-score (windowing 前). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`).
 
 **Architecture:** Conv embedding+positional → multi-scale tree nodes(=MIL instances) → masked MHA (parent/child/neighbor/self) → 공유 `Linear(d_model,1)+sigmoid`. window-score = max-pool, dense-score = gather-ancestors.
 
@@ -1017,13 +1061,17 @@ from .new_model import NewModelBaseline
 
 **Reference:** [UCSC-REAL/NRdetector](https://github.com/UCSC-REAL/NRdetector) (MIT, Yang Liu lab), commit `bd5592b`. encoder + PU-LP selector + PU classifier vendoring. CLI `Solver` → in-memory `fit/predict` adapter. **HOC(이진화기)·soft-DTW(공식 encoder 학습 코드 부재) 제외.**
 
-**Normalization:** per-split z-score StandardScaler, `data_loader.py:50-55` (paper §5.2 "following Xu 2021"; `_preprocess` 가 split 마다 fresh `StandardScaler` fit/transform). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`) — 이전 global-minmax 결함 수정. 현재 normalization 은 공유 leak-free per-source-file kernel (`comparison/baselines/_per_file_norm.py`) 을 NRdetector 자신의 StandardScaler identity 로 통과시킴: `fit()` 이 각 source file 의 TRAIN slice 에 scaler fit 후 `self._scalers` 에 캐시, `predict()` 가 PAIRED test file 을 그 캐시된 TRAIN scaler 로 `.transform` (절대 fit-on-test 안 함). 이전 global-minmax + 일부 fit-on-test 경로 모두 제거.
+**Normalization (2026-06-04 faithfulness pass — per-entity FIT-ON-TEST, NOT leak-free; supersedes the 2026-06-02 leak-free framing):** per-split z-score StandardScaler, `data_loader.py:50-55` (paper §5.2 "following Xu 2021"; `_preprocess` 가 split 마다 fresh `StandardScaler` fit/transform). wrapper 가 raw 데이터에 자체 적용 (`SELF_NORMALIZING_WEAK`). **test normalization 은 per-entity FIT-ON-TEST 으로 복원**: 각 test entity slice 에 fresh `StandardScaler` 를 fit/transform — train-only/leak-free 가 **아님** (upstream `data_loader.py:50-55` 가 test split 에 자체 fit 하기 때문). 직전(2026-06-02) "PAIRED test file 을 캐시된 TRAIN scaler 로 transform (절대 fit-on-test 안 함)" 정책은 원논문과 불일치하여 폐기됨. 이전 global-minmax 결함도 함께 수정됨.
 
-**Architecture:** 2-stage PU — DilatedCNN encoder → PU-LP kNN-graph selector (`noisy_rate=0.4`) → PU classifier (`LabelDistributionLoss` + `constraint_loss`).
+**Architecture:** 2-stage PU — DilatedCNN encoder → PU-LP graph selector (`noisy_rate=0.4`) → PU classifier (`LabelDistributionLoss` + `constraint_loss`).
+
+**PU-LP graph (2026-06-04 faithfulness pass — TRANSDUCTIVE):** the label-propagation selector builds its cosine-kNN graph + Katz-W matrix over **train + TEST embeddings jointly** (transductive), while the reliable-positive / reliable-negative (RP/RN) selection remains **restricted to the train split**. The harness wires `test_X` into the selector's `fit` via an inspect-gated helper (`_fit_kwargs_with_test`) that only affects nrdetector — other models are untouched. Impact is SMALL (the RP/RN pool is the same train-only set); the change makes the graph topology faithful to upstream.
+
+**Classifier training (2026-06-04 faithfulness pass — per-epoch gradient accumulation):** the PU-classifier optimizer calls `optimizer.zero_grad()` **once per epoch** (not per mini-batch), i.e. gradients accumulate across all mini-batches within an epoch before a single step — faithful to upstream `solver.py:126` (`wrapper.py:679-685`).
 
 **Configuration:** win_size=100, hidden=64, output=64, classifier_hidden=128, lr=1e-5, batch_size=32, epochs=200. **encoder_epochs=50 / encoder_lr=1e-3 (2026-05-30 파라미터화)**. 분류 구분:
 - **fixed-param:** win_size, hidden, classifier_hidden, lr, batch_size, epochs, knn_k=5, seed=0.
-- **runtime-estimated:** `prior=None` → 런타임 동적 추정 (train wlabel rate, clip [0.05,0.5]). 데이터셋마다 anomaly ratio 가 다른 PU class prior 는 **intrinsic 속성이라 추정이 맞음** (공식 고정 0.25/0.31 우회는 의도적). 사용된 prior 는 로깅됨.
+- **PU class prior (2026-06-04 faithfulness pass — FIXED 0.25, supersedes prior runtime-estimation):** `prior=0.25` 로 **고정** — 공식 `main.py:98` 의 argparse default 와 일치. 직전엔 `prior=None` → 런타임 동적 추정 (train wlabel rate, clip [0.05,0.5]) 이었으나, 공식 코드가 고정 0.25 를 사용하므로 faithful 재현을 위해 고정값으로 복원함 (preset 및 wrapper default 모두 0.25).
 - **fixed knob (추정 대상 아님):** `noisy_rate=0.4` = experimenter-imposed **reveal fraction** — 양성 train segment 중 첫 40%만 labeled-P 로 공개, 나머지는 unlabeled 로 demote (`selector.py:31-39`). dataset 속성이 아닌 실험 knob 이라 고정.
 - **IMPL-INVENTED (confound):** `encoder_epochs=50` / `encoder_lr=1e-3`. 공식엔 encoder **학습 recipe 가 없음** — pretrained `.pth` 를 로드만 한다:
   > `modules/extractor.py:65` — `model.load_state_dict(torch.load(".../"+dataset+"_model_4.pth"))`
@@ -1033,8 +1081,8 @@ from .new_model import NewModelBaseline
 
   우리는 해당 `.pth` 미보유라 from-scratch 로 BCE-only 학습(`bce(wscore, wlabel)`, `extractor.py:127`; soft-DTW 는 install ban 으로 제외). 따라서 출처 없는 50/1e-3 는 feature-quality 에 영향을 줄 수 있는 **confound 로 문서화** (NON_OFFICIAL). 완전 일치는 공식 pretrained weight 필요(미가용 가능성).
 
-**Score (2026-06-03 PM — classifier-gate RESTORED; see `NRDETECTOR_CORRECTION_v2.md`):** `predict()` emits the **CLASSIFIER-GATED continuous per-window min-max actmap**: `scores = actmap × [seg_prob ≥ mean(seg_prob)+anomaly_thre·(max−min)]`, `anomaly_thre=0` (`actmap=(h−min)/max`, upstream `extractor.py get_dpred`; `seg_prob` = PU-classifier per-window prob, `solver.test()` mean-gate). Non-flagged windows → 0; flagged windows keep their continuous actmap → `(N_test,)`. **The gate is INTEGRAL to the upstream DEFAULT path, not optional:** `--mode` default `'train'` → runs ONLY `solver.rank_test()` (`begin/train/test/pick_test` commented, main.py:44-48), which ranks `point_Score = self.interested_instance.reshape(-1)` (solver.py:219); `interested_instance` = `save_instance_files` keeping ONLY classifier-flagged windows (`instance_label[i]>0`, solver.py:198-203), `instance_label` = the classifier mean-gate (solver.py:164-171,185). So upstream ranks the **classifier-flagged-window actmap** (the gate selects the ranked pool). Our harness (ROC/PRC/pak_auc_f1) does its own operating-point selection, replacing upstream's `anomaly_ratio=0.65`+HOC single-label selectors. ⚠ **The no-gate "continuous ACTMAP" of commit `5cff9da` (2026-06-03 AM) was a DOUBLE REGRESSION — REVERTED:** (1) the encoder is frozen after Stage 0 (only the PU-classifier trains per-epoch), so an encoder-only actmap is IDENTICAL every epoch → per-epoch scores became **bit-identical** (best-epoch meaningless); (2) the ungated actmap floods the ranking with normal-window points → collapse. Measured (inference-only): SWaT pak_auc_f1 **0.858 (gated) → 0.440 (no-gate)**, roc_auc 0.883→0.365. The earlier "binary-gate = MAJOR_DEVIATION" adjudication was an **oversight** — the gate is faithful; removing it was the bug. Per-window min-max actmap + boundary-safe windowing + per-file leak-free normalization all preserved.
+**Score (2026-06-03 PM — classifier-gate RESTORED; see `NRDETECTOR_CORRECTION_v2.md`):** `predict()` emits the **CLASSIFIER-GATED continuous per-window min-max actmap**: `scores = actmap × [seg_prob ≥ mean(seg_prob)+anomaly_thre·(max−min)]`, `anomaly_thre=0` (`actmap=(h−min)/max`, upstream `extractor.py get_dpred`; `seg_prob` = PU-classifier per-window prob, `solver.test()` mean-gate). Non-flagged windows → 0; flagged windows keep their continuous actmap → `(N_test,)`. **The gate is INTEGRAL to the upstream DEFAULT path, not optional:** `--mode` default `'train'` → runs ONLY `solver.rank_test()` (`begin/train/test/pick_test` commented, main.py:44-48), which ranks `point_Score = self.interested_instance.reshape(-1)` (solver.py:219); `interested_instance` = `save_instance_files` keeping ONLY classifier-flagged windows (`instance_label[i]>0`, solver.py:198-203), `instance_label` = the classifier mean-gate (solver.py:164-171,185). So upstream ranks the **classifier-flagged-window actmap** (the gate selects the ranked pool). Our harness (ROC/PRC/pak_auc_f1) does its own operating-point selection, replacing upstream's `anomaly_ratio=0.65`+HOC single-label selectors. ⚠ **The no-gate "continuous ACTMAP" of commit `5cff9da` (2026-06-03 AM) was a DOUBLE REGRESSION — REVERTED:** (1) the encoder is frozen after Stage 0 (only the PU-classifier trains per-epoch), so an encoder-only actmap is IDENTICAL every epoch → per-epoch scores became **bit-identical** (best-epoch meaningless); (2) the ungated actmap floods the ranking with normal-window points → collapse. Measured (inference-only): SWaT pak_auc_f1 **0.858 (gated) → 0.440 (no-gate)**, roc_auc 0.883→0.365. The earlier "binary-gate = MAJOR_DEVIATION" adjudication was an **oversight** — the gate is faithful; removing it was the bug. Per-window min-max actmap + boundary-safe windowing all preserved. (NOTE: normalization is **per-entity FIT-ON-TEST** as of the 2026-06-04 faithfulness pass — NOT leak-free; see **Normalization** above. The prior "per-file leak-free normalization" wording here is superseded.)
 
-**Provenance (G1–G5, `GUIDE.md §7.1`):** encoder schedule = NON_OFFICIAL/IMPL-INVENTED (G1 confound 문서화 + G2 source-chain: official `.pth`-load 확인). `prior` = runtime-estimated (intrinsic). `noisy_rate` = fixed experiment knob.
+**Provenance (G1–G5, `GUIDE.md §7.1`):** encoder schedule = NON_OFFICIAL/IMPL-INVENTED (G1 confound 문서화 + G2 source-chain: official `.pth`-load 확인). `prior` = **FIXED 0.25** (2026-06-04 faithfulness pass; upstream `main.py:98` default — supersedes the earlier runtime-estimated/intrinsic framing). `noisy_rate` = fixed experiment knob.
 
-**Phase 4 verdict:** FIXED → VERIFIED_SAME. 수정 3건: MM1(HIGH) 공식 `calc_lp` 포팅 → PU classifier가 RP=labeled-P / RN=label-propagation `lp_n` 로 학습; MM3 directed adjacency for W; MM4 per-window min-max actmap base score (+ raw-h features). 문서화된 제약: encoder BCE-only, `prior` 동적 추정, `encoder_epochs`/`encoder_lr` IMPL-INVENTED. ⚠ **2026-06-03 PM 정정:** MM4의 classifier-gated score(`actmap × [seg_prob ≥ mean]`)가 **faithful**이다 — upstream DEFAULT `rank_test`가 ranking하는 `interested_instance`는 classifier가 flag한 window의 actmap만 모은 것(`save_instance_files`, `instance_label[i]>0`, solver.py:198-203)이므로 gate가 ranked pool을 결정한다. 잠깐 gate를 제거했던 commit `5cff9da`(2026-06-03 AM, "binary-gate=MAJOR_DEVIATION" 오판)는 **회귀였고 revert됨** — encoder가 Stage 0 후 frozen이라 gate 없는 actmap은 epoch마다 불변(bit-identical)이 되고 ranking도 붕괴(SWaT pak 0.86→0.44). per-window min-max actmap base + classifier gate 모두 유지. (`NRDETECTOR_CORRECTION_v2.md`)
+**Phase 4 verdict:** FIXED → VERIFIED_SAME. 수정 3건: MM1(HIGH) 공식 `calc_lp` 포팅 → PU classifier가 RP=labeled-P / RN=label-propagation `lp_n` 로 학습; MM3 directed adjacency for W; MM4 per-window min-max actmap base score (+ raw-h features). 문서화된 제약: encoder BCE-only, `encoder_epochs`/`encoder_lr` IMPL-INVENTED. **2026-06-04 faithfulness pass 추가 수정:** test norm = per-entity FIT-ON-TEST (leak-free 아님), `prior` = FIXED 0.25 (동적 추정 아님), classifier `zero_grad()` = per-epoch accumulation (solver.py:126), PU-LP graph = TRANSDUCTIVE (train+test embeddings, RP/RN train-only). KEPT: classifier-gated continuous min-max actmap score (the faithful object), epochs=50. ⚠ **2026-06-03 PM 정정:** MM4의 classifier-gated score(`actmap × [seg_prob ≥ mean]`)가 **faithful**이다 — upstream DEFAULT `rank_test`가 ranking하는 `interested_instance`는 classifier가 flag한 window의 actmap만 모은 것(`save_instance_files`, `instance_label[i]>0`, solver.py:198-203)이므로 gate가 ranked pool을 결정한다. 잠깐 gate를 제거했던 commit `5cff9da`(2026-06-03 AM, "binary-gate=MAJOR_DEVIATION" 오판)는 **회귀였고 revert됨** — encoder가 Stage 0 후 frozen이라 gate 없는 actmap은 epoch마다 불변(bit-identical)이 되고 ranking도 붕괴(SWaT pak 0.86→0.44). per-window min-max actmap base + classifier gate 모두 유지. (`NRDETECTOR_CORRECTION_v2.md`)

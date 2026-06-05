@@ -299,6 +299,19 @@ class NPSRBaseline:
         self._train_X_norm: Optional[np.ndarray] = None
         self._theta_N: Optional[float] = None
 
+        # ---- Channel-engineering state (upstream preprocess.py:38-42,78-81 +
+        # preprocess_SMD.py:39-41), computed ONCE at fit() and replayed in
+        # predict() so train/test channel layout is identical. -----------------
+        #   _keep_chns : bool mask over RAW input channels (zero-std drop).
+        #   _pad_width : #zero channels PREPENDED to reach a multiple of n_heads
+        #                (so Performer's `dim % heads == 0` assert holds and the
+        #                configured head count is honoured WITHOUT collapse).
+        #   _n_entities: #entities engineered into a one-hot tail (combined path).
+        self._keep_chns: Optional[np.ndarray] = None
+        self._pad_width: int = 0
+        self._n_entities: int = 1
+        self._n_features_raw: Optional[int] = None  # RAW channel count seen at fit()
+
     # ------------------------------------------------------------------
     @property
     def name(self) -> str:
@@ -321,8 +334,72 @@ class NPSRBaseline:
             ff_mult=self.ff_mult,
         ).to(self.device)
 
+    # ------------------------------------------------------------------
+    # Channel engineering (upstream-faithful) — replicates the upstream
+    # data-path so the CONFIGURED head count works (Performer asserts
+    # ``dim % heads == 0`` at performer_pytorch/__init__.py:395):
+    #   1. zero-std channel drop  (preprocess.py:38-42, single-entity branch)
+    #   2. pad feature dim to a multiple of n_heads with PREPENDED zero
+    #      channels (the mechanism of preprocess_SMD.py:39-41, "38 sens + 2
+    #      add = 40 = 8 heads * 5")
+    #   3. entity one-hot tail for the COMBINED multi-entity path
+    #      (preprocess.py:78-81, ``train_method == 'train_together'``)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _seg_count(segs) -> int:
+        """#entities implied by per-file segments (1 if None/empty/single)."""
+        return len(segs) if segs else 1
+
+    def _pad_to_head_multiple(self, X: np.ndarray) -> np.ndarray:
+        """Prepend ``self._pad_width`` zero channels (upstream SMD pad mechanism).
+
+        Zero channels contribute 0 to every Δ and to the channel-mean MSE in
+        A(t)/N(t)'s numerator and denominator alike, so they do not change the
+        anomaly ordering — their sole purpose is to make ``D`` divisible by the
+        head count (preprocess_SMD.py:40-41 prepends zeros for exactly this).
+        """
+        if self._pad_width <= 0:
+            return X
+        pad = np.zeros((X.shape[0], self._pad_width), dtype=X.dtype)
+        return np.concatenate((pad, X), axis=-1)
+
+    def _append_entity_onehot(self, X: np.ndarray, segs, train_local: bool) -> np.ndarray:
+        """Append a per-entity one-hot tail (combined method only).
+
+        Mirrors preprocess.py:78-81: for ``entities > 1`` each entity's rows get
+        ``np.eye(entities)[entity_id]`` tiled and concatenated on the channel
+        axis. ``segs`` are per-file (lo, hi) in the array's own local coords. For
+        a single entity (operative simple jobs) this is a NO-OP — exactly as
+        upstream skips the one-hot when ``entities == 1``.
+        """
+        n_ent = self._n_entities
+        if n_ent <= 1 or not segs or len(segs) != n_ent:
+            return X
+        eye = np.eye(n_ent, dtype=X.dtype)
+        onehot = np.zeros((X.shape[0], n_ent), dtype=X.dtype)
+        for ei, (lo, hi) in enumerate(segs):
+            onehot[lo:hi] = eye[ei]
+        return np.concatenate((X, onehot), axis=-1)
+
     def _normalize_train(self, train_X: np.ndarray, norm_train_segs=None) -> np.ndarray:
-        # Per-source-FILE leak-free fit/transform (NPSR's OWN scaler identity:
+        train_X = np.asarray(train_X, dtype=np.float32)
+        self._n_features_raw = train_X.shape[1]  # RAW input channel count (pre-engineering)
+
+        # --- (1) Zero-std channel drop (upstream preprocess.py:38-42) ---------
+        # Upstream computes keep_chns = (std_trn + std_tst) > 0; the model's input
+        # dim is fixed at build time, so the mask MUST be decided here at fit()
+        # (test std is unknown until predict()). We therefore use TRAIN std only —
+        # leak-free and architecturally forced. A channel constant in TRAIN is a
+        # dead channel (its MinMax range collapses to 1.0); dropping it removes
+        # the dilution it would otherwise add to the channel-mean of A(t)/N(t).
+        self._keep_chns = train_X.std(axis=0) > 0
+        if not self._keep_chns.any():
+            # degenerate (all-constant) — keep everything to avoid a 0-dim model.
+            self._keep_chns = np.ones(train_X.shape[1], dtype=bool)
+        train_X = train_X[:, self._keep_chns]
+
+        # --- Per-source-FILE leak-free fit/transform (NPSR's OWN scaler identity:
         # MinMaxScaler(feature_range=(-1, 1)), fit on each file's TRAIN slice).
         # Multi-file -> one scaler per entity; single-file / None segs -> one
         # whole-array scaler (bit-identical to the legacy single-fit path).
@@ -333,11 +410,28 @@ class NPSRBaseline:
         # Keep `self.scaler` set for save()/back-compat (last per-file scaler;
         # for single-file this IS the one-and-only scaler == legacy behavior).
         self.scaler = scalers[-1] if scalers else None
+        out = out.astype(np.float32)
+
+        # --- (3) Entity one-hot tail (combined method, preprocess.py:78-81) ----
+        # Operative simple jobs are single-entity -> NO-OP. Append BEFORE padding
+        # so the pad target accounts for the final channel count.
+        self._n_entities = self._seg_count(norm_train_segs)
+        out = self._append_entity_onehot(out, norm_train_segs, train_local=True)
+
+        # --- (2) Pad feature dim to a multiple of n_heads (SMD pad mechanism) --
+        D = out.shape[1]
+        rem = D % self.n_heads
+        self._pad_width = (self.n_heads - rem) if rem else 0
+        out = self._pad_to_head_multiple(out)
         return out.astype(np.float32)
 
     def _normalize_test(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
         if not self._scalers:
             raise RuntimeError("scaler not fit. Call fit() first.")
+        test_X = np.asarray(test_X, dtype=np.float32)
+        # Replay the fit-time zero-std channel drop (same mask, same order).
+        if self._keep_chns is not None:
+            test_X = test_X[:, self._keep_chns]
         # LEAK-FREE: i-th test file transformed by i-th cached TRAIN scaler
         # (.transform only — never fit on test). Single-file / mismatch -> first
         # train scaler over the whole array (same as legacy transform-by-train).
@@ -347,6 +441,10 @@ class NPSRBaseline:
             out = np.where(out > self.clamp_max, self.clamp_max, out)
         if self.clamp_min is not None:
             out = np.where(out < self.clamp_min, self.clamp_min, out)
+        out = out.astype(np.float32)
+        # Replay entity one-hot tail then head-pad (same widths as train).
+        out = self._append_entity_onehot(out, test_segments, train_local=False)
+        out = self._pad_to_head_multiple(out)
         return out.astype(np.float32)
 
     # ------------------------------------------------------------------
@@ -538,8 +636,13 @@ class NPSRBaseline:
         if self.model is None:
             raise RuntimeError("Model not trained. Call fit() first.")
         F = test_X.shape[1]
-        if F != self.n_features:
-            raise ValueError(f"feature mismatch: test has {F}, fit had {self.n_features}")
+        # Compare against the RAW (pre channel-engineering) feature count: the
+        # zero-std drop / pad / one-hot are replayed inside `_normalize_test`, so
+        # `test_X` here is still raw-width. (`self.n_features` is the engineered
+        # width baked into the model.)
+        expected_raw = self._n_features_raw if self._n_features_raw is not None else self.n_features
+        if F != expected_raw:
+            raise ValueError(f"feature mismatch: test has {F}, fit had {expected_raw} (raw)")
 
         # Path-B normalization on test (per-source-FILE transform-by-TRAIN-scaler,
         # leak-free, with clamp on test only). `test_segments` = per-file (lo,hi) in
@@ -703,6 +806,12 @@ class NPSRBaseline:
             "clamp_max": self.clamp_max,
             "clamp_min": self.clamp_min,
             "n_features": self.n_features,
+            # Channel-engineering state — required to replay drop/pad/one-hot in
+            # predict() after a load() (model input dim is the engineered width).
+            "n_features_raw": self._n_features_raw,
+            "keep_chns": self._keep_chns.tolist() if self._keep_chns is not None else None,
+            "pad_width": self._pad_width,
+            "n_entities": self._n_entities,
         }
         with open(save_dir / "config.json", "w") as f:
             json.dump(config, f, indent=2)
@@ -717,6 +826,12 @@ class NPSRBaseline:
             "gate_func", "clamp_max", "clamp_min", "n_features",
         ):
             setattr(self, k, config[k])
+        # Restore channel-engineering state (back-compat: older saves lack it).
+        self._n_features_raw = config.get("n_features_raw", config["n_features"])
+        kc = config.get("keep_chns")
+        self._keep_chns = np.asarray(kc, dtype=bool) if kc is not None else None
+        self._pad_width = int(config.get("pad_width", 0))
+        self._n_entities = int(config.get("n_entities", 1))
         self.model = self._build_model()
         self.model.load_state_dict(torch.load(save_dir / "model.pt", map_location=self.device))
         self.model.eval()

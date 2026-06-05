@@ -17,15 +17,16 @@ Normalization (Change 3 — RAW input, wrapper self-normalizes):
   i.e. a fresh StandardScaler fit on EACH recording's own data (per-recording /
   transductive), not a single global train-only scaler.
 - fit(): StandardScaler fit on train_X, transform train_X (the train recording).
-- predict(): predict() receives ONLY test_X (no per-recording segment boundaries), so
-  per-recording-per-file scaling is infeasible. Most-faithful feasible choice — match
-  WETAS's "fit a fresh scaler on THIS recording's own data" by fitting a transductive
-  StandardScaler on test_X itself (zero-mean/unit-variance over the whole test array)
-  and transforming it. Residual scope gap vs the upstream reference: upstream fits one
-  scaler PER recording/file; here test_X is the concatenation of all test recordings,
-  so a single test-wide scaler is used (the boundaries are not visible to predict).
-  This is strictly closer to the per-recording reference than applying the TRAIN scaler
-  to test (which would be cross-recording). Documented in CODE_REWORK_NOTES.md.
+- predict(): LEAK-FREE per-source-file normalization — each test recording is
+  transformed by its PAIRED cached TRAIN StandardScaler (`.transform` ONLY, NEVER
+  fit-on-test), via `transform_test_per_file(test_X, test_segments, self._scalers)`
+  (wrapper.py predict ~L290-297). Single-file / None -> the single cached train
+  scaler over the whole test array. This is the actual executed behavior (it
+  replaced an earlier transductive fit-on-test variant). NOTE (2026-06-04): unlike
+  nrdetector/treemil (whose upstream CODE explicitly fits-on-test, restored to
+  fit-on-test), deepmil's TS normalization is a clean-room invention (Sultani's
+  paper specifies no input scaler), so the leak-free train-fit is kept as the
+  current code state — see the wetas/deepmil fit-scope consistency note.
 
 Bag/label rule (FAITHFUL MIL semantics; window length is NON_OFFICIAL / TS-specific):
 - A BAG = one window of length ``seq_len`` over the (StandardScaler-normalized) TS.

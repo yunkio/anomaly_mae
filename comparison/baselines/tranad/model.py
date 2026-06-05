@@ -118,21 +118,30 @@ class TranADModel(nn.Module):
         self.pos_encoder = PositionalEncoding(self.d_model, dropout, seq_len)
 
         # Transformer encoder (1 layer in upstream).
+        # Activation = LeakyReLU to match upstream custom layers
+        # (src/dlutils.py:222 `self.activation = nn.LeakyReLU(True)`).
+        # NOTE: torch>=2.x accepts a callable for `activation`; the string form
+        # 'leaky_relu' is rejected (only relu/gelu), so we pass F.leaky_relu
+        # (default negative_slope=0.01 == nn.LeakyReLU(True)'s default). We KEEP
+        # the stock layer's built-in LayerNorm (paper Eqs 4-5, arXiv:2201.07284 §3.3).
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.d_model,
             nhead=self.n_heads,
             dim_feedforward=d_ff,
             dropout=dropout,
+            activation=F.leaky_relu,
             batch_first=False,
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_encoder_layers)
 
         # Two separate decoders (1 layer each in upstream).
+        # Activation = LeakyReLU to match upstream (src/dlutils.py:243).
         decoder_layer1 = nn.TransformerDecoderLayer(
             d_model=self.d_model,
             nhead=self.n_heads,
             dim_feedforward=d_ff,
             dropout=dropout,
+            activation=F.leaky_relu,
             batch_first=False,
         )
         self.transformer_decoder1 = nn.TransformerDecoder(decoder_layer1, num_layers=n_decoder_layers)
@@ -142,6 +151,7 @@ class TranADModel(nn.Module):
             nhead=self.n_heads,
             dim_feedforward=d_ff,
             dropout=dropout,
+            activation=F.leaky_relu,
             batch_first=False,
         )
         self.transformer_decoder2 = nn.TransformerDecoder(decoder_layer2, num_layers=n_decoder_layers)
@@ -210,7 +220,7 @@ class TranADBaseline:
         n_encoder_layers: int = 1,
         n_decoder_layers: int = 1,
         dropout: float = 0.1,
-        lr: float = 0.001,
+        lr: float = 1e-4,  # constants.py lr_d MODAL repro value (SMD/WADI/synthetic=1e-4); paper text 0.01 is not the run-code value
         batch_size: int = 128,
         epochs: int = 10,
         train_stride: int = 1,

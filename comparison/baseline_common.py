@@ -256,7 +256,7 @@ def _get_default_model_params():
         # ====== QuoVadis paper-faithful 9 baselines ======
         # Simple baselines — match quovadis_tad/baselines/simple_baselines.py defaults
         # + eval_simple_baselines.py:methods_dict actual call signatures.
-        'random': {'seed': 42},                                          # np.random.randint(0,2)
+        'random': {'seed': None},                                          # np.random.randint(0,2)
         'sensor_range': {'sensor_range': (0, 1), 'count_sensors': False},  # eval_simple_baselines.py:36
         'pca_error': {'pca_dim': 'auto', 'svd_solver': 'full'},          # eval_simple_baselines.py:39
         'l2_norm': {'ord': 2},                                            # eval_simple_baselines.py:37 (LNorm(ord=2))
@@ -266,21 +266,21 @@ def _get_default_model_params():
         #   batch=512, dropout=0.0, weight_decay=0.0001, optimizer=adam
         'mlp': {
             'seq_len': 5, 'embedding_dim': 32, 'dropout': 0.0,
-            'lr': 0.001, 'weight_decay': 0.0001,
+            'lr': 0.001, 'weight_decay': 0.0,  # QuoVadis legacy-Keras Adam never applies wd (effective 0.0)
             'train_stride': 1, 'epochs': 50, 'batch_size': 512,
         },
         # MLPmixer_blocks_1_embedd_128_seq_5.yaml: seq_len=5, embed=128, epochs=100,
         #   lr=0.0002, batch=512, dropout=0.1, num_blocks=1
         'mlpmixer': {
             'seq_len': 5, 'embedding_dim': 128, 'num_blocks': 1, 'dropout': 0.1,
-            'lr': 0.0002, 'weight_decay': 0.0001,
+            'lr': 0.0002, 'weight_decay': 0.0,  # QuoVadis legacy-Keras Adam never applies wd (effective 0.0)
             'train_stride': 1, 'epochs': 50, 'batch_size': 512,
         },
         # Transformer_blocks_1_1_embedd_128_seq_5.yaml: seq_len=5, embed=128, MHA=1,
         #   num_blocks=1, epochs=100, lr=0.001, batch=512, dropout=0.1
         'transformer': {
             'seq_len': 5, 'embedding_dim': 128, 'num_heads': 1, 'num_blocks': 1, 'dropout': 0.1,
-            'lr': 0.001, 'weight_decay': 0.0001,
+            'lr': 0.001, 'weight_decay': 0.0,  # QuoVadis legacy-Keras Adam never applies wd (effective 0.0)
             'train_stride': 1, 'epochs': 50, 'batch_size': 512,
         },
         # gcn_lstm_model_seq_5.yaml: seq_len=5, embed=10, lstm_units=64, output_dim=1,
@@ -291,13 +291,13 @@ def _get_default_model_params():
             'graph_conv_activation': 'relu',
             'adj_symmetric': True,
             'score_norm': 'median-iqr', 'score_smooth_window': 5, 'score_iqr_epsilon': 1e-2,
-            'lr': 0.001, 'weight_decay': 0.0001,
+            'lr': 0.001, 'weight_decay': 0.0,  # faithful: upstream legacy-Adam ignores wd (gcn_lstm)
             'train_stride': 1, 'epochs': 50, 'batch_size': 100,
         },
         # SOTA baselines
         'anomaly_transformer': {'win_size': 100, 'd_model': 512, 'n_heads': 8, 'e_layers': 3, 'train_stride': 1, 'epochs': 10, 'batch_size': 128},
         'tranad': {'seq_len': 10, 'd_ff': 16, 'train_stride': 1, 'epochs': 10, 'batch_size': 128},
-        'usad': {'seq_len': 5, 'latent_dim': 32, 'train_stride': 1, 'epochs': 10, 'batch_size': 256},
+        'usad': {'seq_len': 5, 'latent_dim': 40, 'train_stride': 1, 'epochs': 10, 'batch_size': 256},  # latent: USAD Table-7 SWaT=40 (~median; no uniform anomaly default; seq_len 5=modal; epochs frozen)
         # DAGMM (TranAD-author impl, imperial-qore/TranAD): n_window=5 (flatten),
         # n_hidden=16, n_latent=8, AdamW(lr=1e-4, wd=1e-5), StepLR(5, 0.9), epochs=5.
         # n_gmm is derived (= n_feats × n_window) and not user-configurable.
@@ -309,7 +309,7 @@ def _get_default_model_params():
         # batch_size=256 kept for uniformity with other SOTA presets (vs upstream 32 in run.sh).
         'gdn': {'seq_len': 5, 'embed_dim': 64, 'n_heads': 1,
                 'out_layer_num': 1, 'out_layer_inter_dim': 128, 'output_dropout': 0.2,
-                'lr': 0.001, 'train_stride': 1, 'epochs': 10, 'batch_size': 256},
+                'lr': 0.001, 'train_stride': 1, 'epochs': 10, 'batch_size': 32},  # batch: GDN run.sh repro value 32 (argparse default 128 = wrong layer)
         # OmniAnomaly — paper-faithful preset (CLEAN_REIMPL 2026-05-24)
         # Upstream defaults (main.py ExpConfig): rnn_num_hidden=500, dense_dim=500, z_dim=3,
         #   window_length=100, nf_layers=20, std_epsilon=1e-4, batch_size=50, max_epoch=10,
@@ -348,7 +348,7 @@ def _get_default_model_params():
         #     data_loader.py:50-53). Applied inside the wrapper on raw data (run_baseline SELF_NORMALIZING_WEAK).
         #   encoder_epochs/encoder_lr = IMPL-INVENTED (official loads pretrained .pth, no training recipe).
         'nrdetector': {
-            'win_size': 100, 'noisy_rate': 0.4, 'prior': None,
+            'win_size': 100, 'noisy_rate': 0.4, 'prior': 0.25,  # upstream main.py:98 default 0.25
             'hidden_size': 64, 'output_size': 64, 'kernel_size': 2, 'n_layers': 7, 'd_model': 64,
             'classifier_hidden': 128, 'batch_size': 32, 'epochs': 200, 'encoder_epochs': 50,
             'encoder_lr': 1e-3,  # IMPL-INVENTED (parameterized 2026-05-30; no official recipe)
@@ -360,7 +360,7 @@ def _get_default_model_params():
         # separate output directory (model_name='nrdetector_full') so results don't collide
         # with the paper-default noisy_rate=0.4 run.
         'nrdetector_full': {
-            'win_size': 100, 'noisy_rate': 1.0, 'prior': None,
+            'win_size': 100, 'noisy_rate': 1.0, 'prior': 0.25,  # upstream main.py:98 default 0.25
             'hidden_size': 64, 'output_size': 64, 'kernel_size': 2, 'n_layers': 7, 'd_model': 64,
             'classifier_hidden': 128, 'batch_size': 32, 'epochs': 200, 'encoder_epochs': 50,
             'encoder_lr': 1e-3,
@@ -397,8 +397,8 @@ def _get_default_model_params():
         },
         # Phase 2: TimesNet — General SOTA (ICLR 2023)
         'timesnet': {
-            'win_size': 100, 'd_model': 64, 'd_ff': 64,
-            'e_layers': 3, 'top_k': 3, 'num_kernels': 6,
+            'win_size': 100, 'd_model': 128, 'd_ff': 128,  # SMAP anomaly script (scripts/anomaly_detection/SMAP/TimesNet.sh): d_model=128, d_ff=128
+            'e_layers': 3, 'top_k': 3, 'num_kernels': 6,  # SMAP anomaly script: e_layers=3, top_k=3
             'dropout': 0.1, 'lr': 1e-4,
             'train_stride': 1, 'epochs': 10, 'batch_size': 128,
         },
@@ -424,7 +424,7 @@ def _get_default_model_params():
             'temperature': 0.1,       # softmax τ in inference score formula (main.py default)
             'lr': 1e-4,               # Phase 1 lr (test.sh mode=train)
             'phase2_lr': 5e-5,        # Phase 2 lr (test.sh mode=memory_initial)
-            'train_stride': 1, 'epochs': 10, 'phase1_epochs': 3,
+            'train_stride': 100, 'epochs': 10, 'phase1_epochs': 3,  # stride: upstream step=100 (non-overlap)
             'batch_size': 128,
         },
         # Phase 3: ModernTCN — Modern convolutional TSA (ICLR 2024 Spotlight)
@@ -504,10 +504,10 @@ def _get_default_model_params():
             'delta':          20,     # M_seq target length / induction span
             'train_stride':   10,     # reference default
             # Architecture
-            'z_dim':          4,      # M_pt latent bottleneck (reference `lat`)
+            'z_dim':          10,    # paper Table 4 (real datasets); config.txt default 4 = trimSyn-synthetic only      # M_pt latent bottleneck (reference `lat`)
             'ff_mult':        4,
             'enc_depth':      4,      # M_pt Performer depth (reference `enc_depth`)
-            'pred_depth':     4,      # M_seq Performer depth (reference `pred_depth`)
+            'pred_depth':     8,     # paper Table 4 N_enc=8 (real datasets); config.txt default 4 = trimSyn-only      # M_seq Performer depth (reference `pred_depth`)
             'n_heads':        4,      # auto-adjusted to divide d_model=enc_in at runtime
             'dropout':        0.0,    # reference uses Performer defaults (no extra dropout)
             # Normalization (Path B)
@@ -520,7 +520,7 @@ def _get_default_model_params():
             # Training
             'lr':             1e-4,
             'batch_size':     64,
-            'epochs':         10,     # Domain B policy (reference uses 25)
+            'epochs':         10,     # KEPT (user: do not touch epochs)
         },
     }
 
@@ -753,6 +753,34 @@ def save_metadata(output_dir: Path, model_name: str, experiment_name: str,
 # Simple Baseline Execution (no epochs)
 # ============================================================
 
+def _aggregate_run_metrics(per_run_metrics: list) -> dict:
+    """Aggregate metrics across N independent runs (paper §4.2 random baseline).
+
+    Scalar metric values become the MEAN across runs (the reported value), with an
+    added ``<key>_std`` sample-std for every aggregated numeric key. Non-numeric/None
+    values and bookkeeping keys are taken from the first run unchanged. For a single
+    run the output equals that run's dict (no _std keys added).
+    """
+    if not per_run_metrics:
+        return {}
+    base = dict(per_run_metrics[0])
+    if len(per_run_metrics) == 1:
+        return base
+    _SKIP = {'epoch', '_inference_time', '_eval_time'}
+    for key, v0 in list(base.items()):
+        if key in _SKIP:
+            continue
+        vals = [r.get(key) for r in per_run_metrics]
+        if any(v is None or isinstance(v, bool) or not isinstance(v, (int, float))
+               for v in vals):
+            continue  # leave first-run value (e.g. None MAE-only keys)
+        arr = np.asarray(vals, dtype=np.float64)
+        base[key] = float(arr.mean())
+        base[f'{key}_std'] = float(arr.std(ddof=1)) if len(arr) > 1 else 0.0
+    base['epoch'] = 1
+    return base
+
+
 def run_simple_baseline(
     model,
     train_X: np.ndarray,
@@ -781,34 +809,58 @@ def run_simple_baseline(
     print(f"  Train shape: {train_X.shape}")
     print(f"  Test shape: {test_X.shape}")
 
-    # Fit
+    # Fit (stateless / negligible for simple baselines; done once and reused
+    # across runs — only predict() is re-randomized for the random baseline).
     start_time = time.time()
     model.fit(train_X)
     train_time = time.time() - start_time
     print(f"  Train time: {train_time:.2f}s")
 
-    # Predict
-    start_time = time.time()
-    scores = model.predict(test_X)
-    inference_time = time.time() - start_time
-    print(f"  Inference time: {inference_time:.2f}s")
+    # ---- Number of independent runs ----
+    # Paper §4.2 (QuoVadis): the random baseline reports "the score achieved over
+    # five independent runs". With seed=None, each model.predict() re-seeds NumPy
+    # from OS entropy → independent draw. Deterministic baselines run once.
+    n_runs = 5 if model_name == 'random' else 1
 
-    # Evaluate
-    eval_start = time.time()
-    metrics = compute_all_metrics(scores, test_y, anomaly_regions)
-    metrics['_inference_time'] = inference_time
-    metrics['_eval_time'] = time.time() - eval_start
-    metrics['epoch'] = 1
+    per_run_metrics = []
+    inference_time = 0.0
+    scores = None  # keep last run's scores for scores.npz / viz
+    for run_idx in range(n_runs):
+        # Predict
+        start_time = time.time()
+        scores = model.predict(test_X)
+        run_infer = time.time() - start_time
+        inference_time += run_infer
 
-    # SWaT excl22
-    if excl_region is not None:
-        excl = compute_all_metrics_with_excl(scores, test_y, anomaly_regions, excl_region)
-        metrics.update(excl)
+        # Evaluate
+        eval_start = time.time()
+        m = compute_all_metrics(scores, test_y, anomaly_regions)
+        m['_inference_time'] = run_infer
+        m['_eval_time'] = time.time() - eval_start
+        m['epoch'] = 1
 
-    # Save
+        # SWaT excl22
+        if excl_region is not None:
+            excl = compute_all_metrics_with_excl(scores, test_y, anomaly_regions, excl_region)
+            m.update(excl)
+
+        per_run_metrics.append(m)
+        if n_runs > 1:
+            print(f"  [run {run_idx + 1}/{n_runs}] "
+                  f"PAK_F1={m.get('pak_auc_f1', 0):.4f} PRC={m.get('prc_auc', 0):.4f}")
+
+    # ---- Aggregate: mean over runs (reported value) + std (uncertainty) ----
+    # For n_runs == 1 this is identical to the old single-run dict.
+    metrics = _aggregate_run_metrics(per_run_metrics)
+
+    # Save (scores.npz = last run; representative single-run artifact for viz)
     save_scores_npz(output_dir, scores)
     save_epoch_metrics(output_dir, [metrics])
-    save_metadata(output_dir, model_name, experiment_name, train_time, inference_time)
+    save_metadata(
+        output_dir, model_name, experiment_name, train_time, inference_time,
+        extra=({'n_runs': n_runs,
+                'per_run_metrics': per_run_metrics} if n_runs > 1 else None),
+    )
 
     # Save model if supported
     if hasattr(model, 'save'):
@@ -818,6 +870,10 @@ def run_simple_baseline(
             print(f"  Warning: Could not save model: {e}")
 
     _print_metrics(metrics, excl_region is not None)
+    if n_runs > 1:
+        print(f"  [aggregate over {n_runs} runs] "
+              f"PAK_F1={metrics.get('pak_auc_f1', 0):.4f} "
+              f"± {metrics.get('pak_auc_f1_std', 0):.4f}")
     return metrics
 
 
@@ -1170,6 +1226,28 @@ def _fit_kwargs_with_norm(model, base_kwargs, norm_train_segments):
     return kwargs
 
 
+def _fit_kwargs_with_test(model, base_kwargs, test_X, test_segments):
+    """Augment ``model.fit`` kwargs with ``test_X=`` / ``test_segments=`` ONLY if
+    the wrapper's ``fit`` declares those params (sibling-gated via inspect).
+
+    Supports a TRANSDUCTIVE graph build (nrdetector PU-LP #1=B: upstream builds the
+    cosine-kNN A + Katz W over train+valid+TEST embeddings — data_loader.py:106,135;
+    solver.py:43,49 — while RP/RN SELECTION stays train-only, enforced in the wrapper).
+    Label-free: test LABELS are never passed. Returns a NEW dict; wrappers without
+    these params (all other baselines) are untouched.
+    """
+    kwargs = dict(base_kwargs)
+    try:
+        fit_params = inspect.signature(model.fit).parameters
+    except (TypeError, ValueError):
+        fit_params = {}
+    if 'test_X' in fit_params:
+        kwargs['test_X'] = test_X
+    if 'test_segments' in fit_params:
+        kwargs['test_segments'] = test_segments
+    return kwargs
+
+
 # ============================================================
 # SOTA Baseline Execution (with per-epoch eval via callback)
 # ============================================================
@@ -1503,6 +1581,9 @@ def run_weak_sota_baseline_with_epoch_eval(
     # SEPARATE per-file NORM segments (window-safety train_segments is unchanged):
     # forwarded as `norm_train_segs=` only to wrappers whose fit declares it.
     _fit_kw = _fit_kwargs_with_norm(model, _fit_kw, norm_train_segments)
+    # TRANSDUCTIVE graph support (nrdetector #1=B): forward TEST features (label-free)
+    # + per-entity test_segments ONLY to wrappers whose fit declares them (inspect-gated).
+    _fit_kw = _fit_kwargs_with_test(model, _fit_kw, test_X, test_segments)
     model.fit(train_X, **_fit_kw)
     train_time = time.time() - start_time
 

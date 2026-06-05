@@ -177,27 +177,32 @@ def mil_ranking_loss(
     Returns:
         (loss, components_dict)
 
-    Ranking term: paired hinge max(0, margin - max(pos) + max(neg)), averaged over the
-    paired bags in the batch (matches the MIT cross-check port; the official Keras sums
-    all normal x abnormal max-pairs — both are valid MIL realizations of the paper Eq.,
-    see Phase-1 05_TRAINING_LOSS_AUDIT). We use the paired form, which is the documented
-    standard reproduction. The max is now over timesteps (max-over-timesteps), the dense
-    analog of the original max-over-segments.
+    Ranking term: FULL n_Nor x n_Abn cross-product, FAITHFUL to the official Keras
+    custom_objective (TrainingAnomalyDetector_public.py@L265-271, fetched live
+    2026-06-04). For each NORMAL bag max (Sub_Nor[ii], L266), the official code forms
+    sub_z = max(1 - Sub_Abn + Sub_Nor[ii], 0) — a vector over ALL abnormal-bag maxes —
+    then T.sum(sub_z) sums the hinge over every abnormal bag (L267-268); finally
+    T.mean over the n_Nor normal-bag sums (L271). (NB: the official variable names are
+    label-swapped — indx_nor = F_labels==32 = NORMAL videos, so Sub_Nor = normal-bag
+    maxes and Sub_Abn = abnormal-bag maxes.) In our naming pos_scores = anomalous
+    (abnormal) bags -> pos_max == Sub_Abn; neg_scores = normal bags -> neg_max ==
+    Sub_Nor. The max is over timesteps (max-over-timesteps), the dense analog of the
+    original max-over-segments.
     Smoothness + sparsity are applied to POSITIVE bags only (official slices to the
     abnormal half; the cross-check uses anomalous segments only). On dense per-timestep
     scores these become the standard temporal-smoothness / sparsity over the timeline.
     """
-    P = pos_scores.shape[0]
-    Nn = neg_scores.shape[0]
-    n_pairs = min(P, Nn)
+    pos_max = pos_scores.max(dim=1).values   # (P,)  max-over-timesteps == Sub_Abn
+    neg_max = neg_scores.max(dim=1).values   # (Nn,) max-over-timesteps == Sub_Nor
 
-    pos_max = pos_scores.max(dim=1).values   # (P,)  max-over-timesteps
-    neg_max = neg_scores.max(dim=1).values   # (Nn,) max-over-timesteps
-
-    # Paired ranking hinge over the first n_pairs bags.
-    hinge = torch.clamp(
-        margin - pos_max[:n_pairs] + neg_max[:n_pairs], min=0.0
-    ).mean()
+    # FULL cross-product ranking hinge (official custom_objective L265-271):
+    # for each normal-bag max neg_max[j], SUM over ALL abnormal-bag maxes of
+    # max(0, margin - pos_max + neg_max[j]); then MEAN over normal bags.
+    # pairwise (Nn, P): margin - pos_max[None, :] + neg_max[:, None]
+    pairwise = torch.clamp(
+        margin - pos_max.unsqueeze(0) + neg_max.unsqueeze(1), min=0.0
+    )                                        # (Nn, P)
+    hinge = pairwise.sum(dim=1).mean()       # sum over abnormal bags, mean over normal bags
 
     # Temporal smoothness: squared diff of consecutive per-timestep scores (positive bags).
     smooth = ((pos_scores[:, 1:] - pos_scores[:, :-1]) ** 2).sum(dim=1).mean()

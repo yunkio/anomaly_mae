@@ -418,7 +418,7 @@ class GDNBaseline:
         output_dropout: float = 0.2,
         dropout: float = 0.0,   # NOTE: legacy kwarg, mapped to output_dropout if explicit
         lr: float = 0.001,
-        batch_size: int = 256,
+        batch_size: int = 128,  # upstream argparse default (main.py:201, -batch default=128)
         epochs: int = 10,
         train_stride: int = 1,
         device: Optional[str] = None,
@@ -746,32 +746,23 @@ class GDNBaseline:
         # ---- map each window → its GLOBAL target timestamp (vectorised scatter).
         # Window k (concatenated order) targets global index tgt_idx[k]; covers each
         # entity's [lo+seq_len, hi-1]. Head indices [lo, lo+seq_len) per entity lack a
-        # forecast and are filled below (OPTION B), bounded to the entity (no leak).
+        # forecast and remain ZERO (upstream zero-pad — see below), bounded to the entity.
         scores = np.zeros(n_samples, dtype=np.float32)
         valid = tgt_idx < n_samples
         scores[tgt_idx[valid]] = aggregated[valid].astype(np.float32)
 
-        # ---- OPTION-B head fill, per entity (bounded — never reaches across a boundary).
-        # This mirrors the legacy head policy VERBATIM, applied to each entity's own global
-        # window-slot range [w0, w0+n_win_i) and head start `lo` (head_end = lo+seq_len):
-        #   legacy, n_windows>before_num : scores[0 : seq_len+before_num] = aggregated[before_num]
-        #   legacy, 0<n_windows<=before_num: scores[0 : seq_len]          = aggregated[0]
-        # For a single entity (lo=0, head_end=seq_len, w0=0) this is bit-identical to legacy.
-        cursor = 0
-        for part_i, (lo, head_end) in enumerate(head_targets):
-            n_win_i = len(win_delta_parts[part_i])
-            if n_win_i == 0:
-                # Entity produced no window; its whole slice [lo, hi) stays 0 (finite).
-                continue
-            w0 = cursor                      # this entity's first global window slot
-            cursor += n_win_i
-            if n_win_i > before_num:
-                first_valid = aggregated[w0 + before_num]
-                fill_end = min(head_end + before_num, n_samples)
-            else:
-                first_valid = aggregated[w0]
-                fill_end = min(head_end, n_samples)
-            scores[lo:fill_end] = np.float32(first_valid)
+        # ---- HEAD FILL = ZERO-PAD (upstream-faithful).
+        # Upstream test windowing (datasets/TimeDataset.py: range(slide_win, total_time_len))
+        # produces NO window/score for the first slide_win(=seq_len) timesteps, and
+        # util/data.py:29-33 (eval_scores) prepends a ZERO padding for exactly those
+        # missing positions:  padding_list = [0]*(len(true_scores)-len(scores));
+        #                     scores = padding_list + scores.
+        # Therefore each entity's head region [lo, lo+seq_len) must be 0, NOT a positive
+        # fill from the first valid window. `scores` is zero-initialised and the scatter
+        # above writes only valid window targets (global idx >= lo+seq_len), so the head
+        # is already 0 — no explicit fill is performed. (`head_targets` retained for the
+        # zero-window edge case where the entire entity slice stays 0.)
+        del head_targets  # head region already zero by construction; no positive fill.
 
         return scores
 

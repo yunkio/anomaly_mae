@@ -18,7 +18,7 @@ class RandomBaseline:
     line-by-line: `np.random.randint(low=0, high=2, size=x.shape[0])`.
     """
 
-    def __init__(self, seed: Optional[int] = 42):
+    def __init__(self, seed: Optional[int] = None):
         self.seed = seed
         self.name = "Random"
 

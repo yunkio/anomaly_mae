@@ -41,21 +41,28 @@ Key fidelity decisions (Phase-1 §06/§07/§10/§12; cite repo file:line):
     in-memory label-propagation port of `calc_lp` (selector.py:139-240). The
     calc_pu-expanded RP is DISCARDED by `train_()` and is NOT fed to the
     classifier — see `_pulp_select` (MM1 fix).
-  - `prior=None` → estimate from the train wlabel rate. The official fixed 0.25
-    (solver.py:116, main.py:98) is EMG-tuned; per-dataset estimation is a
-    JUSTIFIED multi-dataset pipeline adaptation (MM5; documented, not a bug).
-  - Per-split z-score StandardScaler (data_loader.py:50-55, paper §5.2): the
-    official `_preprocess` fits a FRESH StandardScaler on each split's own data
-    (`scaler.fit(data); scaler.transform(data)`) — train split fits on train,
-    test split fits on test. As of the SELF_NORMALIZING_WEAK reclassification
-    (run_baseline), this wrapper receives RAW (un-normalized) data and applies
-    the official normalization itself: fit() fits a StandardScaler on raw
-    train_X (stored as `self.scaler`), and predict() z-scores test_X. Because
-    the contract gives predict() only test_X (no per-recording boundaries), test
-    normalization is TRANSDUCTIVE over the whole concatenated test split (fresh
-    fit on test_X) — this matches the official per-split fit-on-test semantics;
-    the residual gap (official is per-FILE, here test_X concatenates all test
-    recordings) is documented in CODE_REWORK_NOTES.md.
+  - `prior=0.25` FIXED — the official runtime constant (`main.py:98 --prior
+    default=0.25`, consumed verbatim at `solver.py:116 create_loss(args.prior)`;
+    the per-dataset `CLASS_PRIOR` map `models.py:6-13` is DEAD/never read at
+    runtime). Faithfulness fix 2026-06-04: the prior is the executed upstream
+    constant 0.25 for every dataset (preset `baseline_common.py:351/363`); the
+    earlier train-wlabel-rate estimation (clip[0.05,0.5]) is NOT applied.
+  - Per-split z-score StandardScaler (data_loader.py:50-55,102-104, paper §5.2):
+    the official `_preprocess` fits a FRESH StandardScaler on EACH split's own
+    data (`scaler.fit(data); scaler.transform(data)`) and is called separately
+    for train/valid/test (data_loader.py:102-104) — train fits on train, test
+    FITS ON TEST. This is TRANSDUCTIVE fit-on-test (label-free, NOT a leak) and
+    is the only concrete norm spec upstream gives (paper §5.2 only says "following
+    Xu 2021", no fit-scope). As of the SELF_NORMALIZING_WEAK reclassification
+    (run_baseline) this wrapper receives RAW data and applies the official
+    normalization itself: fit() fits StandardScaler(s) on raw train_X; predict()
+    fits a FRESH StandardScaler per ENTITY slice on that slice's OWN test data and
+    transforms it (data_loader.py:53-55). Per-entity slices come from
+    `entity_test_slices` (same source as windowing); single-entity / None → one
+    fresh fit over the whole test array. The train scaler is NOT reused on test
+    (upstream never does). Faithfulness fix 2026-06-04: predict() previously
+    reused the cached TRAIN scaler (train-fit `.transform`); restored to the
+    upstream fit-on-test per-split scheme.
   - predict() point score = the official ACTMAP = per-window min-max of
     `h = fc(out)` (extractor.py get_dpred `actmap=(h-min)/max`; assigned to
     `self.dense_scores`, solver.py:72 "Actually is the act map"), GATED by the
@@ -101,13 +108,12 @@ from comparison.segment_utils import compute_segment_safe_window_indices
 # Boundary-safe TEST windowing helper (shared single source of truth): runs the RAW
 # score producer per-entity so no window spans an entity boundary on multi-file datasets
 # (SMD machines / SMAP-MSL channels / Exathlon apps). Single-entity / None -> bit-identical no-op.
-from comparison.baselines._boundary_safe_window import per_entity_concat
+from comparison.baselines._boundary_safe_window import per_entity_concat, entity_test_slices
 # Per-source-FILE leak-free normalization kernel (shared single source of truth).
 # nrdetector keeps its OWN scaler identity (StandardScaler) — the helper only owns
 # the per-file segment looping + leak-free fit-train / transform-test pairing.
 from comparison.baselines._per_file_norm import (
     fit_transform_train_per_file,
-    transform_test_per_file,
 )
 # soft-DTW kernel REUSED from the already-vendored WETAS copy (MIT, Maghoumi).
 # CPU numba @jit path (use_cuda=False) — NO pip install, NO second vendored copy.
@@ -169,7 +175,7 @@ class NRdetectorBaseline:
 
         # ---- PU / label (main.py:98-102, selector.py:16-17) ----
         self.noisy_rate = hparams.get('noisy_rate', 0.4)
-        self.prior = hparams.get('prior', None)      # None → estimate from train wlabel rate
+        self.prior = hparams.get('prior', 0.25)      # FIXED upstream default (main.py:98); not estimated
         self.pulp_m = hparams.get('pulp_m', 4)
         self.pulp_lmbda = hparams.get('pulp_lmbda', 0.32)
         self.knn_k = hparams.get('knn_k', 5)
@@ -273,10 +279,60 @@ class NRdetectorBaseline:
             H.append(out['h'].cpu()); D.append(out['dscore'].cpu())
         return torch.cat(H, 0).numpy(), torch.cat(D, 0).numpy()
 
+    @torch.no_grad()
+    def _encode_test_for_graph(self, test_X, test_segments) -> Optional[np.ndarray]:
+        """Encode TEST windows into pooled embeddings `h_test` for the
+        TRANSDUCTIVE PU-LP graph (FIX #1=B). Returns ``None`` when ``test_X`` is
+        not supplied (graceful no-op → train-only graph).
+
+        Faithfully mirrors how upstream feeds the TEST split into the graph:
+          - TEST is z-scored fit-on-test per-split (data_loader._preprocess
+            :50-55 fits a FRESH StandardScaler on the test data itself, called
+            for the 'test' split :104). Here that is done per ENTITY slice from
+            `test_segments` (SAME source/scheme predict() uses via
+            entity_test_slices); single-entity / None → one fresh scaler over the
+            whole test array.
+          - windowed with the SAME front-pad, non-overlapping win_size split as
+            train (data_loader._preprocess :59-61; `_window`).
+          - encoded by the SAME frozen Stage-0 encoder (`_encode` → pooled `h`),
+            exactly the embedding the graph is built on (get_h_scores → scores).
+        Only the pooled `h` is needed (the graph uses embeddings, not dense
+        scores); test windows are graph-structure-only and never enter RP/RN
+        selection (restricted to the train range in `_pulp_select`).
+        """
+        if test_X is None:
+            return None
+        from sklearn.preprocessing import StandardScaler
+        test_X = np.asarray(test_X, dtype=np.float32).copy()
+        n_test = len(test_X)
+        if n_test == 0:
+            return None
+        # BOUNDARY-SAFE per-entity processing — upstream windows EACH file
+        # independently (data_loader._load_data loop + _preprocess :59-61 front-pad
+        # + split PER split/file). On a multi-entity concat array we therefore
+        # normalize (fit-on-test, data_loader.py:50-55,104) AND window each entity
+        # slice in ISOLATION so no graph window straddles an entity boundary, then
+        # concatenate the per-WINDOW embeddings. Single-entity / None → one slice
+        # over the whole array == the simple front-pad+split path.
+        H = []
+        for (lo, hi) in entity_test_slices(n_test, test_segments):
+            seg = test_X[lo:hi]
+            if len(seg) == 0:
+                continue
+            sc = StandardScaler()                                   # FRESH per-entity, data_loader.py:53
+            seg = np.asarray(sc.fit_transform(seg), dtype=np.float32)  # fit+transform on TEST itself :54-55
+            twindows, _, _, _ = self._window(seg, None)             # front-pad + non-overlapping win_size
+            h_e, _ = self._encode(twindows)                         # frozen Stage-0 encoder → pooled h
+            H.append(np.asarray(h_e, dtype=np.float32))
+        if not H:
+            return None
+        return np.concatenate(H, axis=0)
+
     # ------------------------------------------------------------------
     # Stage 1 — PU-LP selector (in-memory kNN graph + W; selector.py)
     # ------------------------------------------------------------------
-    def _pulp_select(self, h_scores: np.ndarray, wlabel: np.ndarray):
+    def _pulp_select(self, h_scores: np.ndarray, wlabel: np.ndarray,
+                     h_test: Optional[np.ndarray] = None):
         """Reliable-positive (RP) / reliable-negative (RN) selection.
 
         Faithful in-memory re-host of utils.MatricesCalc (cosine kNN → directed A
@@ -285,6 +341,23 @@ class NRdetectorBaseline:
         upstream disk `.graphml`/`.csv` path and the EMG-specific `data_len=4353`
         (selector.py:58). 1-based indexing in the upstream `.loc[vi][vj-1]` is
         mapped to 0-based here.
+
+        TRANSDUCTIVE GRAPH (FIX #1=B, 2026-06-04). Upstream builds the cosine-kNN
+        adjacency A and Katz `W = pinv(I - aA) - I` over the WHOLE concatenated
+        embedding set train+valid+TEST (data_loader.get_segment :106 ConcatDataset
+        + :135 cat(train,valid,test); MatricesCalc fed the whole `scores`
+        solver.py:43,49; selector.data_len = whole :58), while RP/RN SELECTION is
+        restricted to the TRAIN+valid node-id range (solver.begin calls only
+        selector.train_() :59, whose candidate pool P=train_DP / U=train_DU spans
+        train+valid only; selector.py:62-75). The graph STRUCTURE (A, W, undirected
+        kNN nbr for calc_lp) still spans the whole concat because calc_lp walks
+        `self.G` (the whole-graph neighbours) and W indexes whole-graph columns.
+        Here, when `h_test` is given the kNN graph + W are built over
+        `concat(h_scores, h_test)` (train nodes [0,n_train), test nodes appended),
+        but `pos_idx`/`neg_idx` (hence DP/DU and every RP/RN candidate) are mined
+        ONLY from the train range — test nodes are graph-structure-only, never
+        selectable. `h_test=None` → bit-identical train-only behaviour (graph ==
+        train embeddings; the no-op path used before the harness wires test_X).
 
         MATCHES official `train_()` (selector.py:62-75):
             P, RP, RN = calc_pu(P, U)
@@ -304,20 +377,37 @@ class NRdetectorBaseline:
         """
         from scipy.spatial.distance import cdist
 
-        n = len(h_scores)
-        pos_idx = [i for i in range(n) if wlabel[i] > 0]
-        neg_idx = [i for i in range(n) if wlabel[i] <= 0]
+        # n_train = number of TRAIN(+valid) candidate nodes. The RP/RN candidate
+        # pool is restricted to [0, n_train); test nodes (appended below) are
+        # graph-structure-only and never enter pos_idx/neg_idx (FIX #1=B).
+        n_train = len(h_scores)
+        pos_idx = [i for i in range(n_train) if wlabel[i] > 0]
+        neg_idx = [i for i in range(n_train) if wlabel[i] <= 0]
         if len(pos_idx) == 0:
             raise RuntimeError("NRdetector requires labeled anomalies (Q1 only; Q3 N/A)")
+
+        # --- TRANSDUCTIVE embedding set: graph over concat(train, test) ---
+        # Upstream: MatricesCalc(scores) where scores = h over train+valid+TEST
+        # (solver.py:43,49 + data_loader.py:106,135). When h_test is provided the
+        # graph spans the whole concat; otherwise it is train-only (no-op path).
+        if h_test is not None and len(h_test) > 0:
+            graph_h = np.concatenate([h_scores, np.asarray(h_test, dtype=h_scores.dtype)], axis=0)
+        else:
+            graph_h = h_scores
+        n = len(graph_h)   # whole-graph node count (train + test)
 
         # --- noisy_rate sub-sample of positives (TRAIN ONLY) — selector.py:31-38 ---
         known = int(self.noisy_rate * len(pos_idx))
         DP = list(pos_idx[:known])           # labeled positives (first-N by order, upstream caveat)
         DU = list(pos_idx[known:]) + list(neg_idx)  # demoted positives + all negatives
+        # NB: DP/DU draw exclusively from pos_idx/neg_idx ⊂ [0, n_train) → test
+        # node-ids [n_train, n) are NEVER candidates (selector.train_() :62-75).
 
         # --- cosine kNN: directed A (W path) + undirected nbr (calc_lp graph) ---
-        # adjacency = cosine distance; smaller = more similar.
-        Y = cdist(h_scores, h_scores, metric='cosine')
+        # adjacency = cosine distance; smaller = more similar. Built over the WHOLE
+        # graph (train+test when transductive) — MatricesCalc.calc_MatrizAdj
+        # (utils.py:74-80) operates on the whole `scores`.
+        Y = cdist(graph_h, graph_h, metric='cosine')
         np.fill_diagonal(Y, np.inf)          # exclude self (PU_LP_knn: index_i != name_j)
         knn = np.argsort(Y, axis=1)[:, :self.knn_k]
         # Directed adjacency — utils.py:123 `A.loc[index_i][vizinho]=1` (k ones/row,
@@ -462,7 +552,24 @@ class NRdetectorBaseline:
     # fit
     # ------------------------------------------------------------------
     def fit(self, train_X, train_y=None, epoch_callback=None, train_segments=None,
-            norm_train_segs=None) -> 'NRdetectorBaseline':
+            norm_train_segs=None, test_X=None, test_segments=None) -> 'NRdetectorBaseline':
+        """Fit NRdetector (Stages 0/1/2).
+
+        TRANSDUCTIVE PU-LP graph (FIX #1=B, 2026-06-04). Upstream constructs the
+        cosine-kNN adjacency + Katz W over the WHOLE concatenated embedding set
+        train+valid+TEST (data_loader.get_segment :106/:135, MatricesCalc fed the
+        whole scores solver.py:43,49, selector.data_len=whole :58), while RP/RN
+        SELECTION is restricted to the TRAIN(+valid) node range (only
+        selector.train_() runs, solver.py:59). When the harness supplies `test_X`
+        (OPTIONAL), the test windows are normalized fit-on-test per-entity (same
+        scheme as predict(), data_loader.py:50-55,102-104) and encoded with the
+        SAME frozen Stage-0 encoder, then `_pulp_select` builds the graph over
+        concat(h_train, h_test) but mines RP/RN from the train range only.
+        `test_X=None` → graceful no-op = the prior train-only graph (so nothing
+        breaks before the harness is wired; see SHARED_EDITS_v2.md). `test_segments`
+        delineates per-entity test slices for the fit-on-test normalization (same
+        source the harness passes to predict()); None → one fresh scaler over the
+        whole test array."""
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
 
@@ -527,8 +634,18 @@ class NRdetectorBaseline:
             self._train_encoder(windows, wlabel)
             h_scores, _ = self._encode(windows)
 
-            # ---- Stage 1: PU-LP select RP / RN ----
-            RP, RN = self._pulp_select(h_scores, wlabel.numpy())
+            # ---- TRANSDUCTIVE: encode TEST windows for the PU-LP graph (FIX #1=B).
+            #      Upstream's graph spans train+valid+TEST embeddings (get_segment
+            #      :106/:135 → MatricesCalc solver.py:43,49). When the harness passes
+            #      test_X, normalize it fit-on-test per-entity (SAME scheme as
+            #      predict(), data_loader.py:50-55,102-104), window (front-pad,
+            #      win=100, NO labels) and encode with the SAME frozen Stage-0
+            #      encoder to get test embeddings `h_test`. test_X=None → h_test=None
+            #      → train-only graph (no-op). ----
+            h_test = self._encode_test_for_graph(test_X, test_segments)
+
+            # ---- Stage 1: PU-LP select RP / RN (graph over concat(train, test)) ----
+            RP, RN = self._pulp_select(h_scores, wlabel.numpy(), h_test=h_test)
             if self.verbose:
                 print(f"  [NRdetector] PU-LP: |RP|={len(RP)} |RN|={len(RN)}", flush=True)
             # Cache Stage-0/1 outputs so subsequent per-epoch checkpoints can
@@ -559,6 +676,13 @@ class NRdetectorBaseline:
         start_epoch = self._restore_stage2_state(resume_state, optimizer) if resume_state else 0
 
         for epoch in range(start_epoch, self.epochs):
+            # FAITHFULNESS (solver.py:124-141): upstream calls `optimizer.zero_grad()`
+            # ONCE per epoch (solver.py:126, BEFORE the batch loop) while `optimizer.step()`
+            # runs per batch (solver.py:141). Grads therefore ACCUMULATE across all batches
+            # within an epoch (each step() walks on the running grad sum since the last
+            # epoch's zero). We previously zero'd per batch (standard SGD); restored to the
+            # upstream once-per-epoch zero so the optimization dynamics match.
+            optimizer.zero_grad()                                            # solver.py:126 (once/epoch)
             self.classifier.train()
             epoch_losses = []
             for inputs, labels in dl:
@@ -567,9 +691,8 @@ class NRdetectorBaseline:
                 pu_loss = criterion(outputs, labels.unsqueeze(-1))          # solver.py:136
                 const_loss = constraint_loss(out, labels, self.batch_size)  # solver.py:137
                 loss = pu_loss + const_loss                                  # lamda=lamda_1=1, solver.py:138
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                loss.backward()                                             # solver.py:140 (no zero here)
+                optimizer.step()                                            # solver.py:141 (per batch)
                 epoch_losses.append(float(loss.detach().cpu()))
 
             avg = float(np.mean(epoch_losses)) if epoch_losses else float('nan')
@@ -594,18 +717,28 @@ class NRdetectorBaseline:
         test_X = np.asarray(test_X, dtype=np.float32)
         n_test = len(test_X)
 
-        # ---- per-source-FILE LEAK-FREE z-score (data_loader.py:50-55): the official
-        #      `_preprocess` z-scores EACH source file independently. Previously this
-        #      wrapper fit a FRESH StandardScaler on the WHOLE concatenated test split
-        #      (transductive fit-on-test = LEAK). Fix: transform the i-th test file by
-        #      the i-th cached TRAIN scaler (`.transform` only, never `.fit`). Single-file
-        #      / test_segments=None → the single train scaler over the whole test array
-        #      (still leak-free). nrdetector's scaler identity (StandardScaler) preserved.
-        #      Done BEFORE windowing so the per-entity raw producer below receives an
-        #      already-normalized array (NO re-normalization). ----
-        if self._scalers is None:
-            raise RuntimeError("Model not fitted (no per-file scalers). Call fit() first.")
-        test_X = transform_test_per_file(test_X, test_segments, self._scalers).astype(np.float32)
+        # ---- per-source-FILE FIT-ON-TEST z-score (data_loader.py:50-55,102-104): the
+        #      official `_preprocess` fits a FRESH `StandardScaler` on EACH split's OWN
+        #      data and is called for the 'test' split (data_loader.py:104), so the test
+        #      split is z-scored by a scaler fit on the TEST data itself — per source FILE.
+        #      This is TRANSDUCTIVE fit-on-test (label-free, NOT a label leak) and is the
+        #      only concrete normalization spec upstream provides (paper §5.2 only says
+        #      "following Xu 2021", no fit-scope). Here predict() receives RAW test_X (no
+        #      per-recording boundaries beyond `test_segments`), so we fit a FRESH
+        #      StandardScaler per ENTITY slice on that slice's own test data and transform
+        #      it in place. Single-entity / test_segments=None → ONE fresh scaler over the
+        #      whole test array (still fit-on-test). The cached TRAIN scalers (`self._scalers`)
+        #      are NOT used for the test transform (upstream never reuses the train scaler
+        #      on test). Done BEFORE windowing so the per-entity raw producer below receives
+        #      an already-normalized array (NO re-normalization). ----
+        from sklearn.preprocessing import StandardScaler
+        test_X = test_X.copy()
+        for (lo, hi) in entity_test_slices(n_test, test_segments):
+            sc = StandardScaler()                              # FRESH per-entity, data_loader.py:53
+            test_X[lo:hi] = np.asarray(
+                sc.fit_transform(test_X[lo:hi]), dtype=np.float32   # fit+transform on TEST itself :54-55
+            )
+        test_X = test_X.astype(np.float32)
 
         self.encoder.eval(); self.classifier.eval()
 

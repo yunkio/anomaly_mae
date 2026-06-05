@@ -85,7 +85,7 @@ class MEMTOBaseline:
         batch_size: int = 128,
         epochs: int = 10,
         phase1_epochs: int = 3,
-        train_stride: int = 1,
+        train_stride: int = 100,  # upstream default step=100 (=win_size, non-overlap); data_loader.py:231 + solver.py:108-114 (no step arg → default)
         kmeans_max_samples: int = 50_000,
         kmeans_random_state: int = 0,
         device: Optional[str] = None,
@@ -263,18 +263,13 @@ class MEMTOBaseline:
         kmeans.fit(feats)
         centers = torch.from_numpy(kmeans.cluster_centers_).float()  # (M, d_model)
 
-        # ---------- Phase 2: rebuild model with cluster centers as memory init ----------
-        # Save encoder + decoder weights, rebuild model with new memory, reload weights
-        old_state = self.model.state_dict()
+        # ---------- Phase 2: FRESH re-init with cluster centers as memory init ----------
+        # Upstream get_memory_initial_embedding (solver.py:408-429): after K-means on
+        # collected encoder outputs (L423), build_model(memory_init_embedding=centers)
+        # (L427) constructs a COMPLETELY FRESH TransformerVar + a brand-new Adam (L148-
+        # 151) and then train() (L429) trains it from scratch. NO phase-1 encoder/decoder
+        # weights are restored — ONLY the K-means cluster centers carry into phase 2.
         self.model = self._build_model(memory_init_embedding=centers, phase_type="second_train")
-        # Restore non-memory weights (memory buffer comes from cluster centers in fresh init)
-        new_state = self.model.state_dict()
-        for k, v in old_state.items():
-            if k.startswith("mem_module.mem"):
-                continue
-            if k in new_state and new_state[k].shape == v.shape:
-                new_state[k] = v
-        self.model.load_state_dict(new_state)
 
         # Phase 2 lr per upstream test.sh (--lr 5e-5 for mode=memory_initial)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.phase2_lr)

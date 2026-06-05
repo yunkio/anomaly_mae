@@ -265,7 +265,7 @@ class CATCHBaseline:
             dataset = Subset(dataset, valid_idx.tolist())
         if self.verbose:
             print(f"  Created {len(dataset)} training windows (stride={self.train_stride})")
-        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, drop_last=True)
+        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, drop_last=False)
 
         # Upstream uses two optimizers: main + mask_generator. Mirror that.
         main_params = [p for n, p in self.model.named_parameters() if 'mask_generator' not in n]

@@ -29,21 +29,39 @@ The comparison pipeline classifies TreeMIL as SELF_NORMALIZING_WEAK and now
 hands this wrapper **RAW (un-normalized) data**, so the wrapper applies that
 StandardScaler itself (NOT the external global-minmax).
 
-LEAK-FREE per-source-file normalization (2026-06-02 normfix)
-------------------------------------------------------------
-For multi-FILE datasets (SMAP/MSL channels, SMD machines, Exathlon apps) each
-source file (entity) is normalized independently: ``fit`` fits + CACHES one
-``StandardScaler`` per file on that file's TRAIN slice (via the shared kernel
-``comparison.baselines._per_file_norm.fit_transform_train_per_file``), and
-``predict`` transforms each PAIRED test file with the SAME cached TRAIN scaler
-(``transform_test_per_file`` — ``.transform`` only, NEVER fit-on-test). This
-replaces the previous transductive whole-test ``fit_transform`` (a train/eval
-leak). NORM file boundaries (``norm_train_segs`` in fit, ``test_segments`` in
-predict) are a SEPARATE list from the window-safety ``train_segments`` (which
-still keeps windows from crossing run-boundaries — unchanged). On single-file
-data (PSM/SWaT/WaDi/simulation) the per-file loop reduces to one whole-array
-StandardScaler — train side bit-identical to legacy; test side switches from
-fit-on-test to transform-by-train-scaler (the intended leak removal).
+UPSTREAM-FAITHFUL per-source-file normalization (2026-06-04 faithful-audit-v2)
+-----------------------------------------------------------------------------
+Upstream fits ONE ``StandardScaler`` per source FILE on the WHOLE file array —
+the full ``train+valid+test`` concatenation of that entity — and applies it to
+every split. Re-verified LIVE against fly-orange/TreeMIL@main:
+    timeseries.py:23   ``data_, label_, ... = np.load(filepath, ...)``  # FULL file
+    timeseries.py:24   ``data_, ... = self._preprocess(data_, ...)``    # normalize FULL
+    timeseries.py:53-55 ``scaler = StandardScaler(); scaler.fit(data); data = scaler.transform(data)``
+    timeseries.py:32-40 ``start,end = ...`` train 0-50% / valid 50-70% / test 70-100%
+                        # slicing happens AFTER normalization
+=> for the non-EMG datasets we run (SMD/PSM/SMAP/SWaT/WaDi/sim), the scaler that
+normalizes the TEST region is fit on that entity's FULL array, INCLUDING the test
+slice. This is a transductive (test-using) per-file z-score — INTENDED for
+faithfulness (the user's authoritative decision: "fit StandardScaler per-file on
+the FULL (train+test) array incl. test … NOT leak-free train-only").
+
+Two-phase API mapping: our ``train_X`` == upstream(train+valid) and our
+``test_X`` == upstream(test) for a given entity, so ``concat(train_file_i,
+test_file_i)`` reconstructs the upstream FULL file. ``predict`` therefore fits a
+FRESH per-file ``StandardScaler`` on ``vstack([raw_train_file_i, test_file_i])``
+(StandardScaler stats are row-order invariant, so concat order is irrelevant) and
+transforms ``test_file_i`` with it — bit-faithful to the upstream test-region
+scaler. ``fit`` caches the per-file RAW train slices (``self._raw_train_files``)
+for this. The TRAIN windows built in ``fit`` are normalized by a per-file
+train-only ``StandardScaler`` (the test slice is genuinely unavailable at fit
+time; this is the only achievable train-side normalization in a streaming
+fit→predict API and does not affect the score-producing test path). NORM file
+boundaries (``norm_train_segs`` in fit, ``test_segments`` in predict) are a
+SEPARATE list from the window-safety ``train_segments`` (which still keeps windows
+from crossing run-boundaries — unchanged). On single-file data
+(PSM/SWaT/WaDi/simulation) the per-file loop reduces to one whole-array
+StandardScaler fit on ``concat(whole_train, whole_test)`` — exactly upstream's
+single-entity full-file fit.
 
 GPL-3.0 NOTICE: the vendored model core (model.py) is a GPL-3.0 derivative of
 fly-orange/TreeMIL. This adapter file is original glue code; the package as a
@@ -61,7 +79,6 @@ from sklearn.preprocessing import StandardScaler
 from .model import Pyramid, PyraMIL
 from comparison.baselines._per_file_norm import (
     fit_transform_train_per_file,
-    transform_test_per_file,
 )
 from comparison.baselines._boundary_safe_window import per_entity_concat
 
@@ -122,10 +139,12 @@ class TreeMILBaseline:
         self.loss_fn = PyraMIL()
         self.train_loss_history = []  # populated by fit(); persisted in checkpoint.
 
-        # Per-source-file TRAIN scalers (StandardScaler list), cached by fit() and
-        # reused by predict() to transform the paired test file (leak-free). One
-        # entry per `norm_train_segs` file; a single entry on single-file data.
-        self._train_scalers = []
+        # Per-source-file RAW TRAIN slices (np.ndarray list), cached by fit() so
+        # predict() can fit the UPSTREAM full-file StandardScaler on
+        # vstack([raw_train_file_i, test_file_i]) — exactly upstream's per-file
+        # scaler fit on the whole (train+test) entity array (timeseries.py:53-55).
+        # One entry per `norm_train_segs` file; a single entry on single-file data.
+        self._raw_train_files = []
 
         # Resume infrastructure (2026-05-31, B option — see _checkpoint.py).
         self._resume_checkpoint_path: Optional[Path] = None
@@ -177,11 +196,12 @@ class TreeMILBaseline:
         StandardScaler sets scale_=1.0 for zero-variance columns, so this never
         divides by zero (matches sklearn semantics exactly; we use sklearn here).
 
-        RETAINED for backward-compat only. The active train/test normalization now
-        goes through the shared leak-free kernel (``_per_file_norm``): train fits +
-        caches one StandardScaler per source file, and predict transforms each test
-        file by its paired cached TRAIN scaler (no fit-on-test). This helper is no
-        longer on the live path.
+        RETAINED for backward-compat only and NOT on the live path. The active
+        normalization is: train windows use a per-file train-only StandardScaler
+        (``fit_transform_train_per_file``, test unavailable at fit time), and
+        ``predict`` fits the UPSTREAM full-file StandardScaler per file on
+        ``vstack([raw_train_file, test_file])`` (see
+        ``_normalize_test_per_file_fullfit``) — the faithful transductive fit.
         """
         return StandardScaler().fit_transform(X_seg.astype(np.float64)).astype(np.float32)
 
@@ -189,15 +209,16 @@ class TreeMILBaseline:
         """Non-overlapping windows + weak labels. Matches timeseries.py:53-71.
 
         - PER-SOURCE-FILE z-score normalization FIRST, done ONCE over the whole
-          RAW `X` via the shared leak-free kernel: each `norm_train_segs` range is
-          one upstream "file" (source entity = SMAP/MSL channel, SMD machine,
-          Exathlon app), so a fresh StandardScaler is fit+applied to that file's
-          RAW train slice — exactly upstream `_preprocess` (one scaler per file,
-          timeseries.py:53-55). The fitted per-file scalers are CACHED on
-          `self._train_scalers` so `predict` can transform the paired test file
-          with the SAME train scaler (leak-free; no fit-on-test). When
-          `norm_train_segs` is None/empty (single-file) the kernel reduces to one
-          whole-array StandardScaler — bit-identical to the legacy behaviour.
+          RAW `X`: each `norm_train_segs` range is one upstream "file" (source
+          entity = SMAP/MSL channel, SMD machine, Exathlon app), so a fresh
+          StandardScaler is fit+applied to that file's RAW train slice (test is
+          genuinely unavailable at fit time). The per-file RAW train slices are
+          CACHED on `self._raw_train_files` so `predict` can fit the UPSTREAM
+          full-file StandardScaler on vstack([raw_train_file, test_file]) —
+          exactly upstream `_preprocess` (one scaler per file fit on the WHOLE
+          train+test entity array, timeseries.py:53-55). When `norm_train_segs`
+          is None/empty (single-file) the loop reduces to one whole-array train
+          slice — and predict concats it with the whole test array.
         - Windowing uses the SEPARATE window-safety `train_segments` list (so no
           window crosses a run-boundary / normal-segment cut) — UNCHANGED.
         - Windows of length split_size, stride == split_size (NON-overlapping).
@@ -207,11 +228,16 @@ class TreeMILBaseline:
         - wlabel = max(point labels over the window)  [train split only].
         """
         n = X.shape[0]
-        # Per-source-file z-score (leak-free), fit on each file's TRAIN slice; cache
-        # the StandardScalers so predict() transforms the paired test file by them.
-        X_norm, self._train_scalers, _ = fit_transform_train_per_file(
+        # Per-source-file z-score for the TRAIN windows: fit a fresh StandardScaler
+        # on each file's TRAIN slice (test unavailable at fit time). CACHE the
+        # per-file RAW train slices so predict() can fit the upstream full-file
+        # scaler on vstack([raw_train_file, test_file]) (timeseries.py:53-55).
+        X_norm, _, _segs = fit_transform_train_per_file(
             X, norm_train_segs, lambda: StandardScaler()
         )
+        self._raw_train_files = [
+            np.asarray(X[lo:hi], dtype=np.float32).copy() for (lo, hi) in _segs
+        ]
         win_list, lab_list = [], []
         for (s, e) in self._segment_ranges(n, train_segments):
             seg_len = e - s
@@ -228,6 +254,48 @@ class TreeMILBaseline:
         windows = np.stack(win_list, axis=0).astype(np.float32)      # (B, T, F)
         wlabels = np.asarray(lab_list, dtype=np.float32)             # (B,)
         return windows, wlabels
+
+    def _normalize_test_per_file_fullfit(self, test_X, test_segments):
+        """UPSTREAM-FAITHFUL per-file test z-score (timeseries.py:53-55).
+
+        For each test file `i`, fit a FRESH ``StandardScaler`` on
+        ``vstack([raw_train_file_i, test_file_i])`` — the cached paired RAW train
+        slice concatenated with this test file == the upstream WHOLE-entity array
+        (train+valid+test) that upstream fits its single per-file scaler on
+        (``StandardScaler.fit`` stats are row-order invariant, so concat order is
+        irrelevant). Then ``.transform`` ONLY the test file with it. This makes the
+        test-region normalization bit-faithful to upstream (the scaler "sees" the
+        test slice — the INTENDED transductive behaviour).
+
+        Pairing: ``test_segments`` are per-file (lo, hi) in TEST-LOCAL coords; the
+        i-th test file pairs with ``self._raw_train_files[i]``. If
+        ``test_segments`` is None/empty OR its count does not match the cached raw
+        train files (single-file, unsegmented, or any mismatch), fall back to ONE
+        scaler fit on ``vstack([all_raw_train, whole_test])`` over the whole arrays
+        — still the upstream full-file fit.
+        """
+        test_X = np.asarray(test_X, dtype=np.float64)
+        raw_files = self._raw_train_files
+        if not raw_files:
+            raise RuntimeError(
+                "TreeMIL.predict: no cached RAW train slices (call fit() first)."
+            )
+        segs = list(test_segments) if test_segments else [(0, len(test_X))]
+
+        if len(segs) != len(raw_files):
+            # Fallback: one scaler on the whole (train+test) concat.
+            all_train = np.concatenate(
+                [np.asarray(f, dtype=np.float64) for f in raw_files], axis=0)
+            sc = StandardScaler().fit(np.vstack([all_train, test_X]))
+            return sc.transform(test_X).astype(np.float32)
+
+        out = np.empty_like(test_X, dtype=np.float32)
+        for (lo, hi), raw_tr in zip(segs, raw_files):
+            test_file = test_X[lo:hi]
+            full = np.vstack([np.asarray(raw_tr, dtype=np.float64), test_file])
+            sc = StandardScaler().fit(full)                # fit on FULL (train+test)
+            out[lo:hi] = sc.transform(test_file).astype(np.float32)
+        return out
 
     # -------------------------------------------------------------------- fit
     def fit(self, train_X, train_y=None, epoch_callback=None, train_segments=None,
@@ -297,21 +365,24 @@ class TreeMILBaseline:
     def predict(self, test_X, test_segments=None):
         """Return (N_test,) float32 RAW continuous per-timestep anomaly scores.
 
-        Normalization (original-paper fidelity, LEAK-FREE)
-        --------------------------------------------------
-        Upstream applies a per-FILE z-score StandardScaler (timeseries.py:53-55),
-        fit on the whole file that contains the test region. We reproduce that
-        per-source-file granularity LEAK-FREE: each test file is transformed by
-        the SAME StandardScaler that was fit on the PAIRED file's TRAIN slice in
-        `fit()` (cached on `self._train_scalers`) — `.transform` only, NEVER
-        `.fit`/`.fit_transform` on test. This removes the previous transductive
-        whole-test fit-on-test (a train/eval leak). `test_segments` is the per-
-        source-FILE boundary list in test-local coords (i-th test file pairs with
-        the i-th cached train scaler). When `test_segments` is None/empty, or its
-        count does not match the cached scalers (single-file), the shared kernel
-        falls back to the FIRST train scaler over the whole test array — still
-        leak-free. Train and test are normalized by the same per-file scaler
-        identity (StandardScaler), exactly as upstream.
+        Normalization (UPSTREAM-FAITHFUL, transductive per-file full-file fit)
+        ---------------------------------------------------------------------
+        Upstream fits a per-FILE z-score StandardScaler on the WHOLE entity array
+        (train+valid+test), then slices (timeseries.py:23-24,53-55,32-40), so the
+        scaler normalizing the test region IS fit on data that INCLUDES the test
+        slice. We reproduce that exactly: for each test file `i` we fit a FRESH
+        StandardScaler on `vstack([raw_train_file_i, test_file_i])` (the cached
+        per-file RAW train slice from `fit()` concatenated with this test file —
+        == the upstream full entity array; StandardScaler stats are row-order
+        invariant) and `.transform` the test file with it. `test_segments` is the
+        per-source-FILE boundary list in test-local coords (the i-th test file
+        pairs with `self._raw_train_files[i]`). When `test_segments` is
+        None/empty, or its count does not match the cached raw train files
+        (single-file), we fall back to ONE scaler fit on
+        `vstack([all_raw_train, whole_test])` over the whole arrays — still the
+        upstream full-file fit. Train and test are normalized by the same scaler
+        identity (StandardScaler), exactly as upstream. This is an INTENDED
+        transductive (test-using) normalization (user's authoritative decision).
 
         Non-overlapping contiguous windows of length split_size; the LAST window
         is TAIL-padded with zeros to fill split_size (NEVER upstream left/head
@@ -332,8 +403,10 @@ class TreeMILBaseline:
         the normalization boundaries above) defines the slices. Single-entity / None /
         non-tiling ``test_segments`` → ``per_entity_concat`` makes exactly ONE call over
         the whole array == bit-identical legacy behaviour (NO-OP). Normalization is
-        UNCHANGED (applied on the whole array BEFORE windowing; the train-fit scalers
-        are slice-invariant). The only whole-test "post-proc" is the element-wise
+        applied on the whole array BEFORE windowing (each per-file scaler is fit on
+        that file's full train+test concat and is slice-invariant within the file,
+        so windowing granularity is unchanged). The only whole-test "post-proc" is
+        the element-wise
         ``nan_to_num`` sanitization, which is idempotent under concatenation and is
         applied ONCE on the concatenated raw scores below — granularity unchanged.
         """
@@ -345,11 +418,13 @@ class TreeMILBaseline:
             raise ValueError(f"TreeMIL expects test_X of shape (N, F); got {test_X.shape}")
         T = self.split_size
 
-        # Per-source-file z-score, LEAK-FREE: transform each test file by the
-        # paired file's cached TRAIN StandardScaler (.transform only; no fit-on-test).
-        # Done on the WHOLE test array BEFORE per-entity windowing — the scalers are
-        # train-fit hence slice-invariant, so normalization granularity is unchanged.
-        test_X = transform_test_per_file(test_X, test_segments, self._train_scalers)
+        # Per-source-file z-score, UPSTREAM-FAITHFUL (transductive full-file fit):
+        # for each test file fit a fresh StandardScaler on the concat of the cached
+        # paired RAW train slice + this test file (== upstream's whole-entity array,
+        # timeseries.py:53-55) and transform the test file with it. Done on the WHOLE
+        # test array BEFORE per-entity windowing (per-file scaler stats are
+        # slice-invariant, so windowing granularity is unchanged).
+        test_X = self._normalize_test_per_file_fullfit(test_X, test_segments)
 
         self.model.eval()
         F = test_X.shape[1]

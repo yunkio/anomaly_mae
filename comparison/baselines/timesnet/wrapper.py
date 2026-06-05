@@ -2,8 +2,10 @@
 TimesNet Baseline Wrapper
 
 Reconstruction-based MTS anomaly detection. Trained with MSE on sliding windows.
-Anomaly score per timestep = MSE between input and reconstruction (aggregated
-across overlapping windows via max).
+Anomaly score per timestep = MSE between input and reconstruction. Faithful to
+upstream exp_anomaly_detection.py:150,165,170-171, which emits EVERY window
+position via reshape(-1); here realized as the length-N_test overlap-average
+(each timestep = mean of its per-position MSEs over all covering windows).
 
 Training schedule: per-epoch learning rate halving (upstream `lradj='type1'`,
 ``lr = base_lr * 0.5^(epoch-1)`` where ``epoch`` is 1-indexed). Reproduces
@@ -201,42 +203,55 @@ class TimesNetBaseline:
         return self
 
     def predict(self, test_X: np.ndarray, test_segments=None) -> np.ndarray:
-        """Compute 1D anomaly score per timestep (reconstruction MSE, last-position scoring).
+        """Compute 1D anomaly score per timestep (reconstruction MSE, all-position).
 
-        Unified pipeline pattern (Phase 2.5.1, user direction 2026-05-24): use
-        **stride=1 sliding windows + last-position per-window score + Option B
-        forward-fill head**, the same canonical pattern as
-        `omnianomaly`/`usad`/`tranad`/`gcn_lstm`/`gdn`. This supersedes the
-        Phase 2.5 SMD-branch non-overlap simplification, which was a
-        dataset-conditional choice unfaithful to TimesNet's intended behavior
-        on the majority of datasets (upstream uses `step=1` for
-        PSM/MSL/SMAP/SWaT; SMD is the outlier).
+        Faithful to upstream ``exp/exp_anomaly_detection.py::test()``
+        (thuml/Time-Series-Library, re-verified live 2026-06-04). Upstream emits
+        EVERY window position, not a single per-window scalar:
 
-        Per-window score formula (faithful to upstream
-        `exp/exp_anomaly_detection.py::test()`):
+            score = torch.mean(MSELoss(reduce=False)(batch_x, outputs), dim=-1)
+            #   -> shape [B, win] : per-window, per-position MSE (mean over features)
+            attens_energy = np.concatenate(...).reshape(-1)
+            #   -> length n_win*win : ALL positions of ALL step-1 windows kept
+
+        (exp_anomaly_detection.py:150, 165, 170-171). Over step-1 test windows
+        (PSM/SWaT loaders use ``step=1`` -> data_loader.py:413,475) every true
+        timestep t is covered by ``win`` overlapping windows and contributes a
+        score from each. Upstream then thresholds/evaluates over that duplicated
+        length-``n_win*win`` array (labels duplicated identically).
+
+        Our harness owns a length-``N_test`` per-timestep label vector (``test_y``)
+        and ``compute_all_metrics`` requires ``len(scores) == len(test_y)``
+        (baseline_common.py:565-576). A literal ``reshape(-1)`` would need the
+        harness to duplicate labels identically (a SHARED change we do not own).
+        The length-``N_test`` realization that still uses ALL window positions is
+        **overlap-averaging**: each timestep t receives the MEAN of the
+        per-position MSEs from every window that covers it. This keeps every
+        window position (matching exp:150,165) and is the in-harness equivalent
+        of upstream's all-position emission, superseding the previous
+        last-position + forward-fill convention (which used only ONE window
+        context per timestep and was unfaithful to upstream's keep-all-positions
+        ``reshape(-1)``).
+
+        Per-window score formula (faithful to upstream):
             window_scores[b, t] = mean_features((output[b, t] - input[b, t]) ** 2)
-        Then reduce each window to a scalar via the LAST timestep:
-            score_w = window_scores[:, -1]  # per-window scalar
 
-        Window-to-timestep mapping (last-position pattern):
-            score_w covers test_X timestep t = w + win_size - 1 (last position of
-            window w). For w ∈ [0, n_windows), valid coverage is
-            t ∈ [win_size - 1, N_test).
-
-        Option B forward-fill head (canonical):
-            The first (win_size - 1) timesteps lack a window whose last position
-            falls on them; forward-fill them from valid_scores[0] (the first
-            valid score). Documented in
-            `model_work/timesnet/11_INFERENCE_AGGREGATION_CORRECTION.md`.
+        Window-to-timestep mapping (overlap-average):
+            window w (start s = w*stride, stride=1) contributes window_scores[w, j]
+            to timestep t = s + j for j in [0, win_size). Each timestep
+            accumulates contributions from all covering windows; the final score
+            is the mean. Coverage spans ALL t in [0, N_test) (the leading
+            positions of early windows cover the head, so NO forward-fill is
+            needed).
 
         Boundary-safe TEST windowing (multi-entity datasets):
             ``test_segments`` is the per-entity (lo, hi) TEST-LOCAL list from
             ``UnifiedLoader.get_file_norm_segments()`` (test side) — the SAME
             source as per-entity normalization. On multi-file datasets (SMD
             machines / SMAP-MSL channels / Exathlon apps) the sliding windower +
-            model inference + per-window→per-timestep mapping (incl. the Option B
-            head fill) is run INDEPENDENTLY on each entity's test slice via
-            ``per_entity_concat`` so NO window straddles an entity boundary.
+            model inference + per-window→per-timestep overlap-average is run
+            INDEPENDENTLY on each entity's test slice via ``per_entity_concat``
+            so NO window straddles an entity boundary.
             Single-entity / None / non-tiling segments -> ONE call over the whole
             array == bit-identical legacy behaviour (helper guarantees the no-op).
 
@@ -275,32 +290,41 @@ class TimesNetBaseline:
             """RAW per-timestep score producer for ONE entity's test slice.
 
             Runs the canonical stride=1 sliding windower + model inference +
-            last-position per-window reduction + Option B forward-fill head over
-            ``sub_X`` IN ISOLATION (no cross-entity dependence => boundary-safe).
-            Returns ``(len(sub_X),)`` finite scores. There is NO whole-test
+            per-window ALL-POSITION MSE + overlap-average over ``sub_X`` IN
+            ISOLATION (no cross-entity dependence => boundary-safe). Returns
+            ``(len(sub_X),)`` finite scores. There is NO whole-test
             post-processing in TimesNet, so the full raw score IS the final
             score; ``per_entity_concat`` simply stitches the per-entity raw
             arrays back together with no extra reduction needed afterwards.
+
+            All-position emission (faithful to upstream
+            exp_anomaly_detection.py:150,165,170-171): each window contributes
+            ``win_size`` per-position MSE values (one per timestep it spans), not
+            a single scalar. Over step-1 windows every timestep is covered by up
+            to ``win_size`` windows; its final score is the MEAN of all those
+            contributions (overlap-average). This is the length-``N_test``
+            in-harness equivalent of upstream's keep-all-positions ``reshape(-1)``.
 
             Edge case (per-entity slice shorter than win_size): the TimesNet
             model is built with a FIXED ``seq_len=win_size`` and its internal
             period-folding reshape (``TimesBlock.forward``) assumes that exact
             length, so it CANNOT consume a shorter window. We therefore LEFT-PAD
             the slice up to ``win_size`` (edge-replicate the first row), score the
-            single full-length window, and assign that scalar to every timestep of
-            the (short) slice. This never crosses a boundary, keeps the model's
-            input shape valid, and returns a finite ``(L,)`` score. It cannot
-            occur on the legacy single-entity path for any real dataset (guarded
-            above); it only protects pathologically short entity slices.
+            single full-length window, and assign each real timestep its OWN
+            per-position MSE (the window's all-position scores over the true rows,
+            i.e. the tail ``L`` positions). This never crosses a boundary, keeps
+            the model's input shape valid, and returns a finite ``(L,)`` score. It
+            cannot occur on the legacy single-entity path for any real dataset
+            (guarded above); it only protects pathologically short entity slices.
             """
             sub_X = np.asarray(sub_X, dtype=np.float32)
             L = sub_X.shape[0]
 
-            # --- short-slice fallback: pad to win_size, score one window, broadcast ---
+            # --- short-slice fallback: pad to win_size, score one window, take tail ---
             if L < self.win_size:
                 pad = self.win_size - L
                 # edge-replicate the FIRST row at the head so the real data sits at
-                # the window TAIL (the last-position scorer reads the true last row).
+                # the window TAIL; the real timesteps then read their own positions.
                 padded = np.concatenate(
                     [np.repeat(sub_X[:1], pad, axis=0), sub_X], axis=0
                 ).astype(np.float32)  # (win_size, F)
@@ -308,15 +332,18 @@ class TimesNetBaseline:
                     ix = torch.from_numpy(padded[None]).to(self.device)  # (1, W, F)
                     out = self.model(ix)
                     ws = ((out - ix) ** 2).mean(dim=-1)            # (1, W)
-                    scalar = float(ws[0, -1].cpu().numpy())
-                return np.full(L, scalar, dtype=np.float32)
+                    tail = ws[0, pad:].cpu().numpy().astype(np.float32)  # (L,)
+                return tail
 
             test_stride = 1
             n_windows = (L - self.win_size) // test_stride + 1  # = L - W + 1
+
+            # Overlap-average accumulators (length L): sum of per-position MSEs and
+            # the coverage count per timestep. Final score = sum / count.
+            score_sum = np.zeros(L, dtype=np.float64)
+            score_cnt = np.zeros(L, dtype=np.float64)
+
             n_batches = (n_windows + self.batch_size - 1) // self.batch_size
-
-            per_window_last: list = []  # each: (actual_bs,) — last-position scalar
-
             with torch.no_grad():
                 for batch_idx in range(n_batches):
                     batch_start = batch_idx * self.batch_size
@@ -332,11 +359,15 @@ class TimesNetBaseline:
 
                     input_x = torch.from_numpy(batch_windows).to(self.device)
                     output = self.model(input_x)
-                    # Per-window per-timestep MSE, mean over features → [B, T]
+                    # Per-window per-position MSE, mean over features → [B, win]
                     window_scores = ((output - input_x) ** 2).mean(dim=-1)
-                    # Last-position reduction → [B] scalar per window
-                    last_pos = window_scores[:, -1].cpu().numpy().astype(np.float32)
-                    per_window_last.append(last_pos)
+                    ws_np = window_scores.cpu().numpy().astype(np.float64)  # [B, win]
+
+                    # Scatter every window position into its timestep accumulator.
+                    for j in range(actual_bs):
+                        start = (batch_start + j) * test_stride
+                        score_sum[start : start + self.win_size] += ws_np[j]
+                        score_cnt[start : start + self.win_size] += 1.0
 
                     if self.verbose and (batch_idx + 1) % max(1, n_batches // 10) == 0:
                         progress = (batch_idx + 1) / n_batches * 100
@@ -345,23 +376,10 @@ class TimesNetBaseline:
             if self.verbose:
                 print()
 
-            # valid_scores: length = n_windows = L - W + 1.
-            # Aligned to sub_X timesteps via: valid_scores[w] → t = w + W - 1.
-            valid_scores = np.concatenate(per_window_last, axis=0).astype(np.float32)
-            valid_len = valid_scores.shape[0]
-            assert valid_len == n_windows, (
-                f"aggregation length mismatch: {valid_len} != {n_windows}"
-            )
-
-            # Map valid_scores into the output, plus Option B forward-fill head.
-            # Head: t ∈ [0, W-1) inherits valid_scores[0] (first valid score).
-            # Body: t ∈ [W-1, L) gets valid_scores[t - (W-1)].
-            # Total: head_len + valid_len = (W-1) + (L - W + 1) = L.
-            scores = np.empty(L, dtype=np.float32)
-            head_len = self.win_size - 1
-            if head_len > 0:
-                scores[:head_len] = valid_scores[0]
-            scores[head_len:head_len + valid_len] = valid_scores
+            # Every timestep in [0, L) is covered by >=1 window (n_windows>=1 here
+            # because L>=win_size), so count is strictly positive — no head fill.
+            assert (score_cnt > 0).all(), "uncovered timestep in overlap-average"
+            scores = (score_sum / score_cnt).astype(np.float32)
             return scores
 
         # Boundary-safe: per-entity windowing+inference, then concat. Single-entity

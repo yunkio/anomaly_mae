@@ -19,11 +19,16 @@ recording (donalee/WETAS `timeseries.py:33-34`, where `_preprocess` runs once pe
 through the shared leak-free kernel `comparison/baselines/_per_file_norm.py`, preserving
 WETAS's own StandardScaler identity.
 
-LEAK-FREE: the per-source-file TRAIN StandardScalers fit at `fit()` are CACHED on
-`self._train_scalers`; `predict()` transforms each PAIRED test recording with its train scaler
-(`.transform` only — NEVER fit-on-test). This REMOVES the previous transductive fit-on-test
-(the old `_normalize_test_per_recording` fit a fresh scaler on each test slice, leaking test
-statistics into normalization).
+FIT-ON-TEST (OFFICIAL, restored 2026-06-04): `predict()` fits a FRESH per-source-file
+`StandardScaler` on EACH test recording's OWN data and transforms it — matching the official
+`donalee/WETAS` exactly (`train_classifier.py:208` `test_dataset=TimeSeriesWithAnomalies(...,'test')`
+→ `_load_data('test')` calls `_preprocess` per file → `timeseries.py:37-40`
+`scaler=StandardScaler(); scaler.fit(data); data=scaler.transform(data)` on that file's own data).
+This is per-file FIT-ON-TEST, label-free (uses NO labels → NOT a label leak), the method's own
+deployable normalization — identical to treemil + nrdetector (same WETAS family). `fit()` still
+caches per-file TRAIN StandardScalers in `self._train_scalers` for save/load back-compat, but the
+TEST transform does NOT reuse them (upstream fits the test file itself). The earlier leak-free
+train-scaler `.transform` variant was a deviation from the official per-file fit-on-test.
 
 It deliberately does NOT reuse:
   * upstream valid-F1 early stopping (best-epoch selection is the pipeline's job via epoch_callback);
@@ -56,7 +61,7 @@ from comparison.baselines._per_file_norm import (
     fit_transform_train_per_file,
     transform_test_per_file,
 )
-from comparison.baselines._boundary_safe_window import per_entity_concat
+from comparison.baselines._boundary_safe_window import per_entity_concat, entity_test_slices
 
 
 class WETASBaseline:
@@ -167,21 +172,61 @@ class WETASBaseline:
         """Non-overlapping split_size chunks with FRONT zero-pad on the first chunk.
 
         Faithful to upstream `timeseries.py:44` (`f.pad(..., (split_size - N % split_size, 0))`).
-        Returns (chunks (n_chunks, split_size, F), pad:int). The recovered flattened series
-        equals `flatten[pad:]` -> exactly N timesteps (used by predict).
+        The pad is EXACTLY `split_size - N % split_size`, which ALWAYS pads front — including a
+        FULL extra `split_size` chunk when `N % split_size == 0` (upstream does not special-case
+        this; re-verified live, timeseries.py:44). Returns (chunks (n_chunks, split_size, F),
+        pad:int). The recovered flattened series equals `flatten[pad:]` -> exactly N timesteps
+        (used by predict; the extra all-zero chunk in the rem==0 case is harmlessly dropped).
         """
         n = len(data)
         L = self.split_size
-        rem = n % L
-        pad = (L - rem) if rem != 0 else 0
-        if pad > 0:
-            padded = np.zeros((n + pad, data.shape[1]), dtype=np.float32)
-            padded[pad:] = data
-        else:
-            padded = data.astype(np.float32)
+        pad = L - (n % L)   # timeseries.py:44 — always pads (full chunk when n%L==0)
+        padded = np.zeros((n + pad, data.shape[1]), dtype=np.float32)
+        padded[pad:] = data
         n_chunks = len(padded) // L
         chunks = padded.reshape(n_chunks, L, data.shape[1])
         return chunks, pad
+
+    def _train_chunks_per_file_frontpad(self, data: np.ndarray, labels: np.ndarray,
+                                        norm_train_segs):
+        """Per-SOURCE-FILE non-overlapping FRONT-pad TRAIN chunks + weak labels.
+
+        Faithful to upstream `_preprocess` (timeseries.py:42-54), which runs ONCE PER
+        FILE inside the `_load_data` loop (timeseries.py:21-28):
+          * data  front-pad by `split_size - n % split_size` (timeseries.py:44),
+          * label front-pad by the SAME amount with 0 (timeseries.py:49),
+          * non-overlapping `split_size` chunks (timeseries.py:46/51),
+          * weak label per chunk = max over the (padded) label chunk (timeseries.py:54).
+        The `split_size - n % split_size` formula ALWAYS pads front (a full extra
+        `split_size` chunk when `n % split_size == 0`), matching upstream exactly.
+
+        Per-FILE: each `norm_train_segs` entity slice is chunked in ISOLATION (upstream
+        chunks every file separately), so no chunk straddles an entity boundary and the
+        first/last chunk of one file never mixes another file's timesteps. None/empty/
+        single-file `norm_train_segs` -> ONE file over the whole array (single-file path).
+
+        Returns (windows (n_chunks, split_size, F), wlabels (n_chunks,)). Replaces the
+        old sliding-from-0 + tail-drop windowing for the faithful non-overlapping path.
+        """
+        L = self.split_size
+        slices = entity_test_slices(len(data), norm_train_segs)  # [(0,N)] when single-file
+        all_chunks, all_wlab = [], []
+        for (lo, hi) in slices:
+            sub = data[lo:hi]
+            sub_lab = labels[lo:hi]
+            if len(sub) == 0:
+                continue
+            chunks, pad = self._nonoverlap_chunks_leftpad(sub)   # FRONT-pad, timeseries.py:44
+            # Front-pad the label by the SAME amount with 0 (timeseries.py:49), then chunk.
+            lab_pad = np.zeros(pad + len(sub_lab), dtype=np.float32)
+            lab_pad[pad:] = sub_lab
+            lab_chunks = lab_pad.reshape(-1, L)
+            wlab = lab_chunks.max(axis=1).astype(np.float32)     # max over chunk, timeseries.py:54
+            all_chunks.append(chunks)
+            all_wlab.append(wlab)
+        windows = np.concatenate(all_chunks, axis=0).astype(np.float32)
+        wlabels = np.concatenate(all_wlab, axis=0).astype(np.float32)
+        return windows, wlabels
 
     # ------------------------------------------------------------------ normalization (timeseries.py:35-40)
     def _normalize_per_file_train(self, data: np.ndarray, norm_train_segs) -> np.ndarray:
@@ -210,30 +255,31 @@ class WETASBaseline:
         return out
 
     def _normalize_per_file_test(self, data: np.ndarray, test_segments) -> np.ndarray:
-        """Test-time z-score, LEAK-FREE per-SOURCE-FILE StandardScaler (paired TRAIN scaler).
+        """Test-time z-score = per-SOURCE-FILE FIT-ON-TEST StandardScaler (OFFICIAL WETAS).
 
-        Upstream `_preprocess` (timeseries.py:33-34) runs once per recording file. The faithful,
-        LEAK-FREE realization (this audit's target fix) is: each test recording is transformed by
-        the StandardScaler FIT on its PAIRED train recording — NOT a fresh scaler fit on the test
-        slice (the previous behaviour, which was transductive and leaked test statistics into
-        normalization). We route through the SHARED kernel `transform_test_per_file`, which calls
-        ONLY `scaler.transform` (never `.fit`/`.fit_transform`) using `self._train_scalers` cached
-        at fit() time (entity order: i-th test recording <- i-th train scaler).
+        OFFICIAL source (donalee/WETAS, re-verified LIVE 2026-06-04 — code is authoritative):
+        `train_classifier.py:208` builds `test_dataset = TimeSeriesWithAnomalies(..., 'test')`;
+        `TimeSeriesWithAnomalies._load_data('test')` (timeseries.py:17-33) loads EACH file in the
+        `test/` dir and calls `_preprocess` on it; `_preprocess` (timeseries.py:37-40) fits a
+        FRESH `StandardScaler` on THAT file's OWN data — `scaler = StandardScaler(); scaler.fit(data);
+        data = scaler.transform(data)`. So normalization is per-source-FILE FIT-ON-TEST (the scaler
+        is fit on the test file itself). This is label-free (uses NO labels) → NOT a label leak; it
+        is the method's own deployable normalization. (Matches treemil + nrdetector, same WETAS family.)
 
-        `test_segments` is the per-source-FILE (lo, hi) list in TEST-LOCAL coords. When it is
-        None/empty (single-file, or no boundaries passed) the kernel falls back to the FIRST
-        cached train scaler over the whole test array — still leak-free (transform-by-train,
-        never fit-on-test), which is the single-file degenerate path.
+        `test_segments` = per-source-FILE (lo, hi) in TEST-LOCAL coords (same source as windowing).
+        None/empty (single-file) -> ONE fresh StandardScaler over the whole test array.
+        (2026-06-04 faithfulness pass: restored fit-on-test; the prior leak-free train-scaler
+        `.transform` was a deviation from the official per-file fit-on-test.)
         """
         data = np.asarray(data, dtype=np.float32)
         if len(data) == 0:
             return data
-        if not self._train_scalers:
-            raise RuntimeError(
-                "WETAS: no train scalers cached — call fit() before predict()."
-            )
-        # LEAK-FREE: transform each test file by its paired TRAIN StandardScaler (.transform only).
-        return transform_test_per_file(data, test_segments, self._train_scalers)
+        # FIT-ON-TEST: fresh per-entity StandardScaler on each test slice's OWN data
+        # (official timeseries.py:38-40, per file). Train scaler is NOT reused on test.
+        for (lo, hi) in entity_test_slices(len(data), test_segments):
+            sc = StandardScaler()
+            data[lo:hi] = np.asarray(sc.fit_transform(data[lo:hi]), dtype=np.float32)
+        return data
 
     # ------------------------------------------------------------------ fit
     def fit(self, train_X: np.ndarray, train_y=None, epoch_callback=None, train_segments=None,
@@ -248,10 +294,15 @@ class WETASBaseline:
         each PAIRED test recording leak-free (no fit-on-test).
 
         `norm_train_segs` is the SEPARATE per-source-FILE NORM segment list (TRAIN-LOCAL coords);
-        it is DISTINCT from `train_segments`, which stays the window-safety boundary list
-        (`compute_segment_safe_window_indices`) and is NOT weakened by this fix.
+        it is DISTINCT from `train_segments`. With the default upstream-faithful windowing
+        (train_stride == split_size) `norm_train_segs` ALSO defines the per-FILE chunking units
+        (each file front-padded + chunked in isolation, timeseries.py:21-54), so no chunk crosses a
+        file boundary and `train_segments` / `compute_segment_safe_window_indices` are not needed on
+        that path. They remain in force only for the sliding densification path (train_stride < split).
 
-        Weak labels (leak-free): wlabel = max(train_y over each window)  (timeseries.py:54).
+        Windowing (timeseries.py:42-54): per-SOURCE-FILE non-overlapping FRONT-pad chunks (pad =
+        `split_size - n % split_size`, NOT tail-drop), data + label front-padded with 0, weak label
+        per chunk = max over the (padded) label chunk (timeseries.py:54).
         Loss (train_classifier.py:127-129): BCE(wscore, wlabel) + dtw_loss(output, wlabel).mean(0).
         Optimizer: Adam(lr) (train_classifier.py:113).  No scheduler (upstream has none).
         """
@@ -276,24 +327,38 @@ class WETASBaseline:
             print(f"  Normalization: per-source-file StandardScaler (z-score) over {n_rec} file(s) "
                   f"[timeseries.py:33-34]")
 
-        # Build training windows (sliding with train_stride; default = non-overlapping).
-        windows, starts, _ = self._windows_with_stride(train_X, self.train_stride)
+        # Build training windows. Faithful upstream path (default train_stride == split_size):
+        # per-SOURCE-FILE non-overlapping FRONT-pad chunks (timeseries.py:42-54) — front-pad by
+        # `split_size - n % split_size`, NOT tail-drop, chunked per file in isolation. The
+        # densification adapter path (train_stride < split_size) keeps the sliding window so the
+        # pipeline can over-sample overlapping windows.
+        if self.train_stride == self.split_size:
+            windows, wlabels = self._train_chunks_per_file_frontpad(
+                train_X, train_y, norm_train_segs,
+            )  # timeseries.py:44/49/54 (front-pad data+label, max-over-chunk weak label)
+            if self.verbose:
+                n_files = max(len(entity_test_slices(len(train_X), norm_train_segs)), 1)
+                print(f"  Windowing: per-file FRONT-pad non-overlap chunks over {n_files} file(s) "
+                      f"[timeseries.py:44-54]")
+        else:
+            # Sliding densification (adapter knob): windows from index 0, tail partial dropped.
+            windows, starts, _ = self._windows_with_stride(train_X, self.train_stride)
 
-        # Segment-aware: drop windows that cross a run/train boundary (leak-safe, 06_LABEL_SEMANTICS).
-        if train_segments is not None:
-            valid_idx = compute_segment_safe_window_indices(
-                train_segments, self.split_size, self.train_stride, len(windows),
-            )
-            if len(valid_idx) > 0:
-                windows = windows[valid_idx]
-                starts = starts[valid_idx]
-                if self.verbose:
-                    print(f"  Segment-aware: kept {len(valid_idx)} boundary-safe windows")
+            # Segment-aware: drop windows that cross a run/train boundary (leak-safe, 06_LABEL_SEMANTICS).
+            if train_segments is not None:
+                valid_idx = compute_segment_safe_window_indices(
+                    train_segments, self.split_size, self.train_stride, len(windows),
+                )
+                if len(valid_idx) > 0:
+                    windows = windows[valid_idx]
+                    starts = starts[valid_idx]
+                    if self.verbose:
+                        print(f"  Segment-aware: kept {len(valid_idx)} boundary-safe windows")
 
-        # Weak labels: max of point labels over each window (timeseries.py:54).
-        wlabels = np.stack([
-            float(train_y[s:s + self.split_size].max()) for s in starts
-        ]).astype(np.float32)
+            # Weak labels: max of point labels over each window (timeseries.py:54).
+            wlabels = np.stack([
+                float(train_y[s:s + self.split_size].max()) for s in starts
+            ]).astype(np.float32)
 
         n_pos = int((wlabels >= 0.5).sum())
         n_neg = int((wlabels < 0.5).sum())
