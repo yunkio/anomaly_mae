@@ -267,21 +267,21 @@ def _get_default_model_params():
         'mlp': {
             'seq_len': 5, 'embedding_dim': 32, 'dropout': 0.0,
             'lr': 0.001, 'weight_decay': 0.0,  # QuoVadis legacy-Keras Adam never applies wd (effective 0.0)
-            'train_stride': 1, 'epochs': 50, 'batch_size': 512,
+            'train_stride': 1, 'epochs': 10, 'batch_size': 512,  # 2026-06-06: unsupervised unified to 10
         },
         # MLPmixer_blocks_1_embedd_128_seq_5.yaml: seq_len=5, embed=128, epochs=100,
         #   lr=0.0002, batch=512, dropout=0.1, num_blocks=1
         'mlpmixer': {
             'seq_len': 5, 'embedding_dim': 128, 'num_blocks': 1, 'dropout': 0.1,
             'lr': 0.0002, 'weight_decay': 0.0,  # QuoVadis legacy-Keras Adam never applies wd (effective 0.0)
-            'train_stride': 1, 'epochs': 50, 'batch_size': 512,
+            'train_stride': 1, 'epochs': 10, 'batch_size': 512,  # 2026-06-06: unsupervised unified to 10
         },
         # Transformer_blocks_1_1_embedd_128_seq_5.yaml: seq_len=5, embed=128, MHA=1,
         #   num_blocks=1, epochs=100, lr=0.001, batch=512, dropout=0.1
         'transformer': {
             'seq_len': 5, 'embedding_dim': 128, 'num_heads': 1, 'num_blocks': 1, 'dropout': 0.1,
             'lr': 0.001, 'weight_decay': 0.0,  # QuoVadis legacy-Keras Adam never applies wd (effective 0.0)
-            'train_stride': 1, 'epochs': 50, 'batch_size': 512,
+            'train_stride': 1, 'epochs': 10, 'batch_size': 512,  # 2026-06-06: unsupervised unified to 10
         },
         # gcn_lstm_model_seq_5.yaml: seq_len=5, embed=10, lstm_units=64, output_dim=1,
         #   epochs=100, lr=0.001, batch=100, dropout=0.1
@@ -292,7 +292,7 @@ def _get_default_model_params():
             'adj_symmetric': True,
             'score_norm': 'median-iqr', 'score_smooth_window': 5, 'score_iqr_epsilon': 1e-2,
             'lr': 0.001, 'weight_decay': 0.0,  # faithful: upstream legacy-Adam ignores wd (gcn_lstm)
-            'train_stride': 1, 'epochs': 50, 'batch_size': 100,
+            'train_stride': 1, 'epochs': 10, 'batch_size': 100,  # 2026-06-06: unsupervised unified to 10
         },
         # SOTA baselines
         'anomaly_transformer': {'win_size': 100, 'd_model': 512, 'n_heads': 8, 'e_layers': 3, 'train_stride': 1, 'epochs': 10, 'batch_size': 128},
@@ -303,7 +303,7 @@ def _get_default_model_params():
         # n_gmm is derived (= n_feats × n_window) and not user-configurable.
         'dagmm': {'n_window': 5, 'n_hidden': 16, 'n_latent': 8,
                   'lr': 1e-4, 'weight_decay': 1e-5, 'lr_step_size': 5, 'lr_gamma': 0.9,
-                  'train_stride': 1, 'epochs': 5, 'batch_size': 256},
+                  'train_stride': 1, 'epochs': 10, 'batch_size': 256},
         # GDN (Deng & Hooi, AAAI 2021): seq_len/embed_dim/top_k/out_layer_* match upstream run.sh
         # (slide_win=5, dim=64, topk=5, out_layer_num=1, out_layer_inter_dim=128).
         # batch_size=256 kept for uniformity with other SOTA presets (vs upstream 32 in run.sh).
@@ -328,11 +328,11 @@ def _get_default_model_params():
             'hidden_size': 128, 'output_size': 128, 'kernel_size': 2, 'n_layers': 7,
             'pooling_type': 'avg', 'local_threshold': 0.3, 'granularity': 4,
             'beta': 0.1, 'gamma': 0.1, 'split_size': 500,
-            'batch_size': 32, 'lr': 1e-4, 'epochs': 200, 'train_stride': 500,
+            'batch_size': 32, 'lr': 1e-4, 'epochs': 50, 'train_stride': 500,  # 2026-06-06: weak unified to 50
         },
         # TreeMIL — fly-orange/TreeMIL@16f166c train.py argparse (BCE-only active loss; DTW dropped as dead code).
         'treemil': {
-            'split_size': 500, 'epochs': 200, 'batch_size': 32, 'lr': 1e-4,
+            'split_size': 500, 'epochs': 50, 'batch_size': 32,  # 2026-06-06: weak unified to 50 'lr': 1e-4,
             'ary_size': 2, 'inner_size': 3, 'd_model': 128, 'd_k': 128, 'd_v': 128,
             'd_inner_hid': 32, 'n_head': 5, 'n_layer': 2, 'dropout': 0.5,
             'agg_type': 'max', 'pooling_type': 'max', 'train_stride': 1,
@@ -350,7 +350,7 @@ def _get_default_model_params():
         'nrdetector': {
             'win_size': 100, 'noisy_rate': 0.4, 'prior': 0.25,  # upstream main.py:98 default 0.25
             'hidden_size': 64, 'output_size': 64, 'kernel_size': 2, 'n_layers': 7, 'd_model': 64,
-            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 200, 'encoder_epochs': 50,
+            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 50, 'encoder_epochs': 50,  # 2026-06-06: weak unified to 50
             'encoder_lr': 1e-3,  # IMPL-INVENTED (parameterized 2026-05-30; no official recipe)
             'lr': 1e-5, 'knn_k': 5, 'seed': 0, 'train_stride': 1,
         },
@@ -362,7 +362,7 @@ def _get_default_model_params():
         'nrdetector_full': {
             'win_size': 100, 'noisy_rate': 1.0, 'prior': 0.25,  # upstream main.py:98 default 0.25
             'hidden_size': 64, 'output_size': 64, 'kernel_size': 2, 'n_layers': 7, 'd_model': 64,
-            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 200, 'encoder_epochs': 50,
+            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 50, 'encoder_epochs': 50,  # 2026-06-06: weak unified to 50
             'encoder_lr': 1e-3,
             'lr': 1e-5, 'knn_k': 5, 'seed': 0, 'train_stride': 1,
         },
@@ -379,7 +379,7 @@ def _get_default_model_params():
             'lambda_smooth': 8e-5, 'lambda_sparse': 8e-5, 'l2_reg': 0.001,
             'optimizer': 'adam', 'lr': 1e-4,  # WETAS-sourced (Adagrad 0.01 diverges w/ deep DiCNN)
             'bags_per_batch': 60, 'seq_len': 128, 'encoder_dim': 128,
-            'test_stride': 1, 'aggregation': 'mean', 'epochs': 10,
+            'test_stride': 1, 'aggregation': 'mean', 'epochs': 50,  # 2026-06-06: weak unified to 50
             'iters_per_epoch': 50, 'train_stride': 1,
         },
         # === 2026-05-19 batch (10 SOTA additions) ===
@@ -489,7 +489,7 @@ def _get_default_model_params():
             'mlr_ratio': 0.1,                     # Mlr = lr × 0.1 (paper Mlr=1e-5 vs lr=1e-4)
             'pct_start': 0.3,                     # OneCycleLR pct_start (paper default)
             'lr': 1e-4,
-            'train_stride': 1, 'epochs': 3, 'batch_size': 128,
+            'train_stride': 1, 'epochs': 10, 'batch_size': 128,  # 2026-06-06: unsupervised unified to 10
         },
         # NPSR — Nominality Score Conditioned Anomaly Detection (NeurIPS 2023)
         # Paper-faithful preset (clean reimpl, 2026-05-24):

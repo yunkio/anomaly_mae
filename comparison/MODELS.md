@@ -18,7 +18,7 @@
 > | `gcn_lstm` | REMOVE EXTRA | NaN/Inf guard + `clip_grad_norm_` 제거 |
 > | `neural_base.py` `predict` | Pass 2 fix | MSE-mean → `|abs|` + median-IQR + smooth(5) + max(axis=1) (`mlp`/`mlpmixer`/`transformer` 공통 영향) |
 >
-> **Intended exceptions** (paper-faithful 미달 아님): `nn_distance` `batch_size=1000` (메모리 안전 batching, 수학적 동치), `gcn_lstm` 첫 `seq_len` head forward-fill (upstream의 `labels[seq_len:]` truncate를 `(T_test,)` contract 강제 때문에 대체), neural 4종 (`mlp`/`mlpmixer`/`transformer`/`gcn_lstm`) `epochs=50` (Domain B 정책; paper yaml 100-200), `weight_decay` dead-key (upstream `model_def.py:get_model`이 참조 안 함 — upstream도 dead).
+> **Intended exceptions** (paper-faithful 미달 아님): `nn_distance` `batch_size=1000` (메모리 안전 batching, 수학적 동치), `gcn_lstm` 첫 `seq_len` head forward-fill (upstream의 `labels[seq_len:]` truncate를 `(T_test,)` contract 강제 때문에 대체), neural 4종 (`mlp`/`mlpmixer`/`transformer`/`gcn_lstm`) `epochs=10` (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper yaml 100-200), `weight_decay` dead-key (upstream `model_def.py:get_model`이 참조 안 함 — upstream도 dead).
 >
 > 이전 5번 실험(`5_20260525_224237_baseline_minmax_normalonly_segaware`) → paper-faithful 미달로 폐기 (`.trash/0526/results_5_deleted_quovadis_audit/`). 새 6번 실험(`6_20260526_085028_baseline_minmax_normalonly_segaware`) → 본 audit 통과 baseline 코드로 재실행. 자세한 내용은 `GUIDE.md §19` 참조.
 
@@ -27,12 +27,12 @@
 >   - `random` → binary {0,1} (`np.random.randint(0, 2)`)
 >   - `sensor_range` → `sensor_range=(0,1)` 고정 + boolean max
 >   - `pca_error` → paper auto branch (`univariate→2, ≤50→10, else→30`) + `svd_solver='full'`
->   - Neural 4: paper yaml (seq_len=5, paper batch/lr/embed/dropout/weight_decay) + epochs=50 (paper 100-200 대신 사용자 변형)
+>   - Neural 4: paper yaml (seq_len=5, paper batch/lr/embed/dropout/weight_decay) + epochs=10 (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper 100-200)
 > - **non-self_norm SOTA 6개** (`gcn_lstm`, `tranad`, `usad`, `dagmm`, `gdn`, `omnianomaly`) 의 min-max 후 `[0,1]` clip 제거 → paper-faithful sklearn `MinMaxScaler` 기본 동작. (Note: `dagmm`은 2026-05-25 TranAD-author reimpl 적용 후 **decoder에 Sigmoid** 가 추가되어 출력이 [0,1]로 강제됨. 입력 측 minmax(no-clip) 정책 자체는 동일하나 출력-입력 간 분포 매치 관점에서는 새 impl이 TranAD upstream과 정합. 자세한 내용은 §13 참조.)
-> - **DAGMM 구현 reference 교체 (2026-05-25 추가)**: `danieltan07/dagmm` (community reproduction) → `imperial-qore/TranAD/src/models.py::DAGMM` (TranAD-author 변형, TS-AD benchmark de-facto 표준). Sliding window 5 + two-MSE 손실 + AdamW + StepLR(5, 0.9) + epochs=5. 원본 ICLR'18 paper citation은 보존. 영향: 1번/3번/4번 DAGMM 결과는 이전 모델 — 새 결과와 직접 비교 불가. 자세한 내용은 §13 참조.
+> - **DAGMM 구현 reference 교체 (2026-05-25 추가)**: `danieltan07/dagmm` (community reproduction) → `imperial-qore/TranAD/src/models.py::DAGMM` (TranAD-author 변형, TS-AD benchmark de-facto 표준). Sliding window 5 + two-MSE 손실 + AdamW + StepLR(5, 0.9) + epochs=10 (2026-06-06: unsup 전부 10으로 통일; 이전 5, TranAD `main.py:310` 기본값). 원본 ICLR'18 paper citation은 보존. 영향: 1번/3번/4번 DAGMM 결과는 이전 모델 — 새 결과와 직접 비교 불가. 자세한 내용은 §13 참조.
 > - 영향 entries `.trash/0525/results_backup/` 백업 후 재실행. 자세한 내용은 `GUIDE.md §18` 참조.
 
-**22 active baseline models** (5 simple + 3 neural-simple + 7 legacy SOTA + 7 new SOTA 2023-2025) = **총 22개 디렉토리**. All neural models use unified epoch (Neural 4 = **50 epochs** paper-faithful 2026-05-25, SOTA = 10 epochs) with `pak_auc_f1` (PA%K AUC F1, per-K re-optimized; Kim et al. AAAI 2022) best-epoch selection. Single preset (`default`) across all datasets — see `MODEL_PRESETS` in `comparison/baseline_common.py`.
+**22 active baseline models** (5 simple + 3 neural-simple + 7 legacy SOTA + 7 new SOTA 2023-2025) = **총 22개 디렉토리**. All neural models use unified epoch (2026-06-06: unsupervised 전부 **10 epochs** 통일 — Neural 4 이전 50, SOTA already 10; weakly-supervised = **50 epochs**) with `pak_auc_f1` (PA%K AUC F1, per-K re-optimized; Kim et al. AAAI 2022) best-epoch selection. Single preset (`default`) across all datasets — see `MODEL_PRESETS` in `comparison/baseline_common.py`.
 
 Sources: [QuoVadisTAD](https://arxiv.org/abs/2405.02678) (ICML 2024 Position Paper, 9 baselines — covers all simple/neural-simple + GCN-LSTM), **6 standalone legacy SOTA papers** (2018-2022), and **7 active new SOTA papers (2023-2025)** integrated 2026-05-19: TFMAE (ICDE'24), NPSR (NeurIPS'23), TimesNet (ICLR'23), DCdetector (KDD'23), MEMTO (NeurIPS'23), ModernTCN (ICLR'24 Spot), CATCH (ICLR'25). GCN-LSTM is grouped under **SOTA** in this guide because it uses an internal training loop with per-epoch callback (same execution interface as the other SOTA models), even though QuoVadisTAD provides its configuration.
 
@@ -88,8 +88,9 @@ Datasets covered (9): Simulation, SWaT A1+A2, WaDi A1, WaDi A2, SMD (28 machines
 > top_k 3 (unchanged)), **wetas** (per-file FRONT-pad windowing), **random** (seed→None + 5-run mean±std), **catch**
 > (train drop_last→False), **gcn_lstm** (weight_decay→0), **nrdetector/_full** (prior fixed 0.25 + per-epoch
 > grad accumulation + transductive PU-LP graph). **DISSOLVED (NOT a fix):** gdn input MinMax is ALREADY
-> no-clip (sklearn-faithful) — no change there; `mae_anomaly/dataset_sliding.py` UNCHANGED. **EPOCHS were
-> NOT changed for any model.** See each model's section below for details.
+> no-clip (sklearn-faithful) — no change there; `mae_anomaly/dataset_sliding.py` UNCHANGED. **EPOCHS (2026-06-06):
+> weakly-supervised (deepmil/wetas/treemil/nrdetector/nrdetector_full) = 50, unsupervised (neural 4 + SOTA 13 + dagmm) = 10
+> 으로 통일 (이전 'epochs were not changed'/'Domain B epochs=50' 서술은 supersede).** See each model's section below for details.
 
 ---
 
@@ -213,13 +214,13 @@ Input: (B, seq_len, n_features)
 | seq_len | 5 | upstream yaml `MLP_1_layer_embedd_32_seq_5.yaml` |
 | embedding_dim | 32 | upstream yaml |
 | dropout | 0.0 | preset; `MLPModel`에서는 무시 (paper-faithful) |
-| epochs | 50 | **intentional exception**: paper yaml=200, Domain B 정책 |
+| epochs | 10 | 2026-06-06: unsup 전부 10으로 통일 (이전 50, paper yaml=200) |
 | lr / batch_size | 0.001 / 512 | upstream yaml |
 | weight_decay | 1e-4 | preset; upstream code에서도 dead-key (`model_def.py:get_model`이 참조 안 함) |
 
 **Anomaly Score (2026-05-26 Pass 2 fix):** per-window `|outputs - targets|` 절대 잔차 (`(n_windows, n_features)`) → median-IQR per-sensor normalize + 5-box smooth → `max(axis=-1)` over sensors → first `seq_len` timesteps forward-fill. 이전은 `np.mean((outputs - targets)**2, axis=1)` (MSE-mean) → upstream `model_def.py:483`과 일치하지 않음 → 본 audit Pass 2에서 paper-faithful로 교체.
 
-**Intentional exception:** `epochs=50` (Domain B 정책), `weight_decay` dead-key (upstream도 dead), head forward-fill (pipeline `(T_test,)` contract 강제).
+**Intentional exception:** `epochs=10` (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper yaml=200), `weight_decay` dead-key (upstream도 dead), head forward-fill (pipeline `(T_test,)` contract 강제).
 
 ---
 
@@ -255,13 +256,13 @@ Input: (B, seq_len, n_features)
 | embedding_dim | 128 | upstream yaml |
 | num_blocks | 1 | upstream yaml |
 | dropout | 0.1 | upstream yaml |
-| epochs | 50 | **intentional exception**: paper yaml=100, Domain B 정책 |
+| epochs | 10 | 2026-06-06: unsup 전부 10으로 통일 (이전 50, paper yaml=100) |
 | lr / batch_size | 2e-4 / 512 | upstream yaml |
 | weight_decay | 1e-4 | preset; upstream code에서도 dead-key |
 
 **Anomaly Score:** MLP와 동일 (Pass 2 fix via `NeuralBaselineBase.predict`).
 
-**Intentional exception:** `epochs=50` (Domain B 정책), `weight_decay` dead-key, head forward-fill.
+**Intentional exception:** `epochs=10` (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper yaml=100), `weight_decay` dead-key, head forward-fill.
 
 ---
 
@@ -298,13 +299,13 @@ Input: (B, seq_len, n_features)
 | num_heads | 1 | upstream yaml |
 | num_blocks | 1 | upstream yaml |
 | dropout | 0.1 | upstream yaml |
-| epochs | 50 | **intentional exception**: paper yaml=100, Domain B 정책 |
+| epochs | 10 | 2026-06-06: unsup 전부 10으로 통일 (이전 50, paper yaml=100) |
 | lr / batch_size | 1e-3 / 512 | upstream yaml |
 | weight_decay | 1e-4 | preset; upstream code에서도 dead-key |
 
 **Anomaly Score:** MLP와 동일 (Pass 2 fix via `NeuralBaselineBase.predict`).
 
-**Intentional exception:** `epochs=50` (Domain B 정책), `weight_decay` dead-key, head forward-fill.
+**Intentional exception:** `epochs=10` (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper yaml=100), `weight_decay` dead-key, head forward-fill.
 
 ---
 
@@ -335,12 +336,12 @@ Input: (B, seq_len, n_features)
 | gcn_out_dim | 10 | upstream yaml |
 | lstm_units | 64 | upstream yaml |
 | dropout | 0.1 | upstream yaml |
-| epochs | 50 | **intentional exception**: paper yaml=100, Domain B 정책 |
+| epochs | 10 | 2026-06-06: unsup 전부 10으로 통일 (이전 50, paper yaml=100) |
 | lr / batch_size | 1e-3 / 100 | upstream yaml |
 | weight_decay | 0.0 | **2026-06-04 faithfulness pass** (was 1e-4): upstream legacy-Adam ignores the yaml `weight_decay`, so the faithful value is 0. |
 
 **Intentional exception:**
-- `epochs=50` (Domain B 정책).
+- `epochs=10` (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper yaml=100).
 - Head forward-fill — upstream `model_def.py:425-426`의 `gt_labels = labels[input_sequence_length:]` truncation을 pipeline `(T_test,)` contract 강제 때문에 forward-fill로 대체.
 
 ---
@@ -433,7 +434,7 @@ Input: (seq_len × n_features)
 | batch_size | 128 |
 | train_stride | 1 |
 
-(`lr=0.01` — **2026-06-04 faithfulness pass**, was 0.001; paper Sec.5 "AdamW initial learning rate 0.01", `tranad/model.py:223`. Optimizer = AdamW(lr, weight_decay=1e-5) + StepLR(step_size=5, gamma=0.9). Epochs unchanged.)
+(`lr=0.01` — **2026-06-04 faithfulness pass**, was 0.001; paper Sec.5 "AdamW initial learning rate 0.01", `tranad/model.py:223`. Optimizer = AdamW(lr, weight_decay=1e-5) + StepLR(step_size=5, gamma=0.9). Epochs=10 (2026-06-06: unsup 10 통일).)
 
 **Reference (official code from paper authors):** https://github.com/imperial-qore/TranAD (BSD-3-Clause)
 
@@ -517,7 +518,7 @@ Input: data[i-5:i] flattened → (5F,)            # left-padded for i < 5
 | weight_decay | 1e-5 | TranAD `main.py:60` (AdamW) |
 | lr_step_size | 5 | TranAD `main.py:61` (StepLR) |
 | lr_gamma | 0.9 | TranAD `main.py:61` |
-| epochs | 5 | TranAD `main.py:310` (`num_epochs = 5`) |
+| epochs | 10 | 2026-06-06: unsup 전부 10으로 통일 (이전 5; TranAD `main.py:310` `num_epochs=5`) |
 | batch_size | 256 | pipeline default (TranAD 자체는 per-sample, but our pipeline은 batched) |
 | n_gmm | derived (= n_feats × n_window) | TranAD `src/models.py:92` |
 
@@ -571,7 +572,7 @@ Input: (seq_len × n_features)
 | batch_size | 128 |
 | train_stride | 1 |
 
-(`batch_size=128` — **2026-06-04 faithfulness pass**, was 256; upstream argparse default `main.py:201`. Epochs unchanged.)
+(`batch_size=128` — **2026-06-04 faithfulness pass**, was 256; upstream argparse default `main.py:201`. Epochs=10 (2026-06-06: unsup 10 통일).)
 
 **Reference (official code, 제1저자):** https://github.com/d-ailin/GDN (MIT, ★602). `d-ailin` = Deng Ailin (NUS), GDN 논문 제1저자.
 
@@ -677,7 +678,7 @@ Input: (win_size × n_features)
 | epochs | 10 |
 | batch_size | 128 |
 
-(**2026-06-04 faithfulness pass**: `d_model` 64→512, `e_layers` 3→2, `top_k` 3→5 — all TSLib argparse defaults (`run.py:61/63/56`). Epochs unchanged. **Flagged follow-up:** TSLib argparse default `d_ff=2048` but ours is KEPT at 64 (applying 2048 = 32× FCN compute); decision #3 listed only d_model/e_layers/top_k, so d_ff was intentionally not changed — confirm if d_ff=2048 is wanted.)
+(**2026-06-04 faithfulness pass**: `d_model` 64→512, `e_layers` 3→2, `top_k` 3→5 — all TSLib argparse defaults (`run.py:61/63/56`). Epochs=10 (2026-06-06: unsup 10 통일). **Flagged follow-up:** TSLib argparse default `d_ff=2048` but ours is KEPT at 64 (applying 2048 = 32× FCN compute); decision #3 listed only d_model/e_layers/top_k, so d_ff was intentionally not changed — confirm if d_ff=2048 is wanted.)
 
 **Reference (official code, TSLib repo):** [thuml/Time-Series-Library](https://github.com/thuml/Time-Series-Library) (MIT, ★12,285). Note: `thuml/TimesNet` is an older standalone repo — the actively maintained official implementation is in Time-Series-Library.
 
@@ -760,7 +761,7 @@ Input: (win_size × n_features)
 
 **Description:** Transformer with gated memory module that maintains M cluster prototypes. Two-phase training: Phase 1 trains with random memory init, then K-means on encoder outputs initializes the memory for Phase 2. **Phase-2 training (2026-06-04 faithfulness pass) is a FRESH re-init** — only the K-means-initialized memory bank carries over; the encoder/decoder are re-initialized with NO warm-start from Phase 1 (matches upstream `solver.py:427`). The previous implementation warm-started Phase 2 from Phase 1 weights. Loss = MSE recon + λ·gathering_loss + λ·entropy_loss.
 
-**Configuration:** win_size=100, n_memory=10, d_model=512, n_heads=8, e_layers=3, **d_ff=512** (KEPT — faithful), λ_gather=0.1, λ_entropy=0.01, phase1_epochs=3, lr=1e-4, phase2_lr=5e-5, batch_size=128, epochs=10, **train_stride=100** (**2026-06-04 faithfulness pass**, was 1 — non-overlapping windows, upstream default `data_loader.py:231` `step=100`). Epochs unchanged.
+**Configuration:** win_size=100, n_memory=10, d_model=512, n_heads=8, e_layers=3, **d_ff=512** (KEPT — faithful), λ_gather=0.1, λ_entropy=0.01, phase1_epochs=3, lr=1e-4, phase2_lr=5e-5, batch_size=128, epochs=10, **train_stride=100** (**2026-06-04 faithfulness pass**, was 1 — non-overlapping windows, upstream default `data_loader.py:231` `step=100`). Epochs=10 (2026-06-06: unsup 10 통일).
 
 **Reference:** [gunny97/MEMTO](https://github.com/gunny97/MEMTO).
 
@@ -809,7 +810,7 @@ Input: (win_size × n_features)
 
 **Channel engineering (2026-06-04 faithfulness pass — ADDED, matches upstream `preprocess.py:38-42,78-81`):** the input feature dimension is now conditioned before the model so the default head count works without head collapse: (1) drop zero-std channels, (2) pad the feature dimension up to a multiple of the head count, (3) append entity one-hot. The previous implementation omitted this preprocessing, which collapsed the attention heads at the default head count.
 
-**Configuration:** win_size=100, induction_length=16, d_model=256, n_heads=4, e_layers=4, θ_N=0.985, lr=1e-4, batch_size=64, epochs=10. (Epochs unchanged — restored to 10.)
+**Configuration:** win_size=100, induction_length=16, d_model=256, n_heads=4, e_layers=4, θ_N=0.985, lr=1e-4, batch_size=64, epochs=10. (2026-06-06: unsup 10 통일.)
 
 **Reference:** [andrewlai61616/NPSR](https://github.com/andrewlai61616/NPSR). The optional `performer-pytorch` dependency is auto-detected; fallback to `nn.MultiheadAttention` if not installed.
 
@@ -1007,7 +1008,7 @@ from .new_model import NewModelBaseline
 
 **Loss (2026-06-04 faithfulness pass — full cross-product):** ranking hinge (margin 1.0) over the **FULL n_Nor × n_Abn cross-product** of normal/abnormal bag max-over-timesteps scores (Sultani `custom_objective` L266-271) + smoothness(λ=8e-5) + sparsity(λ=8e-5), positive bag 대상. **NOT paired/diagonal** — every abnormal bag is compared against every normal bag (`comparison/baselines/deepmil/model.py:180-198`). 이전엔 paired (diagonal) hinge 였으나 공식 Keras `custom_objective` 와 불일치 → cross-product 로 교체. max 가 segment→timestep 로 dense 화된 것 외 head/loss 구조는 FAITHFUL.
 
-**Configuration:** **optimizer = Adam lr=1e-4 (WETAS `train_classifier.py:234` 출처)** — Sultani 의 Adagrad lr=0.01 은 frozen-C3D shallow head 전용이라 deep DiCNN encoder 와 joint 학습 시 발산(logits→-200/-440, score collapse)하므로 encoder 출처 optimizer 사용 (preset `optimizer='adam'`/`lr=1e-4`; head/loss 는 Sultani 유지, optimizer 만 encoder 출처). 60 bags/batch (30 pos + 30 neg), seq_len(bag window)=128, encoder_dim=128, dropout=0.6, epochs=10, iters_per_epoch=50. `n_segments=32` 은 config 호환용 **vestigial** (dense per-timestep MIL — 32-seg 변형 미구현).
+**Configuration:** **optimizer = Adam lr=1e-4 (WETAS `train_classifier.py:234` 출처)** — Sultani 의 Adagrad lr=0.01 은 frozen-C3D shallow head 전용이라 deep DiCNN encoder 와 joint 학습 시 발산(logits→-200/-440, score collapse)하므로 encoder 출처 optimizer 사용 (preset `optimizer='adam'`/`lr=1e-4`; head/loss 는 Sultani 유지, optimizer 만 encoder 출처). 60 bags/batch (30 pos + 30 neg), seq_len(bag window)=128, encoder_dim=128, dropout=0.6, epochs=50 (2026-06-06: weak 전부 50으로 통일), iters_per_epoch=50. `n_segments=32` 은 config 호환용 **vestigial** (dense per-timestep MIL — 32-seg 변형 미구현).
 
 **Score (dense per-timestep, NON_OFFICIAL disclosed):** encoder dense feature → head 를 매 timestep 에 적용 → per-timestep sigmoid `(B,L)` → overlap mean aggregate → `(N_test,)` raw. (원 DeepMIL 의 32 video segment scoring 은 streaming TS 에 official counterpart 가 없어 dense 로 대체; NON_OFFICIAL disclosed.)
 
@@ -1047,7 +1048,7 @@ from .new_model import NewModelBaseline
 
 **Architecture:** Conv embedding+positional → multi-scale tree nodes(=MIL instances) → masked MHA (parent/child/neighbor/self) → 공유 `Linear(d_model,1)+sigmoid`. window-score = max-pool, dense-score = gather-ancestors.
 
-**Configuration:** split_size=500, ary_size=2, d_model=128, n_head=5, n_layer=2, lr=1e-4, batch_size=32, epochs=200. effective ctor 값 사용 (오해의 argparse default 아님).
+**Configuration:** split_size=500, ary_size=2, d_model=128, n_head=5, n_layer=2, lr=1e-4, batch_size=32, epochs=50 (2026-06-06: weak 전부 50으로 통일; 이전 200, upstream argparse). effective ctor 값 사용 (오해의 argparse default 아님).
 
 **Score:** dense `dscore (B, split_size)` → contiguous non-overlap window, **tail-pad** + truncate to N_test (공식 left-pad 미복제 — misalignment 방지).
 
@@ -1069,7 +1070,7 @@ from .new_model import NewModelBaseline
 
 **Classifier training (2026-06-04 faithfulness pass — per-epoch gradient accumulation):** the PU-classifier optimizer calls `optimizer.zero_grad()` **once per epoch** (not per mini-batch), i.e. gradients accumulate across all mini-batches within an epoch before a single step — faithful to upstream `solver.py:126` (`wrapper.py:679-685`).
 
-**Configuration:** win_size=100, hidden=64, output=64, classifier_hidden=128, lr=1e-5, batch_size=32, epochs=200. **encoder_epochs=50 / encoder_lr=1e-3 (2026-05-30 파라미터화)**. 분류 구분:
+**Configuration:** win_size=100, hidden=64, output=64, classifier_hidden=128, lr=1e-5, batch_size=32, epochs=50 (2026-06-06: weak 전부 50으로 통일; 이전 200). **encoder_epochs=50 / encoder_lr=1e-3 (2026-05-30 파라미터화)**. 분류 구분:
 - **fixed-param:** win_size, hidden, classifier_hidden, lr, batch_size, epochs, knn_k=5, seed=0.
 - **PU class prior (2026-06-04 faithfulness pass — FIXED 0.25, supersedes prior runtime-estimation):** `prior=0.25` 로 **고정** — 공식 `main.py:98` 의 argparse default 와 일치. 직전엔 `prior=None` → 런타임 동적 추정 (train wlabel rate, clip [0.05,0.5]) 이었으나, 공식 코드가 고정 0.25 를 사용하므로 faithful 재현을 위해 고정값으로 복원함 (preset 및 wrapper default 모두 0.25).
 - **fixed knob (추정 대상 아님):** `noisy_rate=0.4` = experimenter-imposed **reveal fraction** — 양성 train segment 중 첫 40%만 labeled-P 로 공개, 나머지는 unlabeled 로 demote (`selector.py:31-39`). dataset 속성이 아닌 실험 knob 이라 고정.

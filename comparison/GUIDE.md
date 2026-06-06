@@ -358,9 +358,9 @@ python comparison/run_baseline.py --experiment psm --model all --normalize-mode 
 | 분류 | 개수 | 모델 | 특징 |
 |------|------|------|------|
 | **Simple** | 5 | `random`, `sensor_range`, `pca_error`, `l2_norm`, `nn_distance` | 학습 없음 — 통계적/거리 기반 |
-| **Neural** | 3 | `mlp`, `mlpmixer`, `transformer` | 외부 training loop, per-epoch eval, **10 epoch 통일** (2026-05-22 변경 — 이전 20 epoch 정책 폐기) |
-| **SOTA (legacy)** | 7 | `gcn_lstm`, `anomaly_transformer`, `tranad`, `usad`, `dagmm`, `gdn`, `omnianomaly` | 내부 training loop + epoch_callback, 10 epoch (default) |
-| **SOTA (new, 2026-05-19)** | 7 | `tfmae` (ICDE'24), `timesnet` (ICLR'23), `dcdetector` (KDD'23), `memto` (NeurIPS'23), `moderntcn` (ICLR'24 Spot), `catch` (ICLR'25), `npsr` (NeurIPS'23) | 내부 training loop + epoch_callback, 10 epoch (epochs 전 모델 unchanged). 각 모델별 distinct objective — `MODELS.md` 16-22번 참조. `moderntcn`은 2026-06-01 test-score formula fix 적용 (last-window-position `err[:,-1]` → all-position overlap-averaged per-feature MSE, upstream ModernTCN-detection flatten-all-positions 충실; `moderntcn/wrapper.py`). 이 변경으로 moderntcn은 **모든 데이터셋에서 prior 결과 무효 → 재실행 필요**. **(2026-06-04 faithfulness pass):** `timesnet` = test score 를 last-position+ffill → **all-position** 으로 수정 (upstream TSLib `exp:150,165,170-171`) + HP를 **SMAP anomaly-detection 스크립트** `d_model=128`/`d_ff=128`/`e_layers=3`/`top_k=3` (`scripts/anomaly_detection/SMAP/TimesNet.sh`) 로 변경 (원래 64/64/3/3 → d_model·d_ff만 128로; argparse forecasting default 512/2048보다 가벼움 — params −25%, compute −55%); `memto` = phase-2 를 warm-start 가 아니라 **fresh re-init** 으로 수정 (`solver.py:427`) + `train_stride=1→100` (non-overlap default, `data_loader.py:231`; `d_ff=512` 유지); `npsr` = channel-engineering 추가 (zero-std drop + pad-to-head-multiple + entity one-hot, `preprocess.py:38-42,78-81`) → default heads 가 collapse 없이 작동; `catch` = train DataLoader `drop_last=True→False`. `tfmae`/`dcdetector`/`moderntcn` 의 HP/masking/patch 는 unchanged (dcdetector patch `[3,5,7]` 유지). |
+| **Neural** | 3 | `mlp`, `mlpmixer`, `transformer` | 외부 training loop, per-epoch eval, **10 epoch 통일** (2026-06-06: unsup 전부 10으로 통일; 이전 50) |
+| **SOTA (legacy)** | 7 | `gcn_lstm`, `anomaly_transformer`, `tranad`, `usad`, `dagmm`, `gdn`, `omnianomaly` | 내부 training loop + epoch_callback, 10 epoch (default; dagmm도 2026-06-06: unsup 통일로 10, 이전 5) |
+| **SOTA (new, 2026-05-19)** | 7 | `tfmae` (ICDE'24), `timesnet` (ICLR'23), `dcdetector` (KDD'23), `memto` (NeurIPS'23), `moderntcn` (ICLR'24 Spot), `catch` (ICLR'25), `npsr` (NeurIPS'23) | 내부 training loop + epoch_callback, 10 epoch (2026-06-06: unsup 전부 10으로 통일; catch는 이전 3). 각 모델별 distinct objective — `MODELS.md` 16-22번 참조. `moderntcn`은 2026-06-01 test-score formula fix 적용 (last-window-position `err[:,-1]` → all-position overlap-averaged per-feature MSE, upstream ModernTCN-detection flatten-all-positions 충실; `moderntcn/wrapper.py`). 이 변경으로 moderntcn은 **모든 데이터셋에서 prior 결과 무효 → 재실행 필요**. **(2026-06-04 faithfulness pass):** `timesnet` = test score 를 last-position+ffill → **all-position** 으로 수정 (upstream TSLib `exp:150,165,170-171`) + HP를 **SMAP anomaly-detection 스크립트** `d_model=128`/`d_ff=128`/`e_layers=3`/`top_k=3` (`scripts/anomaly_detection/SMAP/TimesNet.sh`) 로 변경 (원래 64/64/3/3 → d_model·d_ff만 128로; argparse forecasting default 512/2048보다 가벼움 — params −25%, compute −55%); `memto` = phase-2 를 warm-start 가 아니라 **fresh re-init** 으로 수정 (`solver.py:427`) + `train_stride=1→100` (non-overlap default, `data_loader.py:231`; `d_ff=512` 유지); `npsr` = channel-engineering 추가 (zero-std drop + pad-to-head-multiple + entity one-hot, `preprocess.py:38-42,78-81`) → default heads 가 collapse 없이 작동; `catch` = train DataLoader `drop_last=True→False`. `tfmae`/`dcdetector`/`moderntcn` 의 HP/masking/patch 는 unchanged (dcdetector patch `[3,5,7]` 유지). |
 | **Weakly Supervised (4)** | 4 | `deepmil` (CVPR'18), `wetas` (ICCV'21), `treemil` (ICASSP'24), `nrdetector` (KDD'25) | **Q1-only** (Q3 = N/A — `train_y` 전부 0 → positive bag 없음 → `RuntimeError`). 학습 시 약 label(`max(train_y over window)`) 사용. **원논문 normalization 자체 적용** (per-source-file/per-entity StandardScaler) — 위 22개의 pipeline `--normalize-mode` 와 별개. **(2026-06-04 faithfulness pass)** **nrdetector·treemil·wetas** 의 test 정규화는 **원논문대로 FIT-ON-TEST** (upstream CODE 가 test 에 직접 scaler fit; wetas official `donalee/WETAS timeseries.py:37-40`, 2026-06-04 복원; 세 모델 = WETAS family, label-free 라 leak 아님); **deepmil 만** **leak-free train-scaler `.transform`** 유지 (코드 미변경 — Sultani 원논문이 TS scaler 미지정 → 공식 source 부재). nrdetector/treemil 의 이전 "2026-06-02 leak-free" 서술만 supersede. 별도 `WEAK_SUPERVISED_BASELINES` 리스트로 관리. §20 + `MODELS.md` 23-26번 참조. |
 
 > **활성 개수 주석:** "활성 22개" = `STANDARD_BASELINES` (Simple 5 + Neural 3 + SOTA 14; Q1·Q3 공용). Weakly-supervised 4개는 Q1-only · 원논문 normalization · 별도 dispatch 라 22개에 포함하지 않고 **추가(additive) 4개**로 별도 관리 → 코드상 전체 26개 entry. §20 의 fidelity·provenance 기록과 §7.1 provenance gate (G1–G5) 참조.
@@ -776,21 +776,21 @@ comparison/results/
 | `l2_norm` | ord=2 + optional z-score normalize | ord=2 only (paper) |
 | `nn_distance` | euclidean + batch + subsample | euclidean (paper, 효율 옵션만 유지) |
 
-### 18.2 Neural 4 hyperparameter (paper yaml + epochs=50 사용자 변형)
+### 18.2 Neural 4 hyperparameter (paper yaml + epochs=10; 2026-06-06: unsup 전부 10으로 통일, 이전 50)
 
 | 모델 | paper yaml | 우리 변경 후 |
 |------|------------|--------------|
-| `mlp` | seq=5, embed=32, lr=0.001, batch=512, dropout=0.0, weight_decay=**0.0** (upstream legacy-Adam이 wd ignore — 2026-06-05) | 동일 + epochs=50 (paper 200 대신) |
-| `mlpmixer` | seq=5, embed=128, lr=0.0002, batch=512, dropout=0.1, num_blocks=1 | 동일 + epochs=50 (paper 100 대신) |
-| `transformer` | seq=5, embed=128, num_heads=1, num_blocks=1, lr=0.001, batch=512, dropout=0.1 | 동일 + epochs=50 (paper 100 대신) |
-| `gcn_lstm` | seq=5, embed=10, lstm=64, lr=0.001, batch=100, dropout=0.1 | 동일 + epochs=50 (paper 100 대신) |
+| `mlp` | seq=5, embed=32, lr=0.001, batch=512, dropout=0.0, weight_decay=**0.0** (upstream legacy-Adam이 wd ignore — 2026-06-05) | 동일 + epochs=10 (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper 200) |
+| `mlpmixer` | seq=5, embed=128, lr=0.0002, batch=512, dropout=0.1, num_blocks=1 | 동일 + epochs=10 (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper 100) |
+| `transformer` | seq=5, embed=128, num_heads=1, num_blocks=1, lr=0.001, batch=512, dropout=0.1 | 동일 + epochs=10 (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper 100) |
+| `gcn_lstm` | seq=5, embed=10, lstm=64, lr=0.001, batch=100, dropout=0.1 | 동일 + epochs=10 (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper 100) |
 
 ### 18.3 영향 범위 + Experiment 4 cleanup
 
 - 영향 unique 모델: **15** (9 QuoVadis baseline + 6 non-self_norm SOTA, `gcn_lstm` 중복 제외).
 - self_norm SOTA 8개 (npsr 포함) 은 raw data path → 영향 없음. anomaly_transformer × 5 dataset 결과만 보존.
 - 영향 entries 70 dirs `.trash/0525/results_backup/` 백업 후 삭제 → queue runner 재dispatch (2026-05-25 21:14).
-- 학습 시간 추가: 16-24 시간 (Neural epochs=50 영향).
+- 학습 시간 추가: 16-24 시간 (당시 Neural epochs=50 영향; 2026-06-06 부터 unsup 전부 epochs=10 통일 → 학습 시간 감소).
 
 ### 18.4 백업 위치
 
@@ -813,7 +813,7 @@ TS-AD benchmark 도메인에서는 **TranAD 저자 (Tuli et al., VLDB 2022) 가 
 | Loss | recon + λ_energy·energy + λ_cov·cov | mean(MSE(x_hat, x)) + mean(MSE(gamma, x)) — GMM energy/cov 손실 사용 안 함 |
 | Optimizer | Adam, lr=1e-4 | AdamW, lr=1e-4, weight_decay=1e-5 |
 | Scheduler | none | StepLR(step=5, gamma=0.9) |
-| Epochs | 10 (preset) | 5 (TranAD `main.py:310` 기본값) |
+| Epochs | 10 (preset) | TranAD `main.py:310` 기본값=5 → 우리 preset은 epochs=10 (2026-06-06: unsup 전부 10으로 통일; 이전 5) |
 | Scoring | GMM sample energy | last-row reconstruction MSE per timestep |
 
 원본 **DAGMM paper citation (Zong et al., ICLR'18) 은 보존**. 구현 reference만 교체. 자세한 내용은 `MODELS.md §13` 와 `temp/dagmm_tranad_reimplementation_0525/` 의 PLAN.md / LINE_BY_LINE_DIFF.md / FINAL_REPORT.md 참조.
@@ -851,7 +851,7 @@ TS-AD benchmark 도메인에서는 **TranAD 저자 (Tuli et al., VLDB 2022) 가 
 
 - `nn_distance` `batch_size=1000`: 파이프라인 메모리 안전 batching. 각 test row의 NN 거리는 다른 row와 독립이므로 batched와 unbatched가 수학적으로 정확히 동일. (`comparison/baselines/nn_distance/model.py:64-77` docstring)
 - `gcn_lstm` 첫 `seq_len` head forward-fill: upstream `quovadis_tad/model_utils/model_def.py:425-426` `gt_labels = labels[input_sequence_length:]` truncation은 우리 파이프라인 `(T_test,)` contract와 불일치 → forward-fill로 대체. (`comparison/baselines/gcn_lstm/model.py:715`)
-- Neural 4종 (`mlp`/`mlpmixer`/`transformer`/`gcn_lstm`) `epochs=50`: paper yaml 100-200 대신 Domain B 정책 (`comparison/baseline_common.py:213-241`). best-epoch는 `pak_auc_f1`로 tracking.
+- Neural 4종 (`mlp`/`mlpmixer`/`transformer`/`gcn_lstm`) `epochs=10` (2026-06-06: unsup 전부 10으로 통일; 이전 50, paper yaml 100-200) (`comparison/baseline_common.py:_get_default_model_params`). best-epoch는 `pak_auc_f1`로 tracking.
 - `weight_decay` preset: paper yaml에 `1e-4`로 명시되지만 upstream `quovadis_tad/model_utils/model_def.py:get_model`이 참조하지 않음 (dead-key). **(2026-06-04 faithfulness pass):** `gcn_lstm` preset `weight_decay` 를 `1e-4 → 0.0` 으로 변경 (upstream legacy-Adam 이 wd 를 ignore 하므로 실효 동등; preset 값을 upstream 실효값에 맞춤). `mlp`/`mlpmixer`/`transformer` 의 `weight_decay` 도 `1e-4 → 0.0` 으로 변경 (gcn_lstm 과 동일 — upstream legacy-Adam 이 wd 를 ignore 하므로 실효값 0.0 에 맞춤; 2026-06-05 config-layer).
 
 ### §19.3 의의
@@ -942,7 +942,7 @@ TS-AD benchmark 도메인에서는 **TranAD 저자 (Tuli et al., VLDB 2022) 가 
 
 ## §21. 2026-06-04 faithfulness pass — 12 model fix 정리 (CODE = ground truth)
 
-본 섹션은 2026-06-04 baseline faithfulness 재정합 작업으로 **실제 코드에 적용된** 변경을 모델별로 정리한다 (authoritative source: `temp/faithful_audit_v2/_cross/CHANGE_LOG.md`). 모든 edit 은 원논문 + 공식 repo 대비 live 재검증 + red-team 완료. **EPOCHS 는 전 모델 unchanged** (사용자 지시 "epoch 건들지마, 원본 유지" — tranad/tfmae/npsr 의 임시 epoch 변경은 모두 원복; nrdetector=50, memto=10 유지). pristine 백업 = `./.trash/0604/`. 본 섹션의 서술이 윗 절(§7/§20 등)의 이전 서술과 충돌하면 **본 §21 + 각 절의 "2026-06-04 faithfulness pass" 표기가 우선**.
+본 섹션은 2026-06-04 baseline faithfulness 재정합 작업으로 **실제 코드에 적용된** 변경을 모델별로 정리한다 (authoritative source: `temp/faithful_audit_v2/_cross/CHANGE_LOG.md`). 모든 edit 은 원논문 + 공식 repo 대비 live 재검증 + red-team 완료. **EPOCHS (2026-06-06): weak(deepmil/wetas/treemil/nrdetector/nrdetector_full)=50, unsupervised(neural 4 + SOTA 13 + dagmm)=10 으로 통일 (이전 'epoch 건들지마'/'Domain B epochs=50' 서술은 supersede).** pristine 백업 = `./.trash/0604/`. 본 섹션의 서술이 윗 절(§7/§20 등)의 이전 서술과 충돌하면 **본 §21 + 각 절의 "2026-06-04 faithfulness pass" 표기가 우선**.
 
 ### §21.1 변경된 12개 모델
 
@@ -964,9 +964,9 @@ TS-AD benchmark 도메인에서는 **TranAD 저자 (Tuli et al., VLDB 2022) 가 
 ### §21.2 변경 없음 (UNCHANGED — 모순 정정 외 수정 금지)
 
 - 완전 faithful (0 fix): `moderntcn`, `dagmm`, `l2_norm`, `nn_distance`, `sensor_range`, `mlp`, `mlpmixer`, `transformer`, `omnianomaly`.
-- user 결정 A-keep: `dcdetector` patch `[3,5,7]` 유지; `anomaly_transformer` batch 128 유지; `tfmae` masking 0.25/0.4 유지 + epoch unchanged; `usad` seq_len 유지 (단 **latent 32→40**, Table-7 SWaT modal — 2026-06-05 config-layer); `neural_base` latent/wd 유지.
+- user 결정 A-keep: `dcdetector` patch `[3,5,7]` 유지; `anomaly_transformer` batch 128 유지; `tfmae` masking 0.25/0.4 유지 (epochs=10, 2026-06-06 unsup 통일); `usad` seq_len 유지 (단 **latent 32→40**, Table-7 SWaT modal — 2026-06-05 config-layer); `neural_base` latent/wd 유지.
 - `pca_error` = oracle 미복원 — median-iqr aggregation 유지 (label-using oracle 로 되돌리지 않음).
-- **EPOCHS = 전 모델 unchanged.**
+- **EPOCHS (2026-06-06): weak(deepmil/wetas/treemil/nrdetector/nrdetector_full)=50, unsupervised(neural 4 + SOTA 13 + dagmm)=10 으로 통일 (이전 '전 모델 unchanged' 서술은 supersede).**
 
 ### §21.3 dissolved on live re-verification (NOT a fix)
 
