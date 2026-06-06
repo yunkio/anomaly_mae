@@ -40,6 +40,13 @@ class Settings:
             "TSMAE_FIXTURE_ROOT", PROJECT_ROOT / ".trash" / "0601" / "pre_fullrerun"
         )
     )
+    # Third source (FB-R4d-01): archived prior runs (new_/old_ prefixed dirs with
+    # rich SMD/SMAP/MSL multi-entity leaves). READ-ONLY like the others.
+    old_root: Path = field(
+        default_factory=lambda: _env_path(
+            "TSMAE_OLD_ROOT", PROJECT_ROOT / "temp" / "old_experiments"
+        )
+    )
 
     # ── registry (authoritative metric semantics) ─────────────────────────────
     registry_path: Path = field(
@@ -74,7 +81,17 @@ class Settings:
 
     @property
     def source_roots(self) -> dict[str, Path]:
-        return {"live": self.live_root, "fixture": self.fixture_root}
+        # 2026-06-04: show ONLY ./results/experiments (the live root) by default, per
+        # user request. The read-only fixture (.trash/0601/pre_fullrerun) and archived
+        # old_experiments roots are now OPT-IN via env flags — set TSMAE_INCLUDE_FIXTURE=1
+        # / TSMAE_INCLUDE_OLD=1 to restore them. The field definitions + env path
+        # overrides are kept so re-enabling is a one-line flip, not a code resurrection.
+        roots: dict[str, Path] = {"live": self.live_root}
+        if os.environ.get("TSMAE_INCLUDE_FIXTURE", "").strip().lower() in ("1", "true", "yes", "on"):
+            roots["fixture"] = self.fixture_root
+        if os.environ.get("TSMAE_INCLUDE_OLD", "").strip().lower() in ("1", "true", "yes", "on"):
+            roots["old"] = self.old_root
+        return roots
 
     def cache_dir(self, sub: str) -> Path:
         p = self.cache_root / sub

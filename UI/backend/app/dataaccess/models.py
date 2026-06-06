@@ -31,6 +31,14 @@ class MetricMeta(BaseModel):
     inferred: bool = False
     inferred_direction: bool = False
     rule_id: Optional[str] = None  # which fallback rule fired (None if explicit)
+    # M-1 (R2-01/FB-6): the SWaT eval-variant this catalog entry belongs to. ADDITIVE,
+    # default "default" preserves behaviour (CLAUDE.md API-rule 2 — defaulted-but-
+    # explicit; no caller branches on its absence). Only the catalog build sets it to
+    # "full"/"excl22"; everything else keeps "default". Carries the variant dimension
+    # for the SWaT excl22 strip so full vs excl22 of the SAME metric never collide
+    # under one (display_label, variant_scope) identity. The raw ``.key`` is preserved
+    # (F5) — variant_scope is a tag, not a rename.
+    variant_scope: Literal["full", "excl22", "default"] = "default"
 
 
 class PresenceFlags(BaseModel):
@@ -99,7 +107,7 @@ class ExperimentRef(BaseModel):
     timestamp: Optional[str] = None
     suffix: Optional[str] = None
     root: Path
-    source: Literal["live", "fixture"]
+    source: Literal["live", "fixture", "old"]  # "old": archived runs (FB-R4d-01)
     state: Literal["complete", "in_progress", "early_abort"] = "early_abort"
     datasets: list[DatasetRef] = Field(default_factory=list)
     summary: Optional[SummaryRollup] = None

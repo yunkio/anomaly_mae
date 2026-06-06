@@ -630,6 +630,20 @@ def _evaluate_all_parallel(evaluator, executor, also_excl22: bool = False):
     disc_pts = _agg(cached['patch_disc'])
     teacher_pts = _agg(cached['patch_recon'])
 
+    # === (2026-06-06) float32 best-epoch-selection parity with offline recompute ===
+    # Option (III): the per-epoch best-epoch-selection metric MUST be computed on the
+    # SAME score precision as the saved epoch_scores npz (float32), so that offline
+    # recompute (which reads the float32 npz) and the inline training-time best-epoch
+    # selection agree bit-for-bit. Without this, float32 truncation of the npz vs the
+    # float64 inline `adaptive_pts` shifts the PA%K-AUC PRC threshold sampling
+    # (tadpak INTERVAL=10 over *unique* score values) by ~1e-3, which flips the
+    # selected best epoch (e.g. 445 vs 460). The npz saves
+    # `nan_to_num(score).astype(float32)`; `_agg` already applies nan_to_num, so the
+    # `.astype(float32)` below is bit-identical to the stored npz score.
+    adaptive_pts = adaptive_pts.astype(np.float32)
+    disc_pts = disc_pts.astype(np.float32)
+    teacher_pts = teacher_pts.astype(np.float32)
+
     # Dispatch parallel compute_full_metric_set calls.
     # Phase 3 (2026-05-29): compute_full_metric_set requires lite as kw-only.
     # The previous positional True was silent — callers could swap n_thresholds

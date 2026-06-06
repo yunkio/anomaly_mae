@@ -73,6 +73,18 @@ class MetricRegistry:
         ]
         self._self_test = doc.get("resolver_self_test", {})
         self._anom_type_sem = doc.get("anomaly_type_metric_semantics", {})
+        # P4B-01: documented family/direction patterns for the non-train_* history
+        # families (key_namespaces.history_families). Applied ONLY in the history
+        # namespace, after explicit entries and before the generic fallback.rules, so
+        # context magnitudes (recon_score/disc_score/raw_*/count) carry the registry's
+        # documented diagnostic.context/separation family instead of 'uncategorized'.
+        kns = doc.get("key_namespaces", {})
+        hf = kns.get("history_families", {}) if isinstance(kns, dict) else {}
+        self._history_family_rules: list[tuple[re.Pattern, dict]] = []
+        for pat in hf.get("patterns", []):
+            rx = pat.get("match_regex")
+            if rx:
+                self._history_family_rules.append((re.compile(rx), pat))
         # tiny memoization keyed on the resolution inputs.
         self._cache: dict[tuple[str, str], MetricMeta] = {}
 
@@ -146,6 +158,25 @@ class MetricRegistry:
                 "viz_hint": {"chart": "animated_line", "direction": sem.get("direction", "neutral"),
                              "group": sem.get("family", "uncategorized")},
             }
+
+        # 2.5: documented history-family patterns (P4B-01) — history namespace only,
+        # before the generic fallback. Direction is documented (not guessed) so these
+        # are NOT badged inferred; they group under diagnostic.context/separation.
+        if entry is None and namespace == "history":
+            for rx, pat in self._history_family_rules:
+                if rx.search(key) or rx.search(bare):
+                    rule_id = "history_family"
+                    entry = {
+                        "display_name": bare,
+                        "family": pat.get("family", "diagnostic.context"),
+                        "direction": pat.get("direction", "neutral"),
+                        "phase_validity": pat.get("phase_validity", "all"),
+                        "unit": pat.get("unit", "mixed"),
+                        "viz_hint": {"chart": "animated_line",
+                                     "direction": pat.get("direction", "neutral"),
+                                     "group": pat.get("family", "diagnostic.context")},
+                    }
+                    break
 
         # 3/4: fallback rules / default.
         if entry is None:

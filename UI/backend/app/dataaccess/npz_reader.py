@@ -90,12 +90,22 @@ def read_arrays(
     except (zipfile.BadZipFile, EOFError, OSError) as exc:
         raise CorruptOrWriting(f"NPZ corrupt/writing: {npz_path}: {exc}") from exc
 
-    return {
+    result = {
         "length": length,
         "arrays": out_arrays,
         "available_arrays": sorted(present),
         "downsampled": downsampled,
     }
+    # P4B-04 / VERIF-FB1: echo the effective paging back so <NpzScrubber> can render
+    # page controls without re-deriving its paging state. ``page``/``page_size`` are the
+    # requested values; when paging is active also surface the effective slice bounds.
+    result["page"] = page
+    result["page_size"] = page_size
+    if page is not None and page_size:
+        start = page * page_size
+        result["page_start"] = start
+        result["page_end"] = min(start + page_size, length)
+    return result
 
 
 def histogram(

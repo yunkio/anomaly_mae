@@ -2186,6 +2186,13 @@ class Evaluator:
         flat_t, flat_wp, coverage, covered = self._get_aggregation_map()
         point_scores = _aggregate_with_map(patch_scores.ravel(), flat_t, flat_wp, coverage, covered, total_len, method='mean')
         point_scores = np.nan_to_num(point_scores, nan=0.0)
+        # (2026-06-06) float32 parity: best-epoch selection AND stored final metrics
+        # must use the SAME float32 score precision as the saved epoch_scores npz, so
+        # offline recompute (reads float32 npz) and inline eval agree bit-for-bit (the
+        # ~1e-3 float32-vs-float64 PA%K gap otherwise flips the selected best epoch).
+        # Scoped to the TSMAE Evaluator only — comparison/ baselines call
+        # compute_full_metric_set directly with their own scores and are unaffected.
+        point_scores = point_scores.astype(np.float32)
 
         # === Single-source metric set (PA%K + AUC + Aff/RF1 + AR variants; VUS skipped) ===
         # lite=True: skip VUS (~40s/call on 225K-point high-unique-value scores).
@@ -2274,6 +2281,7 @@ class Evaluator:
         flat_t, flat_wp, coverage, covered = self._get_aggregation_map()
         point_scores = _aggregate_with_map(patch_scores.ravel(), flat_t, flat_wp, coverage, covered, total_len, method='mean')
         point_scores = np.nan_to_num(point_scores, nan=0.0)
+        point_scores = point_scores.astype(np.float32)  # (2026-06-06) float32 parity (see evaluate())
 
         # === Single-source metric set (lite — skip VUS by default; see compute_full_metric_set docstring) ===
         # 2026-05-28: lite is now a parameter. Default lite=True for per-epoch usage
