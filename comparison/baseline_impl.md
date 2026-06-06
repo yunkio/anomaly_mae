@@ -17,6 +17,12 @@
 - 결과: 허위 주장(예: "전부 minmax"; dead yaml weight_decay를 실제 적용).
 - 규칙: entry→dispatch→loader→model 추적, live/dead 구분, 가능하면 실행으로 확인.
 
+## P4. 같은 작업의 코드 경로 이중화 (evaluate 등)
+- 원인: MAE와 baseline이 **동일 작업**(per-epoch metric 계산)을 각자 **별도 함수**로 구현. 둘 다 "single source of truth"라 주석에 적어놨으나 실제로는 복제본 → 한쪽만 수정되면 silent divergence(예: point F1 threshold `>` vs `>=`).
+- 결과: 같은 metric이 파이프라인마다 다른 값. 비교 무효 + 디버깅 지옥.
+- 규칙: **공통 작업은 단일 함수로 통일**(기준 = MAE). baseline은 그 함수를 호출하는 **thin wrapper**만 두고 presentation 키(alias/None)만 추가. 새 metric은 그 한 함수에만 추가.
+- 적용(2026-06-06): `comparison/baseline_common.py::compute_all_metrics`/`_zero_metrics` → MAE `compute_full_metric_set`/`_zero_metric_set` wrapper로 통일. 검증: 162개 키 byte-identical, 의도된 point p/r/f1만 변경.
+
 ## 체크리스트 (모델마다)
 - [ ] HP = task/논문 config (범용 default 아님), 계층 명시
 - [ ] per-dataset/sweep는 기록 (silent 단일값 금지)

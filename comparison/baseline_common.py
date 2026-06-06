@@ -29,6 +29,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # MAE Evaluator Imports (single source of truth)
 # ============================================================
 from mae_anomaly.evaluator import (
+    compute_full_metric_set,   # UNIFIED SINGLE SOURCE OF TRUTH (2026-06-06)
+    _zero_metric_set,          # MAE degenerate zero template (unified)
     find_f1_optimal_idx,
     compute_f1_t_at_threshold,
     compute_pa_k_metrics_from_mean_scores,
@@ -542,100 +544,53 @@ def compute_all_metrics(
     point_labels: np.ndarray,
     anomaly_regions: list,
     eval_mask: np.ndarray = None,
+    *,
+    lite: bool = False,
 ) -> dict:
-    """Compute all metrics using MAE evaluator — returns flat dict matching epoch_metrics.json format.
+    """Compute all metrics — THIN WRAPPER over the UNIFIED single source of truth.
 
-    This is the SINGLE metric computation function for all baselines.
-    Output format is identical to MAE's Evaluator.evaluate() output.
+    UNIFIED CODE PATH (2026-06-06): every metric value is produced by
+    ``mae_anomaly.evaluator.compute_full_metric_set`` — the EXACT function the MAE
+    pipeline uses (``Evaluator.evaluate``). Baseline and MAE therefore compute
+    metrics through ONE code path (identical threshold convention, PA%K, VUS, AR,
+    etc.); no duplicate orchestration can drift apart again. This wrapper adds ONLY
+    the baseline presentation layer (NOT metric logic):
+      - convenience aliases ``aff_f1`` / ``r_f1`` (exp-monitor SKILL.md columns),
+      - MAE-only keys (``teacher_*``, ``disc_snr``, ``disturbing_*``) set to None so
+        the baseline epoch_metrics.json shares MAE's column schema,
+      - drops ``_``-prefixed diagnostic arrays (matches MAE's own save filter).
+
+    ``lite=False`` (default) computes the full set incl. VUS (prior baseline
+    behaviour, byte-identical output except the threshold-convention fix below);
+    ``lite=True`` skips ONLY VUS for per-epoch speed (same semantics as MAE).
+
+    NOTE (2026-06-06): point ``precision``/``recall``/``f1_score`` now use the strict
+    ``>`` decision convention (Kim et al. AAAI 2022) inherited from
+    ``compute_full_metric_set`` — previously this function used ``>=``. All other
+    keys are unchanged (they were already computed by the shared evaluator primitives).
 
     Args:
-        point_scores: 1D float array, anomaly score per test timestep
-        point_labels: 1D int array, ground truth labels per test timestep
-        anomaly_regions: List of AnomalyRegion objects (test-local)
-        eval_mask: Optional boolean mask (True = evaluate). Default: all True.
+        point_scores: 1D float array, anomaly score per test timestep.
+        point_labels: 1D int array, ground-truth label per test timestep.
+        anomaly_regions: list of region objects with ``.start`` / ``.end`` (test-local).
+        eval_mask: optional boolean mask (True = evaluate). Default: all True.
+        lite: if True skip VUS (per-epoch speed); default False = full set.
 
     Returns:
-        Flat dict with all metric keys matching MAE epoch_metrics.json format.
-        MAE-only keys (teacher, disc_snr, disturbing) are set to null.
+        Flat dict matching MAE epoch_metrics.json schema (MAE-only keys = None).
     """
-    if eval_mask is None:
-        eval_mask = np.ones(len(point_labels), dtype=bool)
-
-    # Zero results template
-    results = _zero_metrics()
-
-    # Check for degenerate cases
-    if len(np.unique(point_labels[eval_mask])) <= 1:
-        return results
-
-    # Base metrics: ROC-AUC, PRC-AUC
-    masked_scores = point_scores[eval_mask]
-    masked_labels = point_labels[eval_mask]
-
-    results['roc_auc'] = float(roc_auc_score(masked_labels, masked_scores))
-    results['prc_auc'] = float(average_precision_score(masked_labels, masked_scores))
-
-    # Optimal threshold via ROC curve
-    fpr, tpr, thresholds = roc_curve(masked_labels, masked_scores)
-    optimal_idx = find_f1_optimal_idx(fpr, tpr, masked_labels)
-    threshold = float(thresholds[optimal_idx])
-    results['optimal_threshold'] = threshold
-
-    # Point-level precision/recall/F1 at optimal threshold
-    # >= : consistent decision-threshold convention (matches evaluator.py and this row's own
-    # f1_t / PA%K / Aff / AR columns). Strict '>' collapses on tied/plateau thresholds.
-    predictions = (masked_scores >= threshold).astype(int)
-    results['precision'] = float(precision_score(masked_labels, predictions, zero_division=0))
-    results['recall'] = float(recall_score(masked_labels, predictions, zero_division=0))
-    results['f1_score'] = float(sklearn_f1_score(masked_labels, predictions, zero_division=0))
-
-    # F1_T (time-series F1)
-    f1_t, prec_t, rec_t = compute_f1_t_at_threshold(point_labels, point_scores, threshold)
-    results['f1_t'] = float(f1_t)
-    results['precision_t'] = float(prec_t)
-    results['recall_t'] = float(rec_t)
-
-    # PA%K metrics per K value
-    for k in PA_K_VALUES:
-        pa_metrics = compute_pa_k_metrics_from_mean_scores(
-            point_scores, point_labels, anomaly_regions, threshold, k, eval_mask
-        )
-        results[f'pa_{k}_f1'] = float(pa_metrics['f1'])
-        results[f'pa_{k}_precision'] = float(pa_metrics['precision'])
-        results[f'pa_{k}_recall'] = float(pa_metrics['recall'])
-
-        pa_roc_prc = compute_pa_k_roc_prc_from_mean_scores(
-            point_scores, point_labels, anomaly_regions, k, eval_mask
-        )
-        results[f'pa_{k}_roc_auc'] = float(pa_roc_prc['roc_auc'])
-        results[f'pa_{k}_prc_auc'] = float(pa_roc_prc['prc_auc'])
-
-    # PAK_AUC integrated
-    pak_auc = compute_pa_k_auc(
-        point_scores, point_labels, anomaly_regions, threshold, eval_mask
+    results = compute_full_metric_set(
+        point_scores, point_labels, anomaly_regions, eval_mask, lite=lite,
     )
-    # Filter out _per_k_* arrays (evaluator exposes these as lists for bulk-recompute
-    # scripts; they're not scalar metrics and should not be float()-converted here).
-    results.update({k: float(v) for k, v in pak_auc.items() if not k.startswith('_')})
-
-    # Extra metrics (vus_roc/vus_pr/affiliation_f1/r_based_f1) at F1-optimal threshold.
-    # Operates on masked arrays so eval region is respected.
-    # `skip_vus=False`: include VUS (2026-05-31 evaluator.py made the kwarg required;
-    # caller side updated 2026-06-01 — passing False keeps the existing 6번 result
-    # schema, which included VUS-PR/VUS-ROC).
-    results.update(compute_extra_metrics(masked_scores, masked_labels, threshold, skip_vus=False))
-
-    # AR-threshold variants (prevalence-threshold; suffix _ar).
-    results.update(compute_ar_threshold_metric_set(masked_scores, masked_labels))
-
+    # ---- baseline presentation layer ONLY (NOT metric logic) ----
+    # Drop `_`-prefixed diagnostic arrays (matches MAE's own save filter, evaluator.py:2213).
+    results = {k: v for k, v in results.items() if not k.startswith('_')}
     # Convenience aliases matching exp-monitor SKILL.md column names.
     results['aff_f1'] = float(results.get('affiliation_f1', 0.0))
     results['r_f1']   = float(results.get('r_based_f1', 0.0))
-
-    # MAE-only keys: null
+    # MAE-only keys (computed only by the MAE model): null in baseline output.
     for key in _MAE_ONLY_KEYS:
         results[key] = None
-
     return results
 
 
@@ -657,38 +612,17 @@ def compute_all_metrics_with_excl(
 
 
 def _zero_metrics() -> dict:
-    """Return zero-initialized metrics dict matching MAE format."""
-    results = {
-        'roc_auc': 0.0, 'prc_auc': 0.0, 'precision': 0.0, 'recall': 0.0,
-        'f1_score': 0.0, 'optimal_threshold': 0.0,
-        'f1_t': 0.0, 'precision_t': 0.0, 'recall_t': 0.0,
-    }
-    for k in PA_K_VALUES:
-        results[f'pa_{k}_f1'] = 0.0
-        results[f'pa_{k}_precision'] = 0.0
-        results[f'pa_{k}_recall'] = 0.0
-        results[f'pa_{k}_roc_auc'] = 0.0
-        results[f'pa_{k}_prc_auc'] = 0.0
+    """Zero-initialized metrics — delegates to MAE ``_zero_metric_set`` (UNIFIED 2026-06-06).
 
-    # Zero-fill extra metrics (vus/aff/r-based + AR variants) — same keys EXTRA_METRIC_KEYS.
-    for k in EXTRA_METRIC_KEYS:
-        results[k] = 0.0
-    # Aliases matching SKILL.md column names.
+    Same schema/keys as ``compute_all_metrics`` on a degenerate input, so
+    epoch_metrics.json keys stay consistent across normal and degenerate epochs.
+    Adds only the baseline presentation keys (aliases + MAE-only None).
+    """
+    results = dict(_zero_metric_set())          # MAE single-source zero template
     results['aff_f1'] = 0.0
     results['r_f1']   = 0.0
-
-    pak_auc_keys = [
-        'pak_auc_prc_auc', 'pak_auc_roc_auc', 'pak_auc_f1',
-        'pak_auc_f1_t', 'pak_auc_precision', 'pak_auc_recall',
-        'pak_auc_f1_raw', 'pak_auc_f1_t_raw',
-        'pak_auc_precision_raw', 'pak_auc_recall_raw',
-    ]
-    for k in pak_auc_keys:
-        results[k] = 0.0
-
     for key in _MAE_ONLY_KEYS:
         results[key] = None
-
     return results
 
 
