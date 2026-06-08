@@ -1,16 +1,18 @@
 #!/usr/bin/env python
 """Phase-4 fix — recompute FLIP cells' metadata.metrics from npz@best_epoch.
 
-ROOT CAUSE: run_base finalize computes metadata via a re-forward of best_checkpoint.pt,
-which is saved by ONLINE best-metric tracking. The (III) float32 fix corrected the
-post-hoc selection (epoch_metrics + timing.best_epoch) but NOT the online checkpoint
-tracking, so for FLIP cells (float32-best != float64-best) the finalize evaluates at
-the WRONG (old float64-best) epoch. e.g. SMAP/P-4: timing.best_epoch=255 (npz@255 pak
-0.4858 == epoch_metrics@255) but metadata pak=0.4337 == epoch 470.
+CAUSE (corrected 2026-06-09 — earlier "best_checkpoint online-tracking/epoch" wording
+was WRONG): run_base finalize computed metadata via a SECOND evaluate(lite=False) call
+whose anomaly-score path diverged from the per-epoch npz / the best-epoch selection /
+the viz (all single-source scoring.py). best_checkpoint was CORRECT (= model@best_epoch,
+verified at the weight level on 4 cells). e.g. SMAP/P-4: timing.best_epoch=255, npz@255
+pak 0.4858, but metadata pak=0.4337 (the divergent evaluate score, which happened to be
+near epoch_metrics@470's 0.4338 -> earlier mis-attributed as an "epoch" bug).
 
 FIX (same path as recompute_evalrevert used for non-flip): recompute metadata.metrics
 from npz@best_epoch via compute_full_metric_set / compute_metrics_with_exclusion
-(lite=False so VUS is included). No retrain (npz@best already saved).
+(lite=False so VUS is included). No retrain (npz@best already saved). Verified by
+scripts/reexp_comprehensive_audit.py (370/370) + reexp_auditB_forensic.py (4/4).
 
 Usage: --spot-check | --apply
 """
@@ -84,7 +86,9 @@ def fix_cell(cell_dir, apply=False):
     new_pak = new.get('pak_auc_f1')
     if apply:
         bk = md.get('_phase4_flip_metadata_fix', {})
-        bk.update({'applied': True, 'date': '2026-06-08', 'reason': 'finalize wrong-epoch (best_checkpoint online-tracking gap); recomputed from npz@best',
+        bk.update({'applied': True, 'date': '2026-06-08',
+                   'reason': 'finalize evaluate(lite=False) score-path diverged from npz/selection/viz; '
+                             'best_checkpoint was correct (=model@best); recomputed from npz@best (single-source)',
                    'old_pak_auc_f1': old_pak, 'old_vus_pr': md['metrics'].get('vus_pr')})
         md['_phase4_flip_metadata_fix'] = bk
         md['metrics'].update(new)
