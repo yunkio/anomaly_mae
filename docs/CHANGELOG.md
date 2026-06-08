@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-08: Finalize metadata가 틀린 epoch에서 계산되던 근본 버그 수정 (best_checkpoint async 정렬불일치) → npz@best 사용
+
+**증상**: `experiment_metadata.json["metrics"]`가 선택된 best epoch을 반영하지 않음 (특히 small/simple dataset). `timing.best_epoch`·`epoch_metrics.json`·`epoch_scores/*.npz`는 정상인데 최종 metric block만 어긋남 — 최악 simple cell에서 **pak_auc_f1 ~0.05** 차. 예: `271/SMAP/P-4` `best_epoch=255`(`epoch_metrics@255`=0.4858)인데 `metrics.pak_auc_f1=0.4337`(=`epoch_metrics@470`).
+
+**탐지**: 재실험 Phase 4 strict-consistency 검사(`metadata.vus` vs `npz@best` 재계산)에서 non-excl22 FLIP cell **176/200 불일치**. float 정밀도(1e-5) 아니라 1e-2 수준 → 다른 *epoch*임을 시사.
+
+**근본 원인**: `_bg_worker_body` finalize가 `best_checkpoint.pt`를 **re-forward**해 metadata 계산. 이 checkpoint는 *online* best-metric tracker가 저장 — best per-epoch eval 결과가 처리될 때 현재 `latest` weights를 복사. 그런데 per-epoch eval은 **async이고 학습보다 훨씬 느림**(log: `train ~0.1 s/ep` vs `eval ~3 s`)이라 eval 결과 처리 시점엔 모델이 한참 뒤 epoch에 가 있고, checkpoint에 **뒤 epoch weights가 best label로 저장**됨. finalize가 이 weights를 re-forward → 틀린 epoch metric. 증거(log): `Best model: epoch 255 (pak=0.4858), loaded from best_checkpoint.pt` 인데 결과 `Eval done: PAK_AUC_F1=0.4337`. base cell(SWaT/WaDi/PSM)은 eval-to-train 비율 차로 거의 무해, **excl22 finalize는 이미 `npz@best`를 읽어 항상 정상**(이게 단서였음).
+
+**수정**: (1) **코드** `run_base_experiments.py` `_bg_worker_body` — re-forward 후 primary/disc/teacher metadata를 **`npz@best_epoch`(선택을 결정한 authoritative snapshot)로 재계산**(excl22 block과 동일 패턴, `compute_full_metric_set(eval_mask=None, n_thr=200, sw=100, lite=False)`, try/except fallback). (2) **데이터** 현재 결과: 210 flip cell metadata를 `npz@best`로 재계산(`scripts/reexp_phase4_fix_flip_metadata.py`) → Phase 4 재검증 **ALL CONSISTENT(360/360)**, 7개 dataset/eval type 전부 `metadata == epoch_metrics@best` 확인.
+
+**영향**: **INFERENCE-only**(재학습 불필요 — npz@best 이미 존재). best epoch의 record-of-truth는 persisted artifact(npz/epoch_metrics)여야 하며 async-timing 의존 checkpoint re-forward를 쓰면 안 됨. 상세 → `docs/POST_MORTEMS/2026-06-08_finalize_wrong_epoch_metadata.md`.
+
 ## 2026-06-03 (PM): Correction-of-the-correction — nrdetector classifier GATE is faithful; the no-gate `5cff9da` was a regression → **REVERTED**
 
 직전 2026-06-03 (AM) 항목과 commit `5cff9da`("binary mean-gate 제거 → continuous ACTMAP emit")는 **틀렸으며 revert**되었다. nrdetector predict()는 **classifier-gated continuous ACTMAP** = `actmap × [seg_prob ≥ mean(seg_prob)]` 으로 **복원**되었다(= 2026-06-01 형태).

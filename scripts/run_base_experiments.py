@@ -1854,6 +1854,43 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
     teacher_recon_metrics = evaluator.evaluate_by_score_type('teacher_recon', lite=False)
     student_recon_metrics = evaluator.evaluate_by_score_type('student_recon', lite=False)
 
+    # === 2026-06-08 ROOT-CAUSE FIX: finalize metadata computed at the WRONG epoch ===
+    # The evaluate() calls above re-forward best_checkpoint.pt, whose weights can be
+    # MISALIGNED from the selected best epoch. Cause: the per-epoch eval pipeline is
+    # async and far slower than training (e.g. train ~0.1 s/ep vs eval ~3 s on small
+    # datasets), so by the time the best eval result is processed and best_checkpoint
+    # is saved, the model has advanced to a much later epoch — the checkpoint stores
+    # those later weights yet is *labeled* with the best epoch. Re-forwarding them
+    # yields metadata at the wrong epoch (observed: simple cells diverged from
+    # epoch_metrics@best by up to ~0.05 pak_auc_f1, while timing.best_epoch and the
+    # per-epoch npz stayed correct). The SAVED per-epoch npz@best_epoch is the
+    # authoritative best-epoch snapshot — it drove the best-epoch SELECTION — so the
+    # metadata metrics MUST be recomputed from it. This mirrors the excl22 finalize
+    # block below, which already reads npz@best (and was therefore always correct).
+    # No-op if the npz is missing (falls back to the re-forward result).
+    try:
+        from mae_anomaly.evaluator import compute_full_metric_set as _cfms_best
+        _best_npz_path = os.path.join(
+            exp_dir, 'epoch_scores', f"epoch_{int(timing.get('best_epoch', 0)):03d}_scores.npz")
+        if os.path.exists(_best_npz_path):
+            _best_nd = np.load(_best_npz_path)
+            _best_lbl = _best_nd['point_labels'].astype(np.int8)
+            _best_ml = min(len(_best_lbl), len(test_point_labels))
+            for _best_skey, _best_mdict in (('adaptive_score', metrics),
+                                            ('discrepancy_error', disc_metrics),
+                                            ('teacher_recon_error', teacher_recon_metrics)):
+                if _best_skey in _best_nd.files and _best_mdict is not None:
+                    _best_rec = _cfms_best(
+                        _best_nd[_best_skey][:_best_ml], _best_lbl[:_best_ml],
+                        test_anomaly_regions, eval_mask=None,
+                        n_thresholds=200, sliding_window=100, lite=False)
+                    for _bk, _bv in _best_rec.items():
+                        if not _bk.startswith('_') and isinstance(_bv, (int, float)):
+                            _best_mdict[_bk] = float(_bv)
+    except Exception as _best_e:
+        print(f"  [{exp_name}] WARN npz@best metadata recompute skipped: "
+              f"{type(_best_e).__name__}: {_best_e}", flush=True)
+
     print(f"  [{exp_name}] {progress_info} Eval done ({eval_time:.0f}s): "
           f"PRC={metrics.get('prc_auc',0):.4f} "
           f"PAK_AUC_F1={metrics.get('pak_auc_f1',0):.4f} PAK_AUC_PRC={metrics.get('pak_auc_prc_auc',0):.4f} "
