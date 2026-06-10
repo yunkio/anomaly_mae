@@ -12,4 +12,8 @@ last_modified: 2026-06-10
 
 | # | 일시 | 요청자 → 대상 | 유형 | 내용 요약 | 상태 | 해소 기록 |
 |---|------|--------------|------|----------|------|----------|
-| (없음) | | | | | | |
+| RF-001 | 2026-06-10 | orchestrator → reconciler | FEEDBACK | P1-1↔P1-3 모순 (patchify, encoder/decoder 층수, warmup, dynamic margin 등) | RESOLVED | reconciler 전수 판정 20건 (`99_reviews/p1_reconciliation_r1.md`): P1-3 승 16, P1-1 승 1(test stride 산식), 양쪽 부분 오류 2(masking 8/42, GRL=student decoder 대상 suppression), 정밀화 1. 원인: P1-1의 Set A/C 오인. 3개 문서 정정 완료 |
+| RF-002 | 2026-06-10 | protocol-truth-writer → reconciler | REQUEST | affiliation-F1·PA-F1 threshold 확정 + `pak_auc_pr` 키 매핑 | RESOLVED | `pa_0_f1`=F1-최적 threshold(`evaluator.py:929-955`), `pa_0_f1_ar` 부재 확정. affiliation은 F1-최적/`_ar` 양립. "pak_auc_pr"=내부 키 `pak_auc_prc_auc` |
+| RF-003 | 2026-06-10 | protocol-truth-writer → orchestrator | REQUEST | 비교표의 Q1/Q3 조건 확정 (메인 표가 어느 조건 기준인지) | OPEN | Phase 3 블루프린트 결정 사안으로 이관 |
+| RF-004 | 2026-06-10 | protocol-truth-writer → orchestrator | FEEDBACK | 271canon 미완주 entity (SMD 22/28, SMAP 5/54, MSL 5/27), WaDi A2 feature 123 vs 127, RankAvg 재계산 등 6건 | RESOLVED(부분) | WaDi A2=123 확정 (all-NaN 4 sensor drop, 직접 재현). 미완주·RankAvg는 placeholder 정책(A8/R3)상 본문 차단 요소 아님 — Phase 8 Notion 명세·핸드오프에 반영 예정 |
+| RF-005 | 2026-06-10 | reconciler → orchestrator | FEEDBACK | SWaT 모델 입력 45 features (= 51 − combined-constant 6) 삼중 확인되나, 현 machineA CSV+loader는 51 반환 — 재현성 플래그 | OPEN | 논문 서술은 271 metadata(45) 기준. 재현성 이슈는 Phase 8 핸드오프 보고에 등재 |

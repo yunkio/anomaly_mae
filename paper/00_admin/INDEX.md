@@ -27,9 +27,14 @@ last_modified: 2026-06-10
 - `REQUESTS_AND_FEEDBACK.md` — agent 간 요청·피드백 라우팅 테이블.
 - `PHASE_REPORTS/` — phase0_report.md ~ phase8_report.md.
 
-## 01_research_understanding/ — Phase 1 (예정)
+## 01_research_understanding/ — Phase 1 (완료, 게이트 PASS 2026-06-11)
 
-(Phase 1 산출물: CODEBASE_UNDERSTANDING, NOTION_DIGEST, 271_CONFIG_TRUTH, EXPERIMENT_PROTOCOL_TRUTH, CONFERENCE_PDF_DIGEST, RESEARCH_SYNTHESIS)
+- `271_CONFIG_TRUTH.md` (r3) — **기술적 사실의 최종 정본.** exp271 = Set C 기반+override. metadata 37 전수 + canonical config(공통 114키) + 사용/미사용 component 표(file:line) + 논문 제외 목록 26항 (dynamic margin 도달불가, Gaussian smoothing q3 스크립트만, SCAD/discriminator/RevIN/EMA 등). 모델: linear patchify(10×50), d_model 512, encoder 4L, teacher 3L/student 2L, 500ep/250 warmup, masking 15%(8/42), score=recon+scaled_disc/4.
+- `CODEBASE_UNDERSTANDING.md` (r3) — 코드베이스 전모: 아키텍처/loss(GRL 3경로 adaptive λ 구분)/scoring(leave-one-out batch 확장)/데이터 파이프라인/학습 루프/평가(~153 metrics)/post-mortem 3건.
+- `EXPERIMENT_PROTOCOL_TRUTH.md` (r3) — split //2 전수 라인 + SMAP/MSL safe-cut 실측(무제한 outward), normalonly 비교군, 지표 정식명칭 매핑(VUS PVLDB'22, PA%K AAAI'22, Affiliation KDD'22, PA WWW'18), AR threshold, SWaT excl22(83.75% bit-exact), 희소화 sweep 미구현(placeholder 입력), 실행 프로토콜(seed 42, MAE 500ep/unsup 10ep/weak 50ep 비대칭, test-set best-epoch selection).
+- `NOTION_DIGEST.md` (r2) — [Notion의 주장]/[검증된 사실] 분리. R26 truth: baseline 22모델+4 weak reference, 데이터셋 9종 reference. C1~C4 contribution은 Phase 3 판단 사안. WaDi A2=123 확정.
+- `CONFERENCE_PDF_DIGEST.md` (r2) — 학회 발표 34p 전수: 문제 설정(PU), 방법(발표 notation 비계승), baseline 26종, 결론 7 bullet (Phase 3 판단 표시).
+- `RESEARCH_SYNTHESIS.md` (r2+) — 전체 종합: R11 3단 프레이밍(설정/상한 구현/희소화 sweep), R10 원재료 표A, 제외 목록, Phase 3 판단 사안 8건, 정본 우선순위.
 
 ## 02_venue_study/ — Phase 2 (예정)
 
@@ -50,3 +55,10 @@ last_modified: 2026-06-10
 - `p0_registry_fidelity_A_r1.md` — 감사 A: §9 ↔ 사용자 원문 문자 단위 diff 전수 대조 (PASS, MINOR 2 → ERRATA E-002·E-003). sub-agent 웹 도구 가용성 확인 포함.
 - `p0_matrix_completeness_B_r1.md` — 감사 B r1: Matrix 57행·요약 왜곡·3-way 매핑(§9.4↔§7↔Matrix) 감사 (MAJOR 1: R29 요약 탈락 → 보정).
 - `p0_matrix_completeness_B_r2.md` — 수정분 재리뷰: 보정 6행 원문 대조 + 57행 무손상 확인 (PASS).
+- `p1_reconciliation_r1.md` — P1-1↔P1-3 모순 20건 전수 판정표 (1차 소스 기준; Set A/C 오인이 주 원인).
+- `p1_271truth_verifier{1,2}_r1.md` — 엄격 구역 2인 검증 (재추적 관점 / 완전성 관점).
+- `p1_codebase_synthesis_r1.md`, `p1_digests_r1.md`, `p1_protocol_r1.md` — adversarial 리뷰 r1 3건.
+- `p1_271truth_fixlog_r2.md`, `p1_codebase_synthesis_fixlog_r2.md`, `p1_digests_fixlog_r2.md`, `p1_protocol_fixlog_r2.md` — 수정 라운드 처리표 (76건 전건 FIXED).
+- `p1_rereview_{alpha,beta}_r2.md` — 수정분 재리뷰 (잔존 BLOCKER 4건 적발).
+- `p1_fixlog_r3.md` — 잔존 4건 + MINOR 3건 마감 (supersedes 일부 r2 fixlog 행).
+- `p1_coverage_gate_r1.md` — Phase 1 게이트 감사: Directive 18/18 근거 확인 + r3 spot 4/4 VERIFIED.

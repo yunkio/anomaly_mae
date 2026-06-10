@@ -30,6 +30,23 @@ last_modified: 2026-06-10
 | P0-6 PHASE_LEDGER/TASK_BOARD Phase 1–8 계획 등재 | orchestrator | DONE | 본 파일 하단 |
 | P0-7 phase0_report.md + git commit | orchestrator | DONE | 게이트 PASS — `Paper: Phase 0 setup complete (gate passed)` |
 
+## Phase 1 — 연구 완전 이해 (엄격 구역: 271_CONFIG_TRUTH)
+
+| Task | 담당 | 상태 | 비고 |
+|------|------|------|------|
+| P1-1 CODEBASE_UNDERSTANDING.md | research-archaeologist | DONE | r3 (reconciler+fixer-2 정정) |
+| P1-2 NOTION_DIGEST.md (R2 적용) | notion-analyst | DONE | r2 (fixer-3 정정) |
+| P1-3 271_CONFIG_TRUTH.md (엄격) | config-forensics | DONE | r3 (reconciler+fixer-1+fixer-5 정정) |
+| P1-4 EXPERIMENT_PROTOCOL_TRUTH.md | protocol-truth-writer | DONE | r3 (fixer-4+fixer-5 정정) |
+| P1-5 CONFERENCE_PDF_DIGEST.md | pdf-digest | DONE | r2 (fixer-3 정정) |
+| P1-5b reconciliation (P1-1↔P1-3 모순 20건) | reconciler | DONE | `p1_reconciliation_r1.md` |
+| P1-6 RESEARCH_SYNTHESIS.md | synthesis-writer | DONE | r2 + CG-1·α-m3 패치 |
+| P1-7a/b/c adversarial 리뷰 (코드이해·종합 / digest 2종 / 프로토콜) | 리뷰어 3인 | DONE | r1: B5+B3+B1, 전건 해소 |
+| P1-8 271_CONFIG_TRUTH 강화 검증 — 검증자 1 | verifier-1 (재추적 관점) | DONE | r1: B1/M4 → 해소 |
+| P1-9 271_CONFIG_TRUTH 강화 검증 — 검증자 2 | verifier-2 (완전성 관점) | DONE | r1: B6/M3 → 해소 |
+| P1-9b 재리뷰 r2 (α: truth 3종 / β: digest+프로토콜) | 재리뷰어 2인 | DONE | 잔존 B4 적발 → fixer-5 r3 해소 |
+| P1-10 coverage-auditor Phase 1 게이트 감사 | coverage-auditor | DONE | PASS 18/18 + spot 4/4 (`p1_coverage_gate_r1.md`) |
+
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 
 | Phase | 핵심 태스크 (마스터 §7) | 엄격 구역 |
