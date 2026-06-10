@@ -71,6 +71,21 @@ last_modified: 2026-06-10
 | P3-7 모델명·제목 선정 (R15) | orchestrator | DONE | D-007: CSMAD + "Label-Aware Masked Autoencoding with Gradient Reversal…" |
 | P3-8 coverage 게이트 감사 | coverage-auditor | DONE | PASS (spot 6/6, `p3_coverage_gate_r1.md`) + NOTE 2건 orchestrator 패치 |
 
+## Phase 4 — Reference 확보 & 절대 검증 (엄격 구역: 서지 검증 전체)
+
+| Task | 담당 | 상태 | 비고 |
+|------|------|------|------|
+| P4-1 CLAIM_CITATION_MAP (claim 85, 인용 필요 72) | claim-citation-mapper | DONE | |
+| P4-2 reference 후보 탐색 (OPEN 31 해소) | reference-scout | DONE | 중대 발견: 최초성 반증 2편 → D-008 스코핑 축소; venue 정정 4건 |
+| P4-3 reference card 49편 (FULL 22 + LIGHT 27) | excerpt-curator ×3 | DONE | |
+| P4-4a 서지 검증 A1 (1–25) | source-verifier A1 | DONE | VERIFIED 25, CRITICAL 정정 1 (kpivae 저자 24→13) |
+| P4-4a 서지 검증 A2 (26–49) | source-verifier A2 | DONE | VERIFIED 24, CRITICAL 정정 3 (treemil·rosas·xue 저자) |
+| P4-4b 서지 검증 B1 (blind export 1–25) | source-verifier B1 | DONE | 25/25 공식 export |
+| P4-4b 서지 검증 B2 (blind export 26–49) | source-verifier B2 | DONE | 24/24 + zhang seed 결함 플래그 (정당) |
+| P4-5 기계 diff (33 일치/10 표기/6 해소) + QUARANTINE 0 | orchestrator | DONE | `P4_DIFF_REPORT.md` |
+| P4-6 refs.bib(49) + REFERENCES_IEEE + LIBRARY_INDEX + 통합 ledger | assembler | DONE | |
+| P4-7 게이트: 전수 재감사 + 무작위 16편 재검증 | gate-auditor | DONE | 조건부 FAIL(GB-1 bib 구문) → 수정 + 49/49 파싱 → PASS |
+
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 
 | Phase | 핵심 태스크 (마스터 §7) | 엄격 구역 |

@@ -547,6 +547,9 @@ Appendix C: Method Details
 
 3. **[아키텍처 — 신호가 발현되는 구조]** "We design an asymmetric Teacher(3L)–Student(2L) decoder architecture in which a deeper teacher establishes a stable normal-reconstruction reference while a capacity-limited student's mimicry fails preferentially on anomalous correlation patterns — making the teacher–student discrepancy a reliable anomaly signal under contaminated training." (~~trained with teacher-only warmup~~ — **r2 삭제**: warmup ablation 부재(REQUEST-F) + SDMAE도 teacher-first 2단계 학습 사용 → novelty 없음·ablation 요구 빌미. warmup은 §3.4의 학습 안정화 장치로만 서술.)
 
+> **D-008 스코핑 제약 (2026-06-11, Phase 4 scout 반증 발견 — Phase 5 drafter 의무 준수)**:
+> bullet 1·2의 최초성·gap 주장은 **"masked-reconstruction self-distillation 표현 학습에 GRL 기반 adversarial 통합" 수준으로 한정**하라. 다변량 TSAD에서 소수 labeled anomaly를 표현 학습에 통합한 선행이 존재한다: Xue & Yan (IJCNN 2022, arXiv 2207.00705), SLA-VAE (WWW 2022). 두 논문은 related work SSL/PU 소절(§4.3)에서 인용·차별화하고, R20의 "거의 존재하지 않음" 강조는 "소수 존재 + 본 접근(MAE self-distillation + GRL)과 상이"로 정밀화한다. "contaminated semi-supervised"는 선사용 부재 확인(NOT_FOUND) — 본 논문이 정의하는 신조어로 서술 가능 (인접 용어 contamination-resilient/-resistant와 구분 각주 후보: RoSAS, HSCL). 상세: CLAIM_CITATION_MAP r2 §5, DECISION_LOG D-008.
+
 4. **[실험]** "Extensive experiments on six multivariate datasets demonstrate state-of-the-art performance under five rigorous metrics. The model maintains robust detection under label sparsity, validating the framework under the general semi-supervised assumption."
 
 **MECE 검증 (R1 — r2 경계 명문화, RT MAJOR-07)**: 1 = 설정·프로토콜 기여, 2 = **라벨 신호 주입 메커니즘**(라벨이 학습 신호로 개입하는 3경로 — 라벨 의존), 3 = **신호가 발현되는 라벨-무관 구조 기반**(비대칭 capacity gap이 discrepancy 신호의 신뢰성을 만드는 아키텍처 — 라벨 없이도 정의됨), 4 = 실험 기여. bullet 2와 3의 경계 = "라벨 신호의 주입(2) vs 그 신호가 작동하는 구조적 기판(3)" — 중복 없음; 합집합이 논문 기여 전체를 커버.

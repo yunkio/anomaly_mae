@@ -49,7 +49,15 @@ last_modified: 2026-06-10
 - `PAPER_BLUEPRINT.md` (r3) — **Phase 4·5의 1차 입력.** 전체 섹션 구조(Elsevier: abstract/keywords/highlights 포함), contribution 4-bullet (D-005①), setting="contaminated semi-supervised"(D-005②), R10 논증 배치 전수표(§12), related work 전략(§4 — R9 옵션 C·R19 클러스터 인용·R20 스코핑·R22 계보), 프로토콜 방어 5논거(§14)+reject 시나리오(§15), Table 4 protocol-effect 보조분석, ablation 계획(§6.7), 모델명·제목 확정(§10=D-007: CSMAD), 인용 수요 목록(Phase 4 입력).
 - `PAGE_BUDGET.md` (r3) — **분량 단일 정본**: 1.6/1.1/2.7/3.3/0.3=9.0p + figure/table 크기 가정 + 단어수 환산 + 초과 시 fallback 사다리.
 
-## 04_references/ — Phase 4 (예정)
+## 04_references/ — Phase 4 (완료, 게이트 PASS 2026-06-11)
+
+- `refs.bib` — **인용 정본** (49항목, 전부 공식 BibTeX export 기반, bibtexparser 49/49 검증). 수정 이력은 항목 코멘트 + P4_DIFF_REPORT.
+- `CLAIM_CITATION_MAP.md` (r3) — claim C-001~C-085 ↔ reference 매핑 (VERIFIED 78행). Phase 5 인용 배치의 정본.
+- `VERIFICATION_LEDGER.md` — 통합 마스터 (49행, 2채널 판정) + 상세 4분할 ledger (A1/A2/B1/B2) + `P4_DIFF_REPORT.md` (diff·해소·정오 부기).
+- `REFERENCES_IEEE.md` — IEEE 잠정 정리본 (최종 스타일은 Phase 7 elsarticle).
+- `REFERENCE_LIBRARY_INDEX.md` — card 49 색인 (등급/검증/커버 claim/활용 위치).
+- `library/` — reference card 49 (FULL 22: verbatim 발췌+활용 맥락 / LIGHT 27: 서지+abstract+역할). EXCERPT_UNVERIFIED 잔존 3 (zhang2022selfdistill·xu2018kpivae·ruff2020deepsad — 서지 인용 가능, verbatim 금지).
+- `SCOUT_CANDIDATE_LIST.md`, `VERIFIER_B_SEED.md` — 중간 산출물 (탐색·blind seed).
 
 ## 05_manuscript/ — Phase 5 (예정)
 

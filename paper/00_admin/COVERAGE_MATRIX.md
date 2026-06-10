@@ -19,7 +19,7 @@ last_modified: 2026-06-10
 | T1 | 프로젝트 모든 스크립트·문서(md)·Notion 페이지 정독, 연구 완전 이해 | 1 | DONE | P1: CODEBASE_UNDERSTANDING §1–10 + NOTION_DIGEST §I–IV + CONFERENCE_PDF_DIGEST §①–⑧ + RESEARCH_SYNTHESIS §①–⑨ (r2/r3; 게이트 `99_reviews/p1_coverage_gate_r1.md` PASS) |
 | T2 | 최근 3년 탑티어 AI 학회 리스트업 + 고평가 논문의 논리 흐름·구성·figure/table 패턴 파악 (시계열 이상탐지 필수 포함) | 2 | DONE | P2: VENUE_AND_PAPER_LIST §1·§3 (2024–26 학회 + 14편, TSAD 11편) + STRUCTURE_AND_FIGURE_PATTERNS §A–G + SENTENCE_CORPUS §1–10 (게이트 `99_reviews/p2_coverage_gate_r1.md` PASS) |
 | T3 | 논문 전체 개요·틀: 전체 구성 → 섹션 구성 → 섹션별 내용 → 필요 근거 | 3 | DONE | | / P3: PAPER_BLUEPRINT r3 §2–§8 전체 틀 + PAGE_BUDGET r3 (게이트 `99_reviews/p3_coverage_gate_r1.md` PASS) |
-| T4 | reference 탐색(고퀄리티) + 원문 발췌·활용 맥락 정리 + 서지 철저 검증(할루시네이션 절대 0) + IEEE 스타일 정리 | 4 (+5 보강) | PENDING | |
+| T4 | reference 탐색(고퀄리티) + 원문 발췌·활용 맥락 정리 + 서지 철저 검증(할루시네이션 절대 0) + IEEE 스타일 정리 | 4 (+5 보강) | IN_PROGRESS | | / P4: 49 reference 2채널 독립 검증(A: card↔공식소스 / B: blind DBLP export) + 기계 diff, QUARANTINE 0; 발췌 13건 해소·잔존 3건 2단계 격리; refs.bib(49, 파싱 검증)+REFERENCES_IEEE — 게이트 전수 재감사 + 무작위 16편 재검증 전건 일치 (`99_reviews/p4_coverage_gate_r1.md`; +P5 보강 사이클 잔존) |
 | T5 | 영어 본문 완성 — 완벽하게 완성된 형태, figure/table은 어디에 어떤 형태로 삽입될지 포함 + [placeholder]로 두되 들어갈 내용 서술, 표절 절대 금지(여러 번 체크), T4 reference로 뒷받침 | 5 | PENDING | |
 | T6 | 분야 학술 문체 검증 — AI 티·비관용 표현을 문장 단위로 철저 검사 | 6 | PENDING | |
 | T7 | Elsevier 템플릿 준수 LaTeX(Overleaf) 조판 + placeholder 배치 + PDF 변환·직접 확인 루프 | 7 | PENDING | |
@@ -53,7 +53,7 @@ last_modified: 2026-06-10
 | R23 | hyperparameter 구체값은 꼭 필요한 것만, 주로 일반적 서술 | 5 | PENDING | |
 | R24 | 연구 과정 내부 용어·변수명 그대로 사용 금지 — 출판 수준 표현 | 1(명칭 확인), 5, 6 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §④ 정식 명칭 매핑표 + §⑧ REQUEST-2 RESOLVED |
 | R25 | 코드 git 공개 예정 — 논문에 자연스러우면 넣고 아니면 생략 | 1, 5 | IN_PROGRESS | P1: RESEARCH_SYNTHESIS §⑦ (git 공개 예정 기록) |
-| R26 | Notion 비교 실험 페이지의 비교 모델·데이터셋 reference는 엄격 검증된 truth로 활용 가능 | 1, 4 | IN_PROGRESS | P1: NOTION_DIGEST §I-10·II-2·II-3 [truth 등급 — R26] (Phase 4 공식 소스 재확인 단서 포함) |
+| R26 | Notion 비교 실험 페이지의 비교 모델·데이터셋 reference는 엄격 검증된 truth로 활용 가능 | 1, 4 | DONE | P1: NOTION_DIGEST §I-10·II-2·II-3 [truth 등급 — R26] (Phase 4 공식 소스 재확인 단서 포함) / P4: truth 출발 + 전건 공식 소스 재확인 — venue 정정 4건 (WETAS→ICCV21, TreeMIL→ICASSP24, Dist-PU→CVPR22 미채택, DACAD→TKDE25 본판) |
 | R27 | 구현 방식 과도하게 하나하나 나열 금지 — 필요·핵심 정보만 | 5 | PENDING | |
 | R28 | SWaT '22번 이상 영역' 지배적 거대 → 제외 지표 별도 제시 + 충분한 설명 | 1, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §⑥ (region22 bit-exact 재현) + 271_CONFIG_TRUTH §IV + RESEARCH_SYNTHESIS §④ |
 | R29 | 평가지표 vus_roc/vus_pr/pak_auc_f1/pak_auc_pr/affiliated-f1 — 각 지표가 평가하는 다른 관점·상호보완성 설명 + 전 지표에서 뛰어난 성능 강조 + PA-F1은 전체 관점에서 좋아 제시하되 challenge·문제점을 지적하여 **주 지표로 참고하지 않을 것임을 본문에 명시** | 1, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §④ (5지표 관점·상호보완성·PA-F1 문제점 + 웹 재검증) |
@@ -63,7 +63,7 @@ last_modified: 2026-06-10
 | R33 | Simulation·Exathlon 데이터셋 논문 미포함 | 1, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §① R33 절 + RESEARCH_SYNTHESIS §⑤ 제외 목록 |
 | R34 | Gaussian smoothing 내용 제외 (사용 안 함) | 1, 5 | IN_PROGRESS | P1: 271_CONFIG_TRUTH §VI·§VII#18·§IX (gauss() 실재·271 무참조) + RESEARCH_SYNTHESIS §⑤ (CG-1 패치 완료) |
 | R35 | 너무 지엽적인 것 생략 | 5, 6 | PENDING | |
-| R36 | 뒷받침 근거 필요한데 인용 없는 부분 → 인용 가능 논문 찾아 reference 부착 | 4, 5 | PENDING | |
+| R36 | 뒷받침 근거 필요한데 인용 없는 부분 → 인용 가능 논문 찾아 reference 부착 | 4, 5 | IN_PROGRESS | | / P4: CLAIM_CITATION_MAP C-001~085 전수 매핑 (수요→후보→2채널 검증 VERIFIED 78→배치 추적; P5 보강 루프 잔존) |
 | R37 | ./paper_legacy 작업물 절대 참고 금지 | 0 (전 Phase 상시) | IN_PROGRESS | P0: 전 dispatch 프롬프트에 금지 명문화 (감사 A/B/r2 프롬프트 확인 가능) + `AGENT_ROSTER.md` 공통 규약 ③ |
 
 ## 메타 지시 (M1–M13)
