@@ -36,7 +36,13 @@ last_modified: 2026-06-10
 - `CONFERENCE_PDF_DIGEST.md` (r2) — 학회 발표 34p 전수: 문제 설정(PU), 방법(발표 notation 비계승), baseline 26종, 결론 7 bullet (Phase 3 판단 표시).
 - `RESEARCH_SYNTHESIS.md` (r2+) — 전체 종합: R11 3단 프레이밍(설정/상한 구현/희소화 sweep), R10 원재료 표A, 제외 목록, Phase 3 판단 사안 8건, 정본 우선순위.
 
-## 02_venue_study/ — Phase 2 (예정)
+## 02_venue_study/ — Phase 2 (완료, 게이트 PASS 2026-06-11)
+
+- `VENUE_AND_PAPER_LIST.md` (r2) — 2024–26 탑티어 학회 + Elsevier 저널 관례 + 분석 논문 14편 (TSAD 11편: Anomaly Transformer, DCdetector, NRdetector, CATCH, SARAD, TSB-AD 등). 서지는 Phase 4 재검증 전제.
+- `STRUCTURE_AND_FIGURE_PATTERNS.md` (r2) — intro 4단 논증, contribution bullet 3–4, related work 조직법, method 소절 구조 권장안, figure/table 유형 10종 + 배치·크기, 9페이지 분량 배분안 — Phase 3 직접 입력.
+- `SENTENCE_CORPUS.md` — 11편 92엔트리(verbatim+출처+패턴 해설) + collocation 7범주 + AI-티 금지 패턴 시드 (Phase 6 기준 corpus; 본문 복사 절대 금지 경고).
+- `ANCHOR_SDMAE_DOSSIER.md` (r2) — R21 방어: self-distillation 용어 계보 (Zhang TPAMI 2022 → SDMAE CVPR 2024 → 본 연구), 'coining' 표현 금지 플래그. R9: 유사 12/차이 17 + 위험도 + 포지셔닝 옵션(권장 C: related work distillation 계보 내 1–2문장) + anomaly-map 분기 vs GRL 방어 3축.
+- `NRDETECTOR_DOSSIER.md` (r2) — R16: 실험 구성 전모 (e₁ sweep, baseline 3계층, 11지표). R19: related work 내 baseline 모델명 0건 (grep 검증) → 운영 규칙 3조. R20: 차이축 D1–D9 + "거의 없음" 주장의 정밀 스코핑 (표현 학습-PU 통합 기준).
 
 ## 03_blueprint/ — Phase 3 (예정)
 
@@ -62,3 +68,6 @@ last_modified: 2026-06-10
 - `p1_rereview_{alpha,beta}_r2.md` — 수정분 재리뷰 (잔존 BLOCKER 4건 적발).
 - `p1_fixlog_r3.md` — 잔존 4건 + MINOR 3건 마감 (supersedes 일부 r2 fixlog 행).
 - `p1_coverage_gate_r1.md` — Phase 1 게이트 감사: Directive 18/18 근거 확인 + r3 spot 4/4 VERIFIED.
+- `p2_venue_corpus_r1.md`, `p2_dossiers_r1.md` — Phase 2 리뷰 r1 (할루시네이션 0, verbatim 36건 바이트 대조).
+- `p2_fixlog_r2.md` — 26건 전수 처리 + C-005 표절 고위험 목록 (Phase 5 입력) + Phase 4 인용 후보 (TSB-AD, Zhang TPAMI 2022).
+- `p2_coverage_gate_r1.md` — Phase 2 게이트: 6/6 Directive + spot 7/7 PASS.

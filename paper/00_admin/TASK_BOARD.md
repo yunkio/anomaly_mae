@@ -47,6 +47,17 @@ last_modified: 2026-06-10
 | P1-9b 재리뷰 r2 (α: truth 3종 / β: digest+프로토콜) | 재리뷰어 2인 | DONE | 잔존 B4 적발 → fixer-5 r3 해소 |
 | P1-10 coverage-auditor Phase 1 게이트 감사 | coverage-auditor | DONE | PASS 18/18 + spot 4/4 (`p1_coverage_gate_r1.md`) |
 
+## Phase 2 — 탑티어 논문 구조 연구
+
+| Task | 담당 | 상태 | 비고 |
+|------|------|------|------|
+| P2-1 VENUE_AND_PAPER_LIST + STRUCTURE_AND_FIGURE_PATTERNS | venue-scout | DONE | 14편 TSAD 포함 + Elsevier 관례 절 |
+| P2-2 SENTENCE_CORPUS (Phase 6 기준 corpus) | corpus-collector | DONE | 11편·92엔트리·금지 패턴 시드 |
+| P2-3 ANCHOR_SDMAE_DOSSIER (R21 명명 근거) | anchor-paper-analyst | DONE | self-distilled 명명 원문 확보 |
+| P2-4 NRDETECTOR_DOSSIER (R16/R19/R20) | nrdetector-analyst | DONE | 사용자 중단 시점에 파일 완결 확인 (완결성 리뷰 추가 검증 예정) |
+| P2-5 adversarial 리뷰 (A: venue·구조·corpus / B: dossier 2종) + 수정 루프 | 리뷰어 2인 + fixer | DONE | r1 B0/M4/m15 → fixer 26건 전수 처리 (R21 계보 강화: Zhang TPAMI 2022) |
+| P2-6 coverage 게이트 감사 | coverage-auditor | DONE | PASS 6/6 + spot 7/7 (`p2_coverage_gate_r1.md`) |
+
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 
 | Phase | 핵심 태스크 (마스터 §7) | 엄격 구역 |
