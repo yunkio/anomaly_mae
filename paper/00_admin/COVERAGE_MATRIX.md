@@ -18,7 +18,7 @@ last_modified: 2026-06-10
 |----|------|-----------|------|----------|
 | T1 | 프로젝트 모든 스크립트·문서(md)·Notion 페이지 정독, 연구 완전 이해 | 1 | DONE | P1: CODEBASE_UNDERSTANDING §1–10 + NOTION_DIGEST §I–IV + CONFERENCE_PDF_DIGEST §①–⑧ + RESEARCH_SYNTHESIS §①–⑨ (r2/r3; 게이트 `99_reviews/p1_coverage_gate_r1.md` PASS) |
 | T2 | 최근 3년 탑티어 AI 학회 리스트업 + 고평가 논문의 논리 흐름·구성·figure/table 패턴 파악 (시계열 이상탐지 필수 포함) | 2 | DONE | P2: VENUE_AND_PAPER_LIST §1·§3 (2024–26 학회 + 14편, TSAD 11편) + STRUCTURE_AND_FIGURE_PATTERNS §A–G + SENTENCE_CORPUS §1–10 (게이트 `99_reviews/p2_coverage_gate_r1.md` PASS) |
-| T3 | 논문 전체 개요·틀: 전체 구성 → 섹션 구성 → 섹션별 내용 → 필요 근거 | 3 | PENDING | |
+| T3 | 논문 전체 개요·틀: 전체 구성 → 섹션 구성 → 섹션별 내용 → 필요 근거 | 3 | DONE | | / P3: PAPER_BLUEPRINT r3 §2–§8 전체 틀 + PAGE_BUDGET r3 (게이트 `99_reviews/p3_coverage_gate_r1.md` PASS) |
 | T4 | reference 탐색(고퀄리티) + 원문 발췌·활용 맥락 정리 + 서지 철저 검증(할루시네이션 절대 0) + IEEE 스타일 정리 | 4 (+5 보강) | PENDING | |
 | T5 | 영어 본문 완성 — 완벽하게 완성된 형태, figure/table은 어디에 어떤 형태로 삽입될지 포함 + [placeholder]로 두되 들어갈 내용 서술, 표절 절대 금지(여러 번 체크), T4 reference로 뒷받침 | 5 | PENDING | |
 | T6 | 분야 학술 문체 검증 — AI 티·비관용 표현을 문장 단위로 철저 검사 | 6 | PENDING | |
@@ -28,28 +28,28 @@ last_modified: 2026-06-10
 
 | ID | 요약 | 담당 Phase | 상태 | 충족 근거 |
 |----|------|-----------|------|----------|
-| R1 | Related work·contribution·실험 MECE 구성 | 3, 5, 8 | PENDING | |
-| R2 | 참고자료(특히 Notion) 논리·서술은 참고만 — 충분한 판단 후 활용 (contribution 구조 채택 여부 선판단) | 1, 3 | IN_PROGRESS | P1: NOTION_DIGEST 헤더 R2 경고 + [주장]/[사실] 등급 분리 전 섹션 + CONFERENCE_PDF_DIGEST 헤더·§⑦ + RESEARCH_SYNTHESIS §⑥ (Phase 3 판단 유보) |
+| R1 | Related work·contribution·실험 MECE 구성 | 3, 5, 8 | PENDING | | / P3: BLUEPRINT §4.1·§6.1 + §11 결정① MECE 검증문(주입 vs 기판) |
+| R2 | 참고자료(특히 Notion) 논리·서술은 참고만 — 충분한 판단 후 활용 (contribution 구조 채택 여부 선판단) | 1, 3 | DONE | P1: NOTION_DIGEST 헤더 R2 경고 + [주장]/[사실] 등급 분리 전 섹션 + CONFERENCE_PDF_DIGEST 헤더·§⑦ + RESEARCH_SYNTHESIS §⑥ (Phase 3 판단 유보) / P3: §11 결정① C1–C4 채택/수정/기각 판정표 + stale 판정 (D-005) |
 | R3 | figure/실험 placeholder 틀 + '실험 잘 되었다' 가정 서술 + Notion 하위 페이지에 placeholder별 구체적 한국어 명세 + 실험 데이터 부족 지적 금지(한계 아님) + 캡션·설명은 placeholder여도 완성형 | 5, 7, 8 | PENDING | |
 | R4 | 'AI가 작성한 티'·도메인 비관용·논문 비관용 표현 엄격 검증 | 5, 6 | PENDING | |
-| R5 | notation 오류 없이 + 최대한 일반적·이해 쉬운 방식 (참고자료는 참고만) | 3, 5, 6 | PENDING | |
-| R6 | 분량: appendix·reference 제외, table/figure 합쳐 9page. 크기 넉넉히 가정 | 3, 7 | PENDING | |
-| R7 | Appendix 구성 주의 | 3, 7 | PENDING | |
-| R8 | Contribution 강조 핵심 — novelty 충분 탐색·충분 강조 | 3, 5 | PENDING | |
-| R9 | SDMAE는 핵심 인용이되 과도 유사 인상 금지 — 차이점 나열 방식 금지, 자연스럽게 언급하고 넘어가기 | 2, 3, 5 | IN_PROGRESS | P2: ANCHOR_SDMAE_DOSSIER §4 (유사12/차이17 + 위험도) + §7 포지셔닝 옵션 (권장 C) + §7-2 방어 3축 + §8 |
-| R10 | 각 component마다 "왜 다변량 시계열에서 이렇게 해야만 하는가" 치열하게 고민·반영 | 1, 3, 5 | IN_PROGRESS | P1: RESEARCH_SYNTHESIS §③ 표A "R10 원재료" 열 + §⑨ REQUEST-F |
-| R11 | semi-supervised/PU 환경 집중 — 대부분 unlabeled + 소수 핵심 이상 label, 기존 unsupervised는 labeled 활용 불가가 핵심 | 1, 3, 5 | IN_PROGRESS | P1: RESEARCH_SYNTHESIS §②-1~⑥ (3단 프레이밍) + CODEBASE_UNDERSTANDING §4.3 |
+| R5 | notation 오류 없이 + 최대한 일반적·이해 쉬운 방식 (참고자료는 참고만) | 3, 5, 6 | PENDING | | / P3: §9.1 기호 체계(λ_GRL/λ_rev 분리) + §9.2 금지 사항 |
+| R6 | 분량: appendix·reference 제외, table/figure 합쳐 9page. 크기 넉넉히 가정 | 3, 7 | PENDING | | / P3: PAGE_BUDGET r3 단일 정본 9.0p (D-006⑨) |
+| R7 | Appendix 구성 주의 | 3, 7 | PENDING | | / P3: §8 Appendix A/B/C 계획 + PAGE_BUDGET §5 |
+| R8 | Contribution 강조 핵심 — novelty 충분 탐색·충분 강조 | 3, 5 | PENDING | | / P3: §0.1–0.3 Thesis·차별점 3축 + §11 contribution 4-bullet 재설계 |
+| R9 | SDMAE는 핵심 인용이되 과도 유사 인상 금지 — 차이점 나열 방식 금지, 자연스럽게 언급하고 넘어가기 | 2, 3, 5 | IN_PROGRESS | P2: ANCHOR_SDMAE_DOSSIER §4 (유사12/차이17 + 위험도) + §7 포지셔닝 옵션 (권장 C) + §7-2 방어 3축 + §8 / P3: §4.4 옵션 C + 결정⑤ + §15 방어 + D-007 제목 기각 사유 |
+| R10 | 각 component마다 "왜 다변량 시계열에서 이렇게 해야만 하는가" 치열하게 고민·반영 | 1, 3, 5 | IN_PROGRESS | P1: RESEARCH_SYNTHESIS §③ 표A "R10 원재료" 열 + §⑨ REQUEST-F / P3: §12 논증 배치 전수표(10 component) + §5.2–5.7 |
+| R11 | semi-supervised/PU 환경 집중 — 대부분 unlabeled + 소수 핵심 이상 label, 기존 unsupervised는 labeled 활용 불가가 핵심 | 1, 3, 5 | IN_PROGRESS | P1: RESEARCH_SYNTHESIS §②-1~⑥ (3단 프레이밍) + CODEBASE_UNDERSTANDING §4.3 / P3: §5.2 contaminated semi-supervised 정의 + 결정② (D-005②) |
 | R12 | unsupervised 비교군의 label 활용 최선 = 학습 데이터에서 알려진 이상 제거 (순도 높은 정상 학습) | 1, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §③ (normalonly 구현 file:line) + RESEARCH_SYNTHESIS §④ |
 | R13 | main 실험: 기존 벤치마크는 train에 anomaly 부재가 대부분 → test에 포함된 anomaly를 학습 단계에 반영하기 위해 test를 길이 기준 반반 분할, 앞 50% train 포함. 이때 기존 unsupervised는 알려진 이상 제거로 순도 높은 정상 학습 데이터 구성(이상 포함 시 성능 하락). 시간적으로 뒤쪽 데이터를 test로 사용 + 공정성 위해 취사선택 없이 전 데이터셋 통일 적용 강조 | 1, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §② (//2 전수 라인 + safe-cut 실측) + §① train anomaly 실측 |
 | R14 | 중간 산출물 철저 구조화 + 쉽게 찾을 수 있는 index 유지 | 0, 8 (전 Phase 상시) | IN_PROGRESS | P0: §4 워크스페이스 골격 + `00_admin/INDEX.md` 가동 (frontmatter 규칙 포함) |
-| R15 | 불필요한 신규 축약어 금지 — 단 제목·모델명·모델 축약어는 novelty 부각 방향 | 3, 5, 6 | PENDING | |
-| R16 | NRdetector의 실험 구성·논리 참고 (거의 유일한 시계열 semi-supervised) | 2, 3, 5 | IN_PROGRESS | P2: NRDETECTOR_DOSSIER §1–3 (2-stage PU 구조·정당화 논리·split·라벨 sweep·baseline 3계층·11지표) |
+| R15 | 불필요한 신규 축약어 금지 — 단 제목·모델명·모델 축약어는 novelty 부각 방향 | 3, 5, 6 | PENDING | | / P3: §10 후보 4+5종(장단점) + D-007 선정 (모델명 CSMAD, 제목 후보2) |
+| R16 | NRdetector의 실험 구성·논리 참고 (거의 유일한 시계열 semi-supervised) | 2, 3, 5 | IN_PROGRESS | P2: NRDETECTOR_DOSSIER §1–3 (2-stage PU 구조·정당화 논리·split·라벨 sweep·baseline 3계층·11지표) / P3: §14 논거⑤ NRdetector 선례 + §6.4·§6.8·§4.3 |
 | R17 | 271 config만 사용 — 미사용 option(예: dynamic margin) 전부 무시, metadata+코드 추적으로 사용/미사용 명확 구분 | 1, 5 | IN_PROGRESS | P1: 271_CONFIG_TRUTH §I–VIII (r3; metadata 37 전수 + verifier 2인 + 재리뷰 α + 게이트 spot 4/4) |
 | R18 | 완료 후 "정말 출판된 level의 완성 논문인가" 점검 (placeholder 허용) | 8 | PENDING | |
-| R19 | baseline 전부 related work 언급 불필요 — 단순 비교 모델은 실험 섹션 인용으로 충분(NRdetector 논문 참고). 핵심 계승 요소가 있거나 직접 비교 대상이 되는 경우에만 설명 | 2(근거 수집), 3, 5 | IN_PROGRESS | P2: NRDETECTOR_DOSSIER §4 (related work 내 baseline 0건 grep 검증 + §4.3 운영 규칙 3조) |
-| R20 | SSL/PU related work: 기존 방법론 목표 언급 + 시계열 부재 강조, NRdetector는 차이점 위주 | 2(준비), 3, 5 | IN_PROGRESS | P2: NRDETECTOR_DOSSIER §5 (차이축 D1–D9 + "거의 없음" 정밀 스코핑 + 차이-중심 전략) |
-| R21 | self-distillation 용어 — SDMAE 선례를 방어논리로 (해당 논문의 명명 이유 확인) | 2, 3, 5 | IN_PROGRESS | P2: ANCHOR_SDMAE_DOSSIER §3.5·§5.1 (용어 계보 Zhang TPAMI 2022 → SDMAE → 본 연구; coining 금지 플래그 §9) |
-| R22 | patch/masking 계보는 오직 vision MAE — 시계열 patch 연구와 계승 혼동 금지 | 3, 5 | PENDING | |
+| R19 | baseline 전부 related work 언급 불필요 — 단순 비교 모델은 실험 섹션 인용으로 충분(NRdetector 논문 참고). 핵심 계승 요소가 있거나 직접 비교 대상이 되는 경우에만 설명 | 2(근거 수집), 3, 5 | IN_PROGRESS | P2: NRDETECTOR_DOSSIER §4 (related work 내 baseline 0건 grep 검증 + §4.3 운영 규칙 3조) / P3: §4.2 괄호 클러스터 정책 + §6.5 |
+| R20 | SSL/PU related work: 기존 방법론 목표 언급 + 시계열 부재 강조, NRdetector는 차이점 위주 | 2(준비), 3, 5 | IN_PROGRESS | P2: NRDETECTOR_DOSSIER §5 (차이축 D1–D9 + "거의 없음" 정밀 스코핑 + 차이-중심 전략) / P3: §4.3 시계열 PU/SSL 희소 스코핑 + 차이 중심 |
+| R21 | self-distillation 용어 — SDMAE 선례를 방어논리로 (해당 논문의 명명 이유 확인) | 2, 3, 5 | IN_PROGRESS | P2: ANCHOR_SDMAE_DOSSIER §3.5·§5.1 (용어 계보 Zhang TPAMI 2022 → SDMAE → 본 연구; coining 금지 플래그 §9) / P3: §4.4 용어 계보 + 결정⑤ 각주 초안 |
+| R22 | patch/masking 계보는 오직 vision MAE — 시계열 patch 연구와 계승 혼동 금지 | 3, 5 | PENDING | | / P3: §4.4 vision MAE 직접 계보 vs 독립 수렴 + §5.4 원칙 |
 | R23 | hyperparameter 구체값은 꼭 필요한 것만, 주로 일반적 서술 | 5 | PENDING | |
 | R24 | 연구 과정 내부 용어·변수명 그대로 사용 금지 — 출판 수준 표현 | 1(명칭 확인), 5, 6 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §④ 정식 명칭 매핑표 + §⑧ REQUEST-2 RESOLVED |
 | R25 | 코드 git 공개 예정 — 논문에 자연스러우면 넣고 아니면 생략 | 1, 5 | IN_PROGRESS | P1: RESEARCH_SYNTHESIS §⑦ (git 공개 예정 기록) |
@@ -59,7 +59,7 @@ last_modified: 2026-06-10
 | R29 | 평가지표 vus_roc/vus_pr/pak_auc_f1/pak_auc_pr/affiliated-f1 — 각 지표가 평가하는 다른 관점·상호보완성 설명 + 전 지표에서 뛰어난 성능 강조 + PA-F1은 전체 관점에서 좋아 제시하되 challenge·문제점을 지적하여 **주 지표로 참고하지 않을 것임을 본문에 명시** | 1, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §④ (5지표 관점·상호보완성·PA-F1 문제점 + 웹 재검증) |
 | R30 | threshold = test anomaly 비율 — threshold 무관 지표 병행 + 평가 protocol일 뿐임을 설득력 있게 (cherry-picking 인상 금지) | 1, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §⑤ (AR threshold file:line) + §⑧ REQUEST-1 RESOLVED |
 | R31 | 공정성 방어: label 활용 가능한 기존 시계열 모델 부족 + unsupervised의 label 활용 방식 제공 — 설득력 필수 | 1, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §③ 방어 논리 재료 + RESEARCH_SYNTHESIS §②-5 |
-| R32 | 라벨 희소화 sweep 실험 포함 + unlabeled anomaly 혼입 시 강건한 이유의 논리적 설명 | 1, 3, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §⑦ (미구현 사실 + placeholder 설계 입력) + RESEARCH_SYNTHESIS §②-3·§⑨ REQUEST-C |
+| R32 | 라벨 희소화 sweep 실험 포함 + unlabeled anomaly 혼입 시 강건한 이유의 논리적 설명 | 1, 3, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §⑦ (미구현 사실 + placeholder 설계 입력) + RESEARCH_SYNTHESIS §②-3·§⑨ REQUEST-C / P3: §6.8 sweep 설계 + 강건성 4논리 + Fig.3 + TODO |
 | R33 | Simulation·Exathlon 데이터셋 논문 미포함 | 1, 5 | IN_PROGRESS | P1: EXPERIMENT_PROTOCOL_TRUTH §① R33 절 + RESEARCH_SYNTHESIS §⑤ 제외 목록 |
 | R34 | Gaussian smoothing 내용 제외 (사용 안 함) | 1, 5 | IN_PROGRESS | P1: 271_CONFIG_TRUTH §VI·§VII#18·§IX (gauss() 실재·271 무참조) + RESEARCH_SYNTHESIS §⑤ (CG-1 패치 완료) |
 | R35 | 너무 지엽적인 것 생략 | 5, 6 | PENDING | |

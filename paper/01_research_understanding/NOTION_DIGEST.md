@@ -164,8 +164,8 @@ anomaly 패치가 budget(8) 이하이면 anomaly 전부 마스킹 + 나머지는
 | 400 | 0.995 |
 | 499 | ≈1.000 |
 
-**[검증된 사실 후보 — Teacher-only Warmup 메커니즘 (Page 0 §3.5)]**
-Epoch < 250 구간에서 **Student 디코더 forward는 수행되지만**, loss.py의 `teacher_only=True` 플래그로 모든 discrepancy/FM/GRL 손실 항이 비활성화된다. Total loss = L_recon 단독 → 인코더와 Teacher만 학습 (Student forward는 metric 계산용 유지, backward 영향 없음). — 논문 학습 절차 서술에 필요한 메커니즘.
+**[Notion의 주장 — Teacher-only Warmup 메커니즘 (Page 0 §3.5) — STALE, 정본이 supersede]**
+Epoch < 250 구간에서 Student 디코더 forward가 수행된다는 본 Page 0 서술은 **2026-05-29 코드 변경(271 실행 이전) 이후 stale** — 실제 271 학습 경로에서는 `trainer.py:526–535` + `model.py:1119` 게이트로 **student forward 자체가 skip**된다 (평가 경로는 full forward). 정본: 271_CONFIG_TRUTH r4 §VIII (P3 fixlog r3 cross-ref, 2026-06-11). 손실 비활성화(L_recon 단독) 자체는 사실.
 
 **[검증된 사실 후보 — 학습 인프라 (Page 0 §4)]**
 - **AMP**: `use_amp=True`, `amp_dtype='bf16'` (2026-05-27 fp16→bf16 변경 — fp32 exponent range로 SCAD logsumexp/focal exp(-bce)에 안전, GradScaler 불필요, CUDA capability ≥8.0 필요. 'fp16'은 pre-flip 재현용).

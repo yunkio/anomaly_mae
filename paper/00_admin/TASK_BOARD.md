@@ -58,6 +58,19 @@ last_modified: 2026-06-10
 | P2-5 adversarial 리뷰 (A: venue·구조·corpus / B: dossier 2종) + 수정 루프 | 리뷰어 2인 + fixer | DONE | r1 B0/M4/m15 → fixer 26건 전수 처리 (R21 계보 강화: Zhang TPAMI 2022) |
 | P2-6 coverage 게이트 감사 | coverage-auditor | DONE | PASS 6/6 + spot 7/7 (`p2_coverage_gate_r1.md`) |
 
+## Phase 3 — 논문 블루프린트
+
+| Task | 담당 | 상태 | 비고 |
+|------|------|------|------|
+| P3-1 PAPER_BLUEPRINT + PAGE_BUDGET | narrative-architect | DONE | r1 |
+| P3-2 red-team 비판 | outline-red-teamer | DONE | B3/M10 |
+| P3-3 adversarial 리뷰 | adversarial-reviewer | DONE | B5/M12 |
+| P3-4 개정 r2 (49건 전수) | blueprint-reviser | DONE | 8 BLOCKER 해소 |
+| P3-5 재리뷰 r2 (양 관점) | 재리뷰어 2인 | DONE | RT: PASS_WITH_CONDITIONS / ADV: 신규 B2 적발 (GRL 이중 λ, warmup forward skip) |
+| P3-6 P1 정본 회귀 보강 + r3 | fixer | DONE | 271_CONFIG_TRUTH r4 + CODEBASE r4 + SYNTHESIS r3 + 블루프린트 r3 |
+| P3-7 모델명·제목 선정 (R15) | orchestrator | DONE | D-007: CSMAD + "Label-Aware Masked Autoencoding with Gradient Reversal…" |
+| P3-8 coverage 게이트 감사 | coverage-auditor | DONE | PASS (spot 6/6, `p3_coverage_gate_r1.md`) + NOTE 2건 orchestrator 패치 |
+
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 
 | Phase | 핵심 태스크 (마스터 §7) | 엄격 구역 |

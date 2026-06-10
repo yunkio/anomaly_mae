@@ -2,14 +2,15 @@
 phase: 1
 agent: research-archaeologist
 directives: [T1]
-last_modified: 2026-06-10
-revision: r3 (reconciler 정정 + fixer-2 리뷰 반영 — paper/99_reviews/p1_codebase_synthesis_r1.md 전수 처리, fixlog: p1_codebase_synthesis_fixlog_r2.md)
+last_modified: 2026-06-11
+revision: r4 (P3 재리뷰 escalation 반영 — GRL 이중 λ 구조(λ_rev sigmoid ramp) + warmup student-forward skip 동기화; fixlog: paper/99_reviews/p3_fixlog_r3.md)
 ---
 
 # TSMAE Codebase Understanding
 
 > **2026-06-10 reconciler 정정: 271_CONFIG_TRUTH 기준 정합화 (수정 목록은 말미).**
 > **2026-06-10 fixer-2 정정(2차): adversarial review `paper/99_reviews/p1_codebase_synthesis_r1.md` 반영 — adaptive lambda 3경로 분리, leave-one-out 추론 방식, focal loss 비표준형 플래그, threshold/coverage/PA%K 서술 정밀화 (수정 목록은 말미 부록 2).**
+> **2026-06-11 fixer 보강(r4): P3 재리뷰 escalation — GRL **반전 계수 λ_rev**(Ganin sigmoid ramp, 손실 가중치 λ_GRL과 별개·271 활성) 등재 + warmup 중 학습 경로 student forward skip 정밀화 (수정 목록은 말미 부록 3; 271_CONFIG_TRUTH r4와 정합).**
 > 초판은 exp271을 `CONFIG_PRESETS['A']`(Set A) 아키타입으로 가정했으나, 1차 소스 재추적 결과
 > exp271(=`271_20260602_020545_271canon_baseline`)은 **Set C 기반 + 대량 config override**로 실행되었다
 > (근거: 전 37 entity `experiment_metadata.json` config 블록; `summary.json: "config_set": "C"`;
@@ -102,7 +103,8 @@ Set C uses `linear`; Sets A and B use `patch_cnn`. `scripts/run_base_experiments
 When `use_grl=True` (exp271): an `AnomalyClassifierHead` is attached to the student decoder hidden states. Its gradient is reversed via `GradientReversalFunction` (DANN-style; identity forward / `-lambda × grad` backward, `model.py:129–140`), making **the student decoder** produce anomaly-uninformative (suppressed) representations — head docstring: "GRL for adversarial feature suppression" (`model.py:143–144`). 정정(2026-06-10 reconciler): 초판의 "making the encoder produce …"는 오류 — student path는 `latent_visible.detach()`로 encoder와 gradient가 차단되므로(`model.py:1123–1126`) 역전된 gradient는 student decoder(+ student mask token/decoder pos-enc)에만 도달하고 encoder에는 도달하지 않는다. Student가 anomaly-identity 정보를 표현하지 못하게 되어 anomaly를 정상처럼 복원 → teacher와의 discrepancy가 anomaly에서 증폭된다. `mae_anomaly/model.py:129–190`
 
 - `grl_target_mode='window'` (exp271): all patches in anomaly window share target=1. `mae_anomaly/config.py:131`
-- `grl_adaptive_lambda=True` (exp271): λ_GRL auto-balanced — trainer 내 **inline gradient-ratio 공식** `λ_GRL = clamp(‖∇_w L_total_main‖ / (‖∇_w L_GRL_cls‖ + 1e-4), 0, 10)` (w = student decoder 마지막 파라미터; `trainer.py:752–760`). 정정(fixer-2, BLK-001): `loss.py:683`의 VQGAN-style `compute_adaptive_lambda`와는 **별개 코드** — 그 함수는 discriminator 전용이며 GRL은 호출하지 않는다 (§2.6 참조).
+- `grl_adaptive_lambda=True` (exp271): λ_GRL auto-balanced — trainer 내 **inline gradient-ratio 공식** `λ_GRL = clamp(‖∇_w L_total_main‖ / (‖∇_w L_GRL_cls‖ + 1e-4), 0, 10)` (w = student decoder 마지막 파라미터; `trainer.py:752–760`). 정정(fixer-2, BLK-001): `loss.py:683`의 VQGAN-style `compute_adaptive_lambda`와는 **별개 코드** — 그 함수는 discriminator 전용이며 GRL은 호출하지 않는다 (§2.6 참조). **주의(r4)**: 이 λ_GRL은 **손실 항 가중치**다 — backward의 gradient 반전 곱셈 계수가 아님(아래 λ_rev).
+- **GRL 반전 계수 λ_rev — 손실 가중치 λ_GRL과 별개의 이중 λ 구조 (r4 신설, P3 NEW-B1 escalation)**: `GradientReversalFunction.backward`의 곱셈 계수(`-lambda × grad`의 lambda)는 λ_GRL이 아니라 **Ganin-style sigmoid ramp** λ_rev다. trainer가 매 epoch(train_epoch 전) `model._grl_lambda = 2/(1+exp(−10·p))−1`, `p = clip((epoch−warmup+1)/(num_epochs−warmup), 0, 1)`로 설정 (`trainer.py:1201–1211`; warmup 중 0.0 :1209; exp271은 warmup=250, num_epochs=500 → 0-based epoch 250에서 ≈0.020, epoch 499에서 ≈0.9999). 게이트는 `use_grl`뿐 — **exp271 활성**. 소비처는 `model.py:1152–1153`(`anomaly_classifier(student_hidden, lambda_grl)`) 단일(grep 전수 — 대입 지점 trainer.py:1209/1211 뿐). student hidden 도달 adversarial gradient = `−λ_rev × λ_GRL_eff × ∂L_cls/∂(GRL 출력)`. FM에는 대응 메커니즘 없음 — sigmoid ramp는 GRL 반전 계수 전용. (271_CONFIG_TRUTH §VIII GRL Details r4 정합.)
 - `grl_cls_lr_ratio=0.1` (exp271): classifier LR = 0.1 × main LR. `mae_anomaly/config.py:150`
 - `grl_use_focal=True` (exp271): focal loss (γ=2) on classifier. `mae_anomaly/config.py:147`
 
@@ -218,9 +220,9 @@ L_total = L_recon + (L_OD + fm_loss_weight × L_FM)              (loss.py:438)
 - `λ_FM  = clamp(‖∇_w L_total_main‖ / (‖∇_w L_FM‖ + 1e-4), 0, 10)` (`trainer.py:639–653`)
 - 두 λ 모두 w = student decoder 마지막 파라미터 기준이고, 적용값은 직전 epoch 집계값(`_prev_epoch_grl_lambda`/`_prev_epoch_fm_lambda`, `trainer.py:1298–1306`).
 
-During teacher-only warmup: `L_total = L_recon` only.
+During teacher-only warmup: `L_total = L_recon` only (학습 경로 student forward 자체가 skip — §5.3, r4).
 
-After warmup: anomaly_loss is ramped via warmup_factor (linear from 0→1 over `max(teacher_only_warmup_epochs // 5, 2)` epochs after warmup end — 271에서는 `max(250//5, 2) = 50` epochs). 정정(2026-06-10 reconciler): 초판의 "`warmup_epochs//5`"는 변수 혼동 — 기준은 LR warmup(`warmup_epochs=10`)이 아니라 teacher-only warmup(250)이다 (`trainer.py` `_compute_warmup_factor`: `warmup_length = max(student_start // 5, 2)`, `student_start = config.teacher_only_warmup_epochs`). `mae_anomaly/trainer.py:336–348`
+After warmup: anomaly_loss is ramped via warmup_factor (linear from 0→1 over `max(teacher_only_warmup_epochs // 5, 2)` epochs after warmup end — 271에서는 `max(250//5, 2) = 50` epochs). 정정(2026-06-10 reconciler): 초판의 "`warmup_epochs//5`"는 변수 혼동 — 기준은 LR warmup(`warmup_epochs=10`)이 아니라 teacher-only warmup(250)이다 (`trainer.py` `_compute_warmup_factor`: `warmup_length = max(student_start // 5, 2)`, `student_start = config.teacher_only_warmup_epochs`). `mae_anomaly/trainer.py:336–348` **단(r4): exp271에서는 anomaly_loss가 하드 제로(`grl_disable_anomaly_loss=True` → `loss.py:259–261`)라 이 ramp는 no-op** (§2.2; 271_CONFIG_TRUTH §VIII r2 정합). GRL·FM **손실 항**은 ramp 없이 epoch 250부터 즉시 투입되나, GRL **반전 계수 λ_rev**는 sigmoid ramp로 0→≈1 점진 증가 (§1 GRL bullet, r4).
 
 ### 2.6 Adaptive Lambda — 세 가지 별개 경로 (정정: fixer-2, BLK-001/BLK-003)
 
@@ -248,6 +250,8 @@ w = `student_decoder.parameters()` 마지막 원소. 분자는 (1)처럼 normal/
 ```
 
 공통: (2)(3)의 적용값은 당-batch 계산값이 아닌 **직전 epoch 집계값**(`_prev_epoch_grl_lambda` / `_prev_epoch_fm_lambda`, 초기값 1.0 `trainer.py:189–190`, epoch 말 갱신 `trainer.py:1298–1306`; batch 값은 모니터링용 로깅만). 논문 method에 λ를 기술할 때 (2)(3)의 공식을 사용해야 하며, (1)의 VQGAN-style 공식을 GRL/FM에 귀속시키면 안 된다.
+
+**(별개 메커니즘) GRL 반전 계수 λ_rev — 위 adaptive λ 3경로와 독립 (r4 신설)**: (1)–(3)은 전부 **손실 항 가중치**다. GRL에는 추가로 backward 곱셈 계수 λ_rev(Ganin-style sigmoid ramp `2/(1+exp(−10p))−1`, p = student-phase 진행률; `trainer.py:1201–1211` 매 epoch 설정 → `model.py:1152–1153` 소비)가 존재하며 **exp271 활성** — §1 GRL bullet 참조. 논문 method에서 GRL을 기술할 때 λ_GRL(손실 가중)과 λ_rev(반전 계수)를 단일 λ로 합치면 안 된다 (P3 NEW-B1 재발 방지).
 
 ---
 
@@ -393,11 +397,12 @@ Linear warmup for `warmup_epochs=10`: `LinearLR(start_factor=1e-4)` → 시작 L
 ### 5.3 Warmup Phase (teacher-only)
 
 For the first `teacher_only_warmup_epochs` epochs — code default는 `-1`(auto: `num_epochs // 2`, `trainer.py:43–48`)이나 **271 config에서는 명시적 250** (metadata `teacher_only_warmup_epochs=250`, `num_epochs=500`; 초판의 "25/50-epoch" 가정은 Set A 기준 오류):
-- `model.forward(teacher_only=True)` — student decoder, GRL, SCAD head are all skipped.
-- `loss.py` receives `teacher_only=True` → only reconstruction loss is computed, disc/FM/GRL = 0.
-- The student decoder weights are at random init during this phase.
+- `model.forward(teacher_only=True)` — **학습 경로에서 student decoder, GRL classifier, SCAD head의 forward 자체가 skip** (r4 file:line 보강: `trainer.py:526–535` 전파 → `model.py:1119` 게이트 `… and not teacher_only`; 2026-05-29 변경 — 271 실행 2026-06-02 이전 반영). 평가/시각화 경로는 `teacher_only=False` 기본값으로 full forward 유지.
+- `loss.py` receives `teacher_only=True` → only reconstruction loss is computed, disc/FM/GRL = 0 (`loss.py:213` 게이트 — forward-skip의 이중 방어; `student_output=None` 처리 `loss.py:193`).
+- The student decoder weights are at random init during this phase. Student 학습은 0-based epoch 250(=251번째 epoch)부터 개시.
+- GRL 반전 계수 λ_rev도 warmup 중 0.0으로 고정 (`trainer.py:1209`; r4 — §1 GRL bullet).
 
-After warmup: `warmup_factor` ramps anomaly_loss from 0 to 1 over `max(teacher_only_warmup_epochs//5, 2)` post-warmup epochs. `mae_anomaly/trainer.py:336–348`
+After warmup: `warmup_factor` ramps anomaly_loss from 0 to 1 over `max(teacher_only_warmup_epochs//5, 2)` post-warmup epochs. `mae_anomaly/trainer.py:336–348` (exp271에서는 anomaly_loss 하드 제로라 **no-op** — §2.5, r4.)
 
 Optional: `use_teacher_warmup_early_stop=False` (exp271). When enabled, warmup ends early based on `recon_snr` plateau detection.
 
@@ -642,3 +647,12 @@ The `eval_fm_weight` field (config.py:217) has comment "UNUSED in score since 20
 10. **[NOTE-004] SMAP/MSL safe-cut 코드 확정** (§4.1): `safe_cut_margin=10` (`datasets/loaders.py:2527`), `_find_safe_cut_point` (`loaders.py:1050, 2591–2596`) — "±10" 근거 코드로 확인.
 11. **[BLK-005 정합화] §4.3**: "PU-like / ~5%" 서술 → 3단 프레이밍(설정 R11 / main 구현 = label 상한 케이스 R13 / 희소화 sweep 계획 R32) + 실측 train anomaly 0.52–6.20%로 교체.
 12. **FEEDBACK(grl_pos_weight)**: dataset-specific 자동 설정 metadata 실측(예: SWaT 59.18)으로 부분 해소.
+
+---
+
+## 부록 3: 2026-06-11 fixer 정정 목록 (r4 — P3 재리뷰 escalation 동기화)
+
+리뷰 출처: `paper/99_reviews/p3_rereview_adversarial_r2.md` NEW-B1/NEW-B2 (근본 원인 = Phase 1 정본의 메커니즘 누락). 처리표: `paper/99_reviews/p3_fixlog_r3.md`. 271_CONFIG_TRUTH(r4)·RESEARCH_SYNTHESIS(r3)와 동시 동기화 — 전 건 코드 1차 소스 재검증.
+
+1. **[NEW-B1] GRL 반전 계수 λ_rev 등재** (§1 GRL bullet 신설, §2.6 별개 메커니즘 절 신설, §2.5 주석): `GradientReversalFunction.backward`의 곱셈 계수는 손실 가중치 λ_GRL이 아니라 Ganin-style sigmoid ramp λ_rev = `2/(1+exp(−10p))−1`, p = student-phase 진행률 (`trainer.py:1201–1211` 매 epoch 설정, warmup 중 0.0; 소비처 `model.py:1152–1153` 단일). exp271 활성 — 이중 λ 구조(λ_GRL 손실 가중 × λ_rev 반전 계수) 명시, 단일 λ 합산 서술 금지.
+2. **[NEW-B2] §5.3 warmup forward-skip file:line 보강 + no-op 명시**: 기존 "skipped" 서술은 정확했으나 근거 라인 미등재 → `trainer.py:526–535`(전파)·`model.py:1119`(게이트)·`loss.py:193/213`(None 처리·이중 방어) 명기; 평가 경로 full forward 구분; student 학습 개시 = 0-based epoch 250. §2.5/§5.3의 anomaly-loss ramp 서술에 271 no-op 주석 추가(grl_disable_anomaly_loss → loss.py:259–261; 271_CONFIG_TRUTH r2 V2-B2와 정합 — 잔존 모순 제거).

@@ -44,7 +44,10 @@ last_modified: 2026-06-10
 - `ANCHOR_SDMAE_DOSSIER.md` (r2) — R21 방어: self-distillation 용어 계보 (Zhang TPAMI 2022 → SDMAE CVPR 2024 → 본 연구), 'coining' 표현 금지 플래그. R9: 유사 12/차이 17 + 위험도 + 포지셔닝 옵션(권장 C: related work distillation 계보 내 1–2문장) + anomaly-map 분기 vs GRL 방어 3축.
 - `NRDETECTOR_DOSSIER.md` (r2) — R16: 실험 구성 전모 (e₁ sweep, baseline 3계층, 11지표). R19: related work 내 baseline 모델명 0건 (grep 검증) → 운영 규칙 3조. R20: 차이축 D1–D9 + "거의 없음" 주장의 정밀 스코핑 (표현 학습-PU 통합 기준).
 
-## 03_blueprint/ — Phase 3 (예정)
+## 03_blueprint/ — Phase 3 (완료, 게이트 PASS 2026-06-11)
+
+- `PAPER_BLUEPRINT.md` (r3) — **Phase 4·5의 1차 입력.** 전체 섹션 구조(Elsevier: abstract/keywords/highlights 포함), contribution 4-bullet (D-005①), setting="contaminated semi-supervised"(D-005②), R10 논증 배치 전수표(§12), related work 전략(§4 — R9 옵션 C·R19 클러스터 인용·R20 스코핑·R22 계보), 프로토콜 방어 5논거(§14)+reject 시나리오(§15), Table 4 protocol-effect 보조분석, ablation 계획(§6.7), 모델명·제목 확정(§10=D-007: CSMAD), 인용 수요 목록(Phase 4 입력).
+- `PAGE_BUDGET.md` (r3) — **분량 단일 정본**: 1.6/1.1/2.7/3.3/0.3=9.0p + figure/table 크기 가정 + 단어수 환산 + 초과 시 fallback 사다리.
 
 ## 04_references/ — Phase 4 (예정)
 
