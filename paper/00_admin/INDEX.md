@@ -66,7 +66,10 @@ last_modified: 2026-06-10
 - `INTEGRATION_REPORT_v1.md`, `SURGERY_REPORT_v2.md` — 통합·분량 수술 기록 (분량 추정 10.42p, Phase 7 실측 판정 인계 — D-010 ⑤).
 - `sections/` — 섹션별 초안 (이력).
 
-## 06_style_audit/ — Phase 6 (예정)
+## 06_style_audit/ — Phase 6 (완료, 게이트 PASS 2026-06-11)
+
+- `AI_PHRASING_LEDGER.md` — corpus 기반 금지 패턴 + 검출 52건 (em-dash 패턴 등). `STYLE_AUDIT_A.md` (영어 산문 품질 88건) / `STYLE_AUDIT_B.md` (분야 관용 67건) / `TERMINOLOGY_AUDIT.md` (Q1/Q3 판정·약어 인벤토리·notation).
+- 결과물은 `05_manuscript/MANUSCRIPT_v3.md` — **현 본문 정본** (문체 패스 + 회귀 검사 통과; MINOR 4건 Phase 7 polish 이월 D-011).
 
 ## 07_latex/ — Phase 7 (예정)
 

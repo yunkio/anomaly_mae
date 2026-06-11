@@ -97,6 +97,18 @@ last_modified: 2026-06-10
 | P5-5 종합 수정 → MANUSCRIPT_v2 | comprehensive fixer | DONE | 94건 처리 + 정본 errata 2건 |
 | P5-6 coverage 게이트 (마감+재추적+A8 스윕+Directive 32) | coverage-auditor | DONE | 조건부 FAIL(F-1 1문장) → orchestrator 정정 → PASS |
 
+## Phase 6 — 학술 문체 정밀 검증
+
+| Task | 담당 | 상태 | 비고 |
+|------|------|------|------|
+| P6-1 ai-phrasing 전수 (corpus 기준) | ai-phrasing-detector | DONE | 187문장, MUST 11 |
+| P6-2 style 감사 A (자연스러움) | style-auditor-A | DONE | 중단 1회 재dispatch; 214문장, MUST 25 |
+| P6-3 style 감사 B (분야 관용) | style-auditor-B | DONE | 67건, Moderate 3 |
+| P6-4 terminology 정합 | terminology-normalizer | DONE | Q1/Q3 11곳 판정 (매핑 정확 확인) |
+| P6-5 fixer → MANUSCRIPT_v3 | style-fixer | DONE | 전수 처리 + 의미 보존 거부 16건 (audit 사실 오류 3건 교정) |
+| P6-6 수정분 재검사 + 회귀 2종 (표절·truth) | 재검사 3인 | DONE | 회귀 0·truth PASS·신규 MAJOR 3 → orchestrator touch-up |
+| P6-7 coverage 게이트 | coverage-auditor | DONE | PASS (`p6_coverage_gate_r1.md`); MINOR 4 waive (D-011) |
+
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 
 | Phase | 핵심 태스크 (마스터 §7) | 엄격 구역 |

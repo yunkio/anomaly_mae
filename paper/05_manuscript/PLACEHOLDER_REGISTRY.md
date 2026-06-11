@@ -1,9 +1,22 @@
 ---
-phase: 5
-agent: budget-surgeon + appendix-drafter (v2-r2); comprehensive-fixer (v2-r3)
-version: v2-r3
-directives: [T5, D-009, D-010, R3, R7]
+phase: 6
+agent: budget-surgeon + appendix-drafter (v2-r2); comprehensive-fixer (v2-r3); style-fixer (v3-r1)
+version: v3-r1
+directives: [T5, T6, D-009, D-010, R3, R7, R24]
 last_modified: 2026-06-11
+v3_r1_changes: |
+  P6 style sync (target file now MANUSCRIPT_v3.md; fixlog: paper/99_reviews/p6_style_fixlog_r1.md):
+  ① R24 condition renaming applied to captions/specs (semantics verified, NOT inverted):
+    Q3 (code: normalonly = anomaly excision) → "anomaly-excised condition";
+    Q1 (code: full = no excision) → "contaminated-training condition".
+    Affected entries: FIG-1, FIG-3, TAB-2 (caption + row structure), TAB-B1
+    (title + caption + spec), NUM-013 source note. TAB-4 audit-trail text kept as
+    historical record.
+  ② Sync-group A wording: "113 learning units / 114 evaluation units" →
+    "113 entities / 114 evaluation conditions" (manuscript §4.1.1 terminology fix).
+  ③ TAB-2 caption: "self-deactivating" → "automatically inactive" (matches §4.2 prose).
+  Captions produced in Phase 6/7 must use the renamed conditions and Table C.2 notation
+  (which now also lists r-bar, d-bar, c, epsilon).
 v2_r3_changes: |
   P5 fix round (target file now MANUSCRIPT_v2.md; fixlog: paper/99_reviews/p5_fixlog_r2.md):
   ① §7.3 Table A.2 source corrected — the former "batch 1024/512" attribution to
@@ -45,7 +58,7 @@ conventions: |
 
 ### FIG-1 — Setting-comparison diagram
 - **Type**: figure | **Location**: §1, after Para 3 (observation paragraph), before the contribution paragraph
-- **Caption (complete)**: "Figure 1. Three training paradigms for multivariate time series anomaly detection under a contaminated training stream. *Left (unsupervised)*: labeled anomalies are invisible to the model and act purely as contamination of the all-normal assumption. *Middle (label-aware filtering)*: labeled anomaly windows are excised before unsupervised training (Q3 condition) — contamination is removed but the label information is discarded. *Right (CSMAD)*: labeled anomalies are integrated into training through three paths — anomaly-priority masking, loss bifurcation, and gradient-reversal suppression — turning contamination into a learning signal."
+- **Caption (complete)**: "Figure 1. Three training paradigms for multivariate time series anomaly detection under a contaminated training stream. *Left (unsupervised)*: labeled anomalies are invisible to the model and act purely as contamination of the all-normal assumption. *Middle (label-aware filtering)*: labeled anomaly windows are excised before unsupervised training (the anomaly-excised condition; §4.1.4) — contamination is removed but the label information is discarded. *Right (CSMAD)*: labeled anomalies are integrated into training through three paths — anomaly-priority masking, loss bifurcation, and gradient-reversal suppression — turning contamination into a learning signal."
 - **Content spec**: 3-panel horizontal diagram; identical input stream strip (normal segments + red labeled-anomaly segments) on top of each panel; per-panel flow glyphs (model box + how labels flow: ignored / excised / three arrows into masking-loss-gradient). Terminology must match §1 bullet 2 (anomaly-priority masking, loss bifurcation, gradient reversal suppression).
 - **Size assumption**: full-width, ~5 cm height ≈ **0.40p** (PAGE_BUDGET §3)
 
@@ -58,7 +71,7 @@ conventions: |
 
 ### FIG-3 — Label sparsity sweep
 - **Type**: figure | **Location**: §4.4, after the "Results" lead sentence
-- **Caption (complete, from experiments.md spec)**: "Figure 3. Label sparsity sweep. PA%K-AUC F1 as a function of the labeled anomaly fraction $p \in \{0.1, 0.25, 0.5, 0.75, 1.0\}$ for [N] representative datasets (one line per dataset). Dashed horizontal lines indicate the performance of the best unsupervised baseline (Q3, main protocol) on the corresponding dataset, providing the unsupervised floor. $p = 1.0$ corresponds to the main experimental setting; $p \to 0$ approximates the fully unsupervised limit."
+- **Caption (complete, from experiments.md spec)**: "Figure 3. Label sparsity sweep. PA%K-AUC F1 as a function of the labeled anomaly fraction $p \in \{0.1, 0.25, 0.5, 0.75, 1.0\}$ for [N] representative datasets (one line per dataset). Dashed horizontal lines indicate the performance of the best unsupervised baseline (anomaly-excised condition, main protocol) on the corresponding dataset, providing the unsupervised floor. $p = 1.0$ corresponds to the main experimental setting; $p \to 0$ approximates the fully unsupervised limit."
 - **Content spec**: X = labeled fraction $p$; Y = PA%K-AUC F1; one solid line per dataset (2–3 recommended) + one dashed reference line per dataset; all data points pending the label-sparsity sweep runs (EXPERIMENT_EXECUTION_TODO). Dataset count = NUM-026.
 - **Size assumption**: half-width / full-width ~4 cm ≈ **0.33p** (PAGE_BUDGET §3)
 
@@ -86,8 +99,8 @@ conventions: |
 
 ### TAB-2 — Main comparison results + protocol-effect block (v2-r2: TAB-4 absorbed — D-010 ①)
 - **Type**: table | **Location**: §4.2, after the lead paragraph
-- **Caption (complete, v2-r2 — TAB-4 caption merged)**: "Table 2. Main comparison results under the contaminated benchmark protocol (Q3 condition for unsupervised baselines; Q1 for weakly supervised baselines). Reported metrics: PA%K-AUC F1 and VUS-PR; the remaining three metrics are in Appendix §A.5. SWaT column uses the excl22 evaluation condition; full-condition results appear in Appendix §A.4. SMD, SMAP, and MSL values are macro-averages over all entities (per-entity results in Appendix §A.6). Bold = highest; underline = second-highest. *Bottom block (protocol effect, Section 4.2)*: CSMAD and [N] representative unsupervised baselines under a standard clean-train split (original training file only, no labeled anomalies), evaluated on the identical held-out evaluation suffix; standard-split CSMAD uses the identical configuration with all label-dependent paths self-deactivating in the absence of positive training windows. Cells are populated only for the representative protocol-effect dataset columns; the contaminated-protocol counterparts are the corresponding main-block rows."
-- **Row structure (27 main rows in 7 groups + bottom block)**: Simple (5: random, sensor-range, PCA, L2-norm, NN-distance) / Neural (3: MLP, MLPMixer, Transformer) / GCN-LSTM (1) / SOTA legacy (6: Anomaly Transformer, TranAD, USAD, DAGMM-simplified, GDN, OmniAnomaly) / SOTA recent (7: TFMAE, NPSR, TimesNet, DCdetector, MEMTO, ModernTCN, CATCH) / Weakly supervised — Q1 only (4: DeepMIL, WETAS, TreeMIL, NRdetector) / **CSMAD (ours)** / **Protocol-effect block (standard clean-train split)**: {CSMAD, Baseline A, Baseline B, [Baseline C]} — baseline count = NUM-014; rows filled only for the protocol-effect datasets (other family columns "—")
+- **Caption (complete, v3-r1 — TAB-4 caption merged; conditions renamed per R24)**: "Table 2. Main comparison results under the contaminated benchmark protocol (anomaly-excised condition for unsupervised baselines; contaminated-training condition for weakly supervised baselines; §4.1.4). Reported metrics: PA%K-AUC F1 and VUS-PR; the remaining three metrics are in Appendix §A.5. SWaT column uses the excl22 evaluation condition; full-condition results appear in Appendix §A.4. SMD, SMAP, and MSL values are macro-averages over all entities (per-entity results in Appendix §A.6). Bold = highest; underline = second-highest. *Bottom block (protocol effect, Section 4.2)*: CSMAD and [N] representative unsupervised baselines under a standard clean-train split (original training file only, no labeled anomalies), evaluated on the identical held-out evaluation suffix; standard-split CSMAD uses the identical configuration with all label-dependent paths automatically inactive in the absence of positive training windows. Cells are populated only for the representative protocol-effect dataset columns; the contaminated-protocol counterparts are the corresponding main-block rows."
+- **Row structure (27 main rows in 7 groups + bottom block)**: Simple (5: random, sensor-range, PCA, L2-norm, NN-distance) / Neural (3: MLP, MLPMixer, Transformer) / GCN-LSTM (1) / SOTA legacy (6: Anomaly Transformer, TranAD, USAD, DAGMM-simplified, GDN, OmniAnomaly) / SOTA recent (7: TFMAE, NPSR, TimesNet, DCdetector, MEMTO, ModernTCN, CATCH) / Weakly supervised — contaminated-training condition only (4: DeepMIL, WETAS, TreeMIL, NRdetector) / **CSMAD (ours)** / **Protocol-effect block (standard clean-train split)**: {CSMAD, Baseline A, Baseline B, [Baseline C]} — baseline count = NUM-014; rows filled only for the protocol-effect datasets (other family columns "—")
 - **Columns**: Method | {SWaT excl22, WaDi A1, WaDi A2, PSM, SMD avg, SMAP avg, MSL avg} × {PA%K-AUC F1, VUS-PR} — column set fixed per RT V3 (2 metrics; the other 3 in Appendix §A.5). All metric cells [X.XX] pending the experimental queue.
 - **Size assumption**: landscape (sideways) full-width ≈ **0.55p** (0.50p + 0.05p bottom block; net −0.15p vs separate TAB-4 at 0.20p). ⚠️ **Phase 5→7 open flag (RT V1)**: elsarticle/journal sideways-table support unverified; fallback ladder (r3, updated): (a) \small + tabcolsep + dataset abbreviations → (b) ~~absorb Table 4 as a bottom row-group~~ **executed as D-010 ①** → (c) single-metric column only with orchestrator V3 re-decision.
 - **Dependency (inherited from TAB-4)**: bottom block requires the standard-split run (EXPERIMENT_EXECUTION_TODO item 3).
@@ -121,7 +134,7 @@ conventions: |
 | NUM-010 | §4.2 ¶2 | [X.XX] | CSMAD PA%K-AUC F1 on PSM | Table 2 results | — |
 | NUM-011 | §4.2 ¶2 | [X.XX] | best unsupervised baseline PA%K-AUC F1 on PSM | Table 2 results | — |
 | NUM-012 | §4.2 ¶2 | [X.XX] | CSMAD PA%K-AUC F1 on SWaT excl22 | Table 2 results | — |
-| NUM-013 | §4.2 ¶3 | [X.XX]×2 | CSMAD vs NRdetector margins (PA%K-AUC F1, VUS-PR, avg) | Table 2 results (Q1 NRdetector) | — |
+| NUM-013 | §4.2 ¶3 | [X.XX]×2 | CSMAD vs NRdetector margins (PA%K-AUC F1, VUS-PR, avg) | Table 2 results (NRdetector, contaminated-training condition) | — |
 | NUM-014 | §4.2 protocol-effect ¶ *(v2-r2: Table 2 bottom block — D-010 ①)* | [N] | # representative baselines in the protocol-effect block of Table 2 | design choice (2–3) + run | — |
 | NUM-015 | §4.2 protocol-effect analysis ¶ | [X.XX] | CSMAD clean-train average (protocol-effect datasets) | standard-split run | — |
 | NUM-016 | §4.2 protocol-effect analysis ¶ | [X.XX] | best unsupervised baseline clean-train average | standard-split run | — |
@@ -142,7 +155,7 @@ conventions: |
 | NUM-031 *(v2 신설)* | Appendix §B.3 | [X.XX] | measured wall-clock overhead factor, leave-one-out vs single-mask inference | B.3 cost measurement; **sync condition**: if materially below 50, soften §5 "approximately 50×" (see §5 audit-trail row) | — |
 
 **Sync groups** (must resolve to a single value each):
-- **A (dataset count)**: NUM-001 = NUM-003 = NUM-004 = NUM-029, AND must match the hard-coded "six families / 113 learning units / 114 evaluation units" in §4.1.1 + "six dataset families" in §4.2. If any family is dropped at submission, §4.1.1 constants must be edited in the same pass.
+- **A (dataset count)**: NUM-001 = NUM-003 = NUM-004 = NUM-029, AND must match the hard-coded "six families / 113 entities / 114 evaluation conditions" in §4.1.1 + "six dataset families" in §4.2. If any family is dropped at submission, §4.1.1 constants must be edited in the same pass.
 - **B (baseline count)**: NUM-002 = NUM-005 = NUM-030, AND must match "26 baselines / 22 unsupervised / 4 weakly supervised" hard-coded in §4.1.2–§4.1.4 and Table 2 row structure. Weakly-supervised GPU runs incomplete as of 2026-06-11 — if still incomplete at submission, all of group B and the §4 constants fall back to "22 unsupervised baselines" and Table 2 loses group 6.
 
 ## 4. Inline text placeholders (TXT)
@@ -189,9 +202,9 @@ conventions: |
 - **Caption (complete)**: "Table A.8. Per-entity results (PA%K-AUC F1 / VUS-PR) for SMD (28 machines), SMAP (54 channels), and MSL (27 channels). Macro-averages over entities equal the corresponding family columns of Table 2."
 - **Content spec**: 109 entity rows (28+54+27) × 2 metrics; cells [X.XX] pending. ~0.6–1.0p.
 
-#### TAB-B1 — Q1 condition comparison (Appendix §B.1)
-- **Caption (complete)**: "Table B.1. Q1 (full contaminated training) condition results for all 22 unsupervised baselines. Each method trains on the identical contaminated training stream used by CSMAD (no anomaly excision; labels unused) and is evaluated on the identical held-out evaluation half. Metrics: PA%K-AUC F1 and VUS-PR per dataset family; Δ columns give the change relative to the Q3 condition of Table 2 (positive = Q1 better). The CSMAD row is repeated from Table 2 for reference, as CSMAD trains on the contaminated stream in both conditions."
-- **Content spec**: 22 baseline rows + CSMAD reference row; columns = families × {PA%K-AUC F1, VUS-PR, Δ vs Q3}; cells [X.XX] pending (Q1 runs registered in the comparison queue). Supports the R31 volume-asymmetry acknowledgment (§4.1.4). ~0.5p.
+#### TAB-B1 — Contaminated-training condition comparison (Appendix §B.1; renamed v3-r1 per R24)
+- **Caption (complete, v3-r1)**: "Table B.1. Contaminated-training (no-excision) condition results for all 22 unsupervised baselines. Each method trains on the identical contaminated training stream used by CSMAD (no anomaly excision; labels unused) and is evaluated on the identical held-out evaluation half. Metrics: PA%K-AUC F1 and VUS-PR per dataset family; Δ columns give the change relative to the anomaly-excised condition of Table 2 (positive = contaminated-training better). The CSMAD row is repeated from Table 2 for reference, as CSMAD trains on the contaminated stream in both conditions."
+- **Content spec**: 22 baseline rows + CSMAD reference row; columns = families × {PA%K-AUC F1, VUS-PR, Δ vs the anomaly-excised condition}; cells [X.XX] pending (contaminated-training [code: Q1/full] runs registered in the comparison queue). Supports the R31 volume-asymmetry acknowledgment (§4.1.4). ~0.5p.
 
 #### TAB-B2 — Epoch-budget sensitivity (Appendix §B.2)
 - **Caption (complete)**: "Table B.2. Epoch-budget sensitivity. PA%K-AUC F1 of [N] representative unsupervised baselines trained for 10 (main budget), 50, and 100 epochs, and of CSMAD trained for 500 (main budget) and a reduced budget, on [N] representative datasets; best-epoch selection identical to the main protocol (Section 4.1.2)."
