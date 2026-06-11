@@ -109,6 +109,19 @@ last_modified: 2026-06-10
 | P6-6 수정분 재검사 + 회귀 2종 (표절·truth) | 재검사 3인 | DONE | 회귀 0·truth PASS·신규 MAJOR 3 → orchestrator touch-up |
 | P6-7 coverage 게이트 | coverage-auditor | DONE | PASS (`p6_coverage_gate_r1.md`); MINOR 4 waive (D-011) |
 
+## Phase 7 — LaTeX 조판 (Elsevier) & PDF 검증
+
+| Task | 담당 | 상태 | 비고 |
+|------|------|------|------|
+| P7-1 TEMPLATE_REQUIREMENTS + v3→LaTeX 변환 + 컴파일 | latex-engineer | DONE | preprint 빌드; .tex 정본화 |
+| P7-1b 판형 실측 (3p/5p) + 기준 판형 결정 | orchestrator | DONE | D-012: final,5p,twocolumn |
+| P7-2 PDF 시각 검수 r1 | pdf-qa-reviewer | DONE | B4(5p 겹침)+B/M 다수 적발 |
+| P7-3 LaTeX 수정 r2 (B7/M8 전수) | latex-engineer r2 | DONE | 산문 변경 0 |
+| P7-4 D-013 한정 산문 압축 (−219w) + float 보정 | prose-compressor | DONE | 본문 8.997p 달성 |
+| P7-5 산문 diff 미니 감사 3종 (§7-3 의무) | prose-miniauditor | DONE | 3종 PASS (B0/M0) |
+| P7-6 overleaf_package.zip + self-contained 검증 | orchestrator | DONE | 12파일, 독립 컴파일 PASS ×2 |
+| P7-7 coverage 게이트 (5조건+시각 spot) | coverage-auditor | DONE | PASS 5/5 (`p7_coverage_gate_r1.md`) |
+
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 
 | Phase | 핵심 태스크 (마스터 §7) | 엄격 구역 |

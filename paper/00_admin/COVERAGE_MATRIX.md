@@ -22,7 +22,7 @@ last_modified: 2026-06-10
 | T4 | reference 탐색(고퀄리티) + 원문 발췌·활용 맥락 정리 + 서지 철저 검증(할루시네이션 절대 0) + IEEE 스타일 정리 | 4 (+5 보강) | DONE | | / P4: 49 reference 2채널 독립 검증(A: card↔공식소스 / B: blind DBLP export) + 기계 diff, QUARANTINE 0; 발췌 13건 해소·잔존 3건 2단계 격리; refs.bib(49, 파싱 검증)+REFERENCES_IEEE — 게이트 전수 재감사 + 무작위 16편 재검증 전건 일치 (`99_reviews/p4_coverage_gate_r1.md`; +P5 보강 사이클 잔존) / P5 보강: R36 15건 전부 기존 49 key로 해소 (신규 수요 0) — 미니 사이클 불요 (`99_reviews/p5_coverage_gate_r1.md`) |
 | T5 | 영어 본문 완성 — 완벽하게 완성된 형태, figure/table은 어디에 어떤 형태로 삽입될지 포함 + [placeholder]로 두되 들어갈 내용 서술, 표절 절대 금지(여러 번 체크), T4 reference로 뒷받침 | 5 | DONE | | / P5: MANUSCRIPT_v2.md 영어 완성본 + placeholder 49종 완성 캡션 (registry) — 검증 5종 + 게이트 PASS (`99_reviews/p5_coverage_gate_r1.md`) |
 | T6 | 분야 학술 문체 검증 — AI 티·비관용 표현을 문장 단위로 철저 검사 | 6 | DONE | | / P6: 검사 4종 (corpus 기준 문장 단위 전수 — LEDGER 52/AUDIT_A 88/AUDIT_B 67/TERM 18) + fixer 전수 처리 + 재검사·회귀 2종 → v3 (`99_reviews/p6_coverage_gate_r1.md`) |
-| T7 | Elsevier 템플릿 준수 LaTeX(Overleaf) 조판 + placeholder 배치 + PDF 변환·직접 확인 루프 | 7 | PENDING | |
+| T7 | Elsevier 템플릿 준수 LaTeX(Overleaf) 조판 + placeholder 배치 + PDF 변환·직접 확인 루프 | 7 | DONE | | / P7: elsarticle 변환 + placeholder 실체화 + 컴파일·QA 루프 (r1 B7→r2 해소→spot 재검증) + overleaf_package.zip 단독 컴파일 PASS (`99_reviews/p7_coverage_gate_r1.md`) |
 
 ## 참고사항 (R1–R37)
 
@@ -30,11 +30,11 @@ last_modified: 2026-06-10
 |----|------|-----------|------|----------|
 | R1 | Related work·contribution·실험 MECE 구성 | 3, 5, 8 | IN_PROGRESS | | / P3: BLUEPRINT §4.1·§6.1 + §11 결정① MECE 검증문(주입 vs 기판) / P5: §2 구조 + contribution 4-bullet + §4 구성 (게이트 확인) |
 | R2 | 참고자료(특히 Notion) 논리·서술은 참고만 — 충분한 판단 후 활용 (contribution 구조 채택 여부 선판단) | 1, 3 | DONE | P1: NOTION_DIGEST 헤더 R2 경고 + [주장]/[사실] 등급 분리 전 섹션 + CONFERENCE_PDF_DIGEST 헤더·§⑦ + RESEARCH_SYNTHESIS §⑥ (Phase 3 판단 유보) / P3: §11 결정① C1–C4 채택/수정/기각 판정표 + stale 판정 (D-005) |
-| R3 | figure/실험 placeholder 틀 + '실험 잘 되었다' 가정 서술 + Notion 하위 페이지에 placeholder별 구체적 한국어 명세 + 실험 데이터 부족 지적 금지(한계 아님) + 캡션·설명은 placeholder여도 완성형 | 5, 7, 8 | IN_PROGRESS | | / P5: placeholder 49종 + 완성 캡션 + 데이터 부족 지적 0 (BP-05 기각으로 보존) |
+| R3 | figure/실험 placeholder 틀 + '실험 잘 되었다' 가정 서술 + Notion 하위 페이지에 placeholder별 구체적 한국어 명세 + 실험 데이터 부족 지적 금지(한계 아님) + 캡션·설명은 placeholder여도 완성형 | 5, 7, 8 | IN_PROGRESS | | / P5: placeholder 49종 + 완성 캡션 + 데이터 부족 지적 0 (BP-05 기각으로 보존) / P7: FIG/TAB/ALG placeholder REGISTRY 캡션·크기 그대로 배치 (spot 7건 일치, `99_reviews/p7_coverage_gate_r1.md`) |
 | R4 | 'AI가 작성한 티'·도메인 비관용·논문 비관용 표현 엄격 검증 | 5, 6 | DONE | | / P5: 초안 단계 예방 — 금지 패턴 산문 grep 0 / P6: corpus-derived 금지 패턴 LEDGER + 잔존 0 (회귀 검사 포함, `99_reviews/p6_coverage_gate_r1.md`) |
 | R5 | notation 오류 없이 + 최대한 일반적·이해 쉬운 방식 (참고자료는 참고만) | 3, 5, 6 | DONE | | / P3: §9.1 기호 체계(λ_GRL/λ_rev 분리) + §9.2 금지 사항 / P5: Eq(1)–(6)·C.1–C.5 코드 정합 + 기호 충돌 6군 해소 + Table C.2 / P6: notation 최종 — d_model 통일 + Table C.2 동기 (truth-spot 수치 정합, `99_reviews/p6_coverage_gate_r1.md`) |
-| R6 | 분량: appendix·reference 제외, table/figure 합쳐 9page. 크기 넉넉히 가정 | 3, 7 | PENDING | | / P3: PAGE_BUDGET r3 단일 정본 9.0p (D-006⑨) |
-| R7 | Appendix 구성 주의 | 3, 7 | PENDING | | / P3: §8 Appendix A/B/C 계획 + PAGE_BUDGET §5 |
+| R6 | 분량: appendix·reference 제외, table/figure 합쳐 9page. 크기 넉넉히 가정 | 3, 7 | DONE | | / P3: PAGE_BUDGET r3 단일 정본 9.0p (D-006⑨) / P7: 5p 판형 본문 8.997p (8.5–9.0 內, bbox 독립 재측정 재현; 실수치 투입 후 재측정 경고 등재) (`99_reviews/p7_coverage_gate_r1.md`) |
+| R7 | Appendix 구성 주의 | 3, 7 | DONE | | / P3: §8 Appendix A/B/C 계획 + PAGE_BUDGET §5 / P7: Appendix A/B/C 구성 + \ref 전부 해석 + 분량 적정 판정 (`99_reviews/p7_coverage_gate_r1.md`) |
 | R8 | Contribution 강조 핵심 — novelty 충분 탐색·충분 강조 | 3, 5 | DONE | | / P3: §0.1–0.3 Thesis·차별점 3축 + §11 contribution 4-bullet 재설계 / P5: CSMAD + D-008 스코핑 최초성 + 4 contributions (게이트 확인) |
 | R9 | SDMAE는 핵심 인용이되 과도 유사 인상 금지 — 차이점 나열 방식 금지, 자연스럽게 언급하고 넘어가기 | 2, 3, 5 | DONE | P2: ANCHOR_SDMAE_DOSSIER §4 (유사12/차이17 + 위험도) + §7 포지셔닝 옵션 (권장 C) + §7-2 방어 3축 + §8 / P3: §4.4 옵션 C + 결정⑤ + §15 방어 + D-007 제목 기각 사유 / P5: SDMAE 언급 5곳 전수 — 차이 나열 0, 각주 전속, 중립 적응문 (게이트 확인) |
 | R10 | 각 component마다 "왜 다변량 시계열에서 이렇게 해야만 하는가" 치열하게 고민·반영 | 1, 3, 5 | DONE | P1: RESEARCH_SYNTHESIS §③ 표A "R10 원재료" 열 + §⑨ REQUEST-F / P3: §12 논증 배치 전수표(10 component) + §5.2–5.7 / P5: §3 component별 다변량 논증 배치 (블루프린트 §12 이행, 게이트 확인) |

@@ -1,0 +1,397 @@
+% ============================================================
+% Appendix A — Experimental Setup Details and Full Results
+% ============================================================
+
+\section{Experimental Setup Details and Full Results}
+\label{sec:appendix_setup}
+
+\subsection{Implementation and Execution Details}
+\label{sec:appendix_impl}
+
+\paragraph{CSMAD configuration.}
+Table~\ref{tab:csmad_config} lists the complete configuration; all values are shared across the
+113 entities, and only the input dimensionality $F$ (Table~\ref{tab:dimensionality}), the
+data-derived class-prior weight $w_+$ (Eq.~\ref{eq:lcls_app}), and the train/test split
+proportions determined by the protocol of Section~\ref{sec:datasets} vary by entity.
+
+%% PDF QA r1 BLOCKER-B: two-column table* + max-width cap; \allowbreak added in
+%% the GRL-head row so the layer chain can wrap inside the p{} column.
+\begin{table*}[tp]
+\footnotesize
+\centering
+\caption{Complete CSMAD configuration used in all main experiments (single configuration; no
+  per-dataset tuning).}
+\label{tab:csmad_config}
+\setlength{\tabcolsep}{4pt}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{llp{8.5cm}}
+\toprule
+Group & Parameter & Value \\
+\midrule
+Architecture & Patch embedding & Linear (flatten + projection) \\
+             & Encoder         & 4 layers, pre-LN self-attention, $d_{\mathrm{model}}=512$, 8 heads, ff 2048, GELU, dropout 0.15 \\
+             & Teacher/Student decoder & 3/2 layers (self-attention only, MAE-style), separate learnable mask tokens \\
+             & GRL head & 2-layer MLP: LayerNorm$\to$\allowbreak Linear(512$\to$256)$\to$\allowbreak GELU$\to$\allowbreak Dropout(0.1)$\to$\allowbreak Linear(256$\to$1) \\
+\midrule
+Windowing & Window/patch size & $L=500$, $s=10$ ($N=50$ patches) \\
+          & Train/test stride & 21\,/\,49 \\
+          & Masking ratio & 0.15 (8 masked/42 visible); anomaly-priority during training, leave-one-out at test \\
+\midrule
+Training & Epochs/warmup & 500/first 250 epochs \\
+         & Optimizer & AdamW (fused), lr $10^{-3}$, wd $10^{-3}$, $\beta=(0.9,0.99)$ \\
+         & GRL lr & $10^{-4}$ (separate parameter group) \\
+         & LR schedule & 10-epoch linear warmup + cosine annealing \\
+         & Batch/precision/seed & 1024/bf16 mixed/42 (single run per entity) \\
+\midrule
+Loss & Base weights & $L_{\mathrm{recon}}$, $L_{\mathrm{OD}}$: 1.0; $\lambda_{\mathrm{FM}}$, $\lambda_{\mathrm{GRL}}$: adaptive (Eq.~\ref{eq:adaptive_weight}), $\beta_{\mathrm{FM}}=1.0$, $\beta_{\mathrm{GRL}}=0.2$ \\
+     & GRL focal & $\gamma=2$; pos-weight $w_+$ computed per entity \\
+\midrule
+Scoring & Combination ratio & $c=4$ (Eq.~\ref{eq:sigma}); GRL head unused at inference \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table*}
+
+\paragraph{Training budgets and evaluation cadence.}
+Table~\ref{tab:budgets} summarizes the per-group training and evaluation budgets reported in
+Section~\ref{sec:impl}.
+All groups share the best-epoch selection criterion (PA\%K-AUC F1 on the test split), use no
+early stopping, complete their full budget, and are reported at their best evaluated epoch.
+
+\begin{table*}[tp]
+\footnotesize
+\centering
+\caption{Training and evaluation budgets per method group.}
+\label{tab:budgets}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{lcccc}
+\toprule
+Method group & Epochs & Eval.\ cadence & Batch size & Best-epoch criterion \\
+\midrule
+CSMAD                          & 500 & every 5 epochs & 1024 & PA\%K-AUC F1 \\
+Unsupervised baselines (22)    & 10  & every epoch & model-specific & PA\%K-AUC F1 \\
+Weakly supervised baselines (4)& 50  & every epoch & model-specific & PA\%K-AUC F1 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table*}
+
+\paragraph{Environment and code.}
+All experiments run on [GPU model]; % PH:TXT-001 | GPU model used for experiments
+code, configurations, and the exact dataset partitions will be released at [URL].
+% PH:TXT-002 | code repository URL
+
+\paragraph{Baseline implementations and hyperparameters.}
+The 22 unsupervised baselines comprise nine detectors adopted from the protocol study
+of~\cite{sarfraz2024quovadis} (five simple detectors: random score, sensor-range deviation, PCA
+reconstruction, L2-norm, and nearest-neighbor distance; three lightweight neural detectors: MLP,
+MLPMixer, and single-stack Transformer; and a GCN-LSTM detector); six established deep MTSAD
+systems (Anomaly Transformer, TranAD, USAD, DAGMM, GDN, OmniAnomaly); and seven recent methods
+(TFMAE, NPSR, TimesNet, DCdetector, MEMTO, ModernTCN, CATCH).
+For DAGMM we follow the simplified re-implementation of the TranAD
+repository~\cite{tuli2022tranad} (github.com/imperial-qore/TranAD), in which the GMM energy
+term is omitted; the variant is labeled ``DAGMM (simplified)'' in all tables.
+Each baseline retains the hyperparameters of its original implementation or publication preset
+(for example, NRdetector keeps its native window size of 100 rather than the 500 used by our
+pipeline).
+The random-score baseline is averaged over five independent runs (mean $\pm$ std), while all
+other methods use a single run.
+All baselines receive the identical data partitions through a unified loading layer, and all
+metrics, for CSMAD and every baseline, are computed by one shared evaluation routine, eliminating
+implementation-dependent metric discrepancies.
+
+% ---- Table A.3 placeholder ----
+\begin{table*}[tp]
+\footnotesize
+\centering
+\caption{Hyperparameters of all 26 baselines.
+  Each method retains the settings of its original implementation or publication preset;
+  deviations from the unified pipeline (window size, epochs, batch size) are listed explicitly.
+  DAGMM follows the simplified TranAD-repository re-implementation (GMM energy term omitted).}
+\label{tab:baseline_hparams}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{lccccl}
+\toprule
+Method & Window & LR & Batch & Epochs & Key parameters \\
+\midrule
+\multicolumn{6}{l}{\textit{Simple / lightweight (9 methods)}} \\
+Random score   & 500 & --- & --- & --- & 5-run average \\
+Sensor range   & 500 & --- & --- & --- & per-feature range \\
+PCA recon.     & 500 & --- & --- & --- & 50 components \\
+L2-norm        & 500 & --- & --- & --- & window L2 \\
+NN-distance    & 500 & --- & --- & --- & 5 neighbors \\
+MLP            & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+MLPMixer       & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+Transformer    & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+GCN-LSTM       & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+\midrule
+\multicolumn{6}{l}{\textit{SOTA legacy (6 methods)}} \\
+Anomaly Trans. & 100 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+TranAD         & 10  & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+USAD           & 12  & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+DAGMM (simpl.) & 500 & {[X.XX]} & {[X.XX]} & 10 & GMM omitted \\
+GDN            & 15  & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+OmniAnomaly    & 100 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+\midrule
+\multicolumn{6}{l}{\textit{SOTA recent (7 methods)}} \\
+TFMAE          & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+NPSR           & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+TimesNet       & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+DCdetector     & 105 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+MEMTO          & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+ModernTCN      & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+CATCH          & 500 & {[X.XX]} & {[X.XX]} & 10 & {[X.XX]} \\
+\midrule
+\multicolumn{6}{l}{\textit{Weakly supervised (4 methods)}} \\
+DeepMIL        & 100 & {[X.XX]} & {[X.XX]} & 50 & {[X.XX]} \\
+WETAS          & 100 & {[X.XX]} & {[X.XX]} & 50 & {[X.XX]} \\
+TreeMIL        & 100 & {[X.XX]} & {[X.XX]} & 50 & {[X.XX]} \\
+NRdetector     & 100 & {[X.XX]} & {[X.XX]} & 50 & {[X.XX]} \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table*}
+
+\paragraph{SWaT preprocessing (reproducibility note).}
+The SWaT (A1+A2) input dimensionality is 45: 51 raw features minus 6 constant columns
+\{P202, P401, P404, P502, P601, P603\} removed during preprocessing.
+Loading the raw CSV files without the constant-column filter yields 51 features, so reproductions
+should verify this dimensionality explicitly.
+
+\subsection{Formal Definitions of Evaluation Metrics}
+\label{sec:appendix_metrics}
+
+\paragraph{Point adjustment and PA\%K.}
+Under conventional point adjustment (PA)~\cite{xu2018kpivae,kim2022rigorous}, if any timestep
+within a ground-truth anomaly segment is predicted positive, all timesteps of that segment are
+counted as detected.
+PA\%K~\cite{kim2022rigorous} parameterizes this leniency: a segment qualifies for adjustment
+only when strictly more than $K\%$ of its timesteps are predicted positive, so that $K=0$
+recovers conventional PA and $K=100$ recovers point-wise scoring.
+
+\paragraph{PA\%K-AUC F1.}
+For each $K \in \{0,1,\ldots,100\}$, the PA\%K-adjusted F1 is computed with a per-$K$
+re-optimized threshold, following the protocol of~\cite{kim2022rigorous}; the reported value is
+the trapezoidal integral of F1 over the 101-point grid, normalized to $[0,1]$.
+Integrating over the full tolerance spectrum removes the cherry-picking degree of freedom that a
+single $K$ would introduce.
+
+\paragraph{PA\%K-AUC AUC-PR.}
+The same $K$-grid and integration, with the integrand replaced by the area under the PA\%K-adjusted
+precision--recall curve at each $K$ (obtained by a threshold sweep, hence threshold-free).
+
+\paragraph{VUS-ROC\,/\,VUS-PR~\cite{paparrizos2022vus}.}
+The Volume Under the Surface generalizes AUC-ROC\,/\,AUC-PR to a three-dimensional volume by
+sweeping both the decision threshold and a temporal tolerance parameter that softens segment
+boundaries; we use the authors' official implementation with a tolerance window of 100 timesteps,
+after min--max normalization of scores.
+Both measures are threshold-free and robust to label-boundary uncertainty.
+
+\paragraph{Affiliation F1~\cite{huet2022affiliation}.}
+Affiliation precision and recall convert temporal proximity between predicted and ground-truth
+events into per-event affinity scores within each event's affiliation zone, with formal
+robustness guarantees against adversarial scoring; Affiliation F1 is the harmonic mean of
+these two measures.
+Binarization uses the anomaly-ratio threshold defined below.
+
+\paragraph{Anomaly-ratio threshold (formal).}
+Let $\alpha$ be the fraction of anomalous timesteps in the evaluation span; the threshold is the
+$(1-\alpha)$ quantile of the point-level score distribution, and predictions are scores strictly
+above it.
+The threshold is computed post hoc for threshold-dependent metrics only; it never enters
+training or model selection (Section~\ref{sec:impl}).
+
+\paragraph{PA F1 (oracle).}
+Conventional PA ($K{=}0$) F1, computed by selecting the F1-optimal threshold on the unadjusted
+(pre-PA) predictions and then applying the PA adjustment; reported in \ref{sec:appendix_full_results}
+solely for comparability with prior work, marked (oracle), and excluded from all rankings
+(Section~\ref{sec:metrics}).
+
+\paragraph{Score aggregation.}
+All metrics are computed on point-level scores obtained by mean-aggregation over all covering
+(window, patch) pairs (Eq.~\ref{eq:agg}); the identical evaluation routine serves CSMAD and
+every baseline.
+
+\subsection{Dataset Details}
+\label{sec:appendix_dataset}
+
+\paragraph{Per-entity statistics.}
+Table~\ref{tab:per_entity} expands the family-level summary of Table~\ref{tab:datasets}.
+
+\begin{table*}[tp]
+\footnotesize
+\centering
+\caption{Dataset statistics under the contaminated benchmark protocol, per entity.
+  Train/test sizes reflect the re-split of Section~\ref{sec:datasets}; Train AR\,/\,Test AR
+  denote the anomaly ratio of the training\,/\,evaluation portion.
+  SMAP and MSL sizes are concatenated per-channel totals.
+  \textit{SMD per-machine rows pending.}}
+\label{tab:per_entity}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{lrrrccl}
+\toprule
+Entity & \#Train pts & \#Test pts & \#Dim. & Train AR (\%) & Test AR (\%) & Source \\
+\midrule
+SWaT (A1+A2) & 719{,}959 & 224{,}960 & 45 & 1.63 & 19.05 (full)\,/\,3.68 & \cite{goh2016swat} \\
+WaDi A1      & 1{,}296{,}001 & 86{,}401 & 123 & 0.52 & 3.82 & \cite{ahmed2017wadi} \\
+WaDi A2      & 870{,}972 & 86{,}402 & 123 & 0.76 & 3.87 & \cite{ahmed2017wadi} \\
+PSM          & 176{,}401 & 43{,}921 & 25 & 6.20 & 30.63 & \cite{abdulaal2021psm} \\
+SMD ($\times$28) & [per-machine] & [per-machine] & 29--36 & [per-machine] & 4.16 (avg) & \cite{su2019omnianomaly} \\
+SMAP ($\times$54) & 355{,}905 & 217{,}925 & 25 & 0.70 & 24.54 & \cite{hundman2018telemanom} \\
+MSL ($\times$27)  & 95{,}271 & 36{,}775 & 55 & 1.70 & 16.72 & \cite{hundman2018telemanom} \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table*}
+
+\paragraph{Training-label semantics.}
+SWaT and WaDi training files record normal operation only; PSM and SMD distribute no
+training-label files, and their training portions are treated as normal, consistent with how
+these benchmarks are used in prior work~\cite{su2019omnianomaly,abdulaal2021psm}; SMAP and MSL
+training labels are set to zero by the loading pipeline (treated as normal).
+Labeled anomalies in our training splits therefore originate exclusively from the incorporated
+test-stream prefixes.
+
+\paragraph{Split-boundary adjustment (SMAP/MSL).}
+A cut position is accepted only if it lies at least ten timesteps from every annotated anomaly
+region; when the 50\% midpoint violates this clearance, the cut moves outward to the nearest
+admissible position, without a distance bound.
+Table~\ref{tab:split_shifts} reports the measured shifts: 4 of 81 channels (all MSL) moved, and
+no boundary-straddling anomaly region remains in any channel.
+At the concatenated scale, the aggregate absolute shift is 252 timesteps against an MSL
+evaluation total of 36,775.
+
+\begin{table*}[tp]
+\footnotesize
+\centering
+\caption{Measured split-point adjustments for the SMAP/MSL channels
+  (all other channels: zero shift).}
+\label{tab:split_shifts}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{lrrrrl}
+\toprule
+Channel & Test length & Target (50\%) & Actual cut & Shift & Share of ch.\ test length \\
+\midrule
+SMAP (all 54) & --- & --- & --- & 0 & 0\% \\
+MSL D-16 & 2{,}191 & 1{,}095 & 1{,}261 & $+$166 & 7.58\% \\
+MSL M-1  & 2{,}277 & 1{,}138 & 1{,}099 & $-$39  & 1.71\% \\
+MSL M-2  & 2{,}277 & 1{,}138 & 1{,}099 & $-$39  & 1.71\% \\
+MSL S-2  & 1{,}827 & 913 & 921 & $+$8 & 0.44\% \\
+MSL (rem.\ 23) & --- & --- & --- & 0 & 0\% \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table*}
+
+\paragraph{Boundary-aware windowing.}
+The original training portion and the incorporated test prefix are not temporally adjacent;
+segment boundaries are registered so that no sliding window crosses non-contiguous data.
+The same mechanism guards the excision boundaries of the anomaly-excised condition
+(Section~\ref{sec:baselines}).
+
+\subsection{SWaT Evaluation with Region~22 Excluded (excl22)}
+\label{sec:appendix_swat}
+
+\paragraph{Region definition and statistics.}
+Attack region~22 is the chronologically first anomaly region within the held-out SWaT evaluation
+half, spanning positions $[2{,}869, 38{,}769)$ (indexed within the evaluation span) --- 35,900
+contiguous timesteps that constitute 83.75\% of all anomalous timesteps and 15.96\% of the
+entire evaluation span.
+Its identification is deterministic (first region, with a sanity check on its length; no other
+supported dataset contains a single region of comparable extent).
+Masking it reduces the evaluation anomaly ratio from 19.05\% to 3.68\%, leaving the 13 smaller
+and more diverse attack events.
+
+\paragraph{Evaluation-mask implementation.}
+The excl22 condition modifies neither training nor scores: an evaluation mask removes the
+region's timesteps from the label vector and the event list before metric computation, so
+threshold-free surfaces (VUS) and event-based measures (Affiliation) are likewise computed on
+the masked span.
+The excl22 condition selects its own best epoch under the shared criterion, independently of
+the full condition; the identical mask is applied to every baseline.
+
+% ---- Table A.6 placeholder ----
+%% PDF QA r1 BLOCKER-C/BLOCKER-3: 12-column dual-condition table exceeded the
+%% text/column width in both builds; table* + \footnotesize + tighter \tabcolsep
+%% + max-width cap.
+\begin{table*}[tp]
+\footnotesize
+\centering
+\caption{SWaT dual-condition results: all five metrics for CSMAD and all baselines under the
+  full condition and the excl22 condition (Section~\ref{sec:datasets}).
+  Same trained models and identical scores in both conditions; only the evaluation mask differs.
+  The excl22 best epoch is selected independently under the shared criterion.}
+\label{tab:swat_dual}
+\setlength{\tabcolsep}{3pt}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{lccccccccccc}
+\toprule
+& \multicolumn{5}{c}{Full condition} & & \multicolumn{5}{c}{excl22 condition} \\
+\cmidrule(lr){2-6}\cmidrule(lr){8-12}
+Method & F1 & PR & VUS-PR & VUS-ROC & Aff. & & F1 & PR & VUS-PR & VUS-ROC & Aff. \\
+\midrule
+CSMAD      & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} \\
+\multicolumn{12}{c}{\textit{(26 baseline rows; cells {[X.XX]} pending experimental queue)}} \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table*}
+
+\subsection{Full Multi-Metric Results}
+\label{sec:appendix_full_results}
+
+% ---- Table A.7 placeholder ----
+\begin{table*}[tp]
+\footnotesize
+\centering
+\caption{Complete multi-metric results for all methods and dataset families: PA\%K-AUC AUC-PR,
+  VUS-ROC, Affiliation F1, and PA F1 (oracle threshold; reported for comparability only, never
+  used for ranking --- Section~\ref{sec:metrics}).
+  PA\%K-AUC F1 and VUS-PR appear in Table~\ref{tab:main_results}.}
+\label{tab:full_metrics}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{llccccccc}
+\toprule
+& & SWaT & WaDi A1 & WaDi A2 & PSM & SMD & SMAP & MSL \\
+Method & Metric & excl22 & & & & avg & avg & avg \\
+\midrule
+CSMAD & AUC-PR   & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} \\
+      & VUS-ROC  & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} \\
+      & Aff.\ F1 & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} \\
+      & PA F1 (oracle) & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} \\
+\multicolumn{9}{c}{\textit{(26 baseline rows $\times$ 4 metrics; cells {[X.XX]} pending queue)}} \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table*}
+
+\subsection{Per-Entity Results}
+\label{sec:appendix_entity_results}
+
+% ---- Table A.8 placeholder ----
+\begin{table}[h]
+\small
+\centering
+\caption{Per-entity results (PA\%K-AUC F1\,/\,VUS-PR) for SMD (28 machines), SMAP
+  (54 channels), and MSL (27 channels).
+  Macro-averages over entities equal the corresponding family columns of
+  Table~\ref{tab:main_results}.}
+\label{tab:per_entity_results}
+\begin{tabular}{lcc}
+\toprule
+Entity & PA\%K-AUC F1 & VUS-PR \\
+\midrule
+\multicolumn{3}{l}{\textit{SMD (28 machines; cells {[X.XX]} pending)}} \\
+SMD-1-1 & {[X.XX]} & {[X.XX]} \\
+\multicolumn{3}{c}{$\vdots$ (28 rows)} \\
+\midrule
+\multicolumn{3}{l}{\textit{SMAP (54 channels; cells {[X.XX]} pending)}} \\
+SMAP-A-1 & {[X.XX]} & {[X.XX]} \\
+\multicolumn{3}{c}{$\vdots$ (54 rows)} \\
+\midrule
+\multicolumn{3}{l}{\textit{MSL (27 channels; cells {[X.XX]} pending)}} \\
+MSL-C-1 & {[X.XX]} & {[X.XX]} \\
+\multicolumn{3}{c}{$\vdots$ (27 rows)} \\
+\bottomrule
+\end{tabular}
+\end{table}

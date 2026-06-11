@@ -1,0 +1,186 @@
+%% =====================================================================
+%% CSMAD — Label-Aware Masked Autoencoding with Gradient Reversal
+%% for Multivariate Time Series Anomaly Detection
+%% Elsevier elsarticle (numbered citations)
+%% Phase 7 LaTeX manuscript — 2026-06-11
+%% Template: elsarticle-template-num.tex (preprint, 12pt)
+%%
+%% Template choice: elsarticle-num (numbered style, [1][2]...) — all
+%% 89 \cite commands in MANUSCRIPT_v3.md use numbered style; converting
+%% to author-year would require non-trivial citation surgery.
+%%
+%% documentclass option: preprint,12pt — standard Elsevier single-column
+%% review submission format.  Body page count in this mode is ~1.5x the
+%% final 3p-journal page count.  See TEMPLATE_REQUIREMENTS.md §1.
+%% =====================================================================
+
+\documentclass[final,3p,times]{elsarticle}
+
+%% --- Packages ---
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}          % \toprule, \midrule, \bottomrule
+\usepackage{tikz}              % placeholder boxes
+\usepackage{array}             % extended column specs
+\usepackage{xcolor}            % gray shading in placeholders
+\usepackage{adjustbox}         % max-width capping of wide tabulars (PDF QA r1)
+\usepackage{placeins}          % \FloatBarrier against figure drift (PDF QA r1 MAJOR-8)
+
+%% Section-end float barrier, active only in one-column builds (preprint/3p),
+%% where r1 found 19-30-page figure drift.  In the twocolumn 5p gate build the
+%% barrier would insert column dead-space before §5 while floats already place
+%% near their references; it is therefore a no-op there.
+\makeatletter
+\if@twocolumn
+  \newcommand{\BodyFloatBarrier}{}
+\else
+  \newcommand{\BodyFloatBarrier}{\FloatBarrier}
+\fi
+\makeatother
+
+%% D-013 (5p body-length recovery): forbid half-empty float columns/pages.
+%% In the twocolumn build, FIG-3 + FIG-4 formed a float-only column with
+%% \@fpsep/\@fpbot rubber stretch (~0.2p dead space).  Requiring float
+%% pages/columns to be >=90% full forces such figures back to [t] placement
+%% with text flowing beneath; loosened text/top fractions keep them placeable.
+\renewcommand{\floatpagefraction}{.90}
+\renewcommand{\topfraction}{.92}
+\renewcommand{\bottomfraction}{.60}
+\renewcommand{\textfraction}{.07}
+
+%\usepackage{microtype}        % disabled: font expansion requires scalable fonts
+\usepackage[ruled,linesnumbered]{algorithm2e}  % ALG-C1 pseudocode
+
+%% hyperref loaded after others per standard practice
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+%% --- Equation numbering in appendix sections ---
+%% Main body: (1)–(6); Appendix C: (C.1)–(C.5)
+%% We use \tag{} manually for the main body equations per manuscript,
+%% then switch to section-prefixed for appendix.
+%% NOTE: We suppress the tag on Appendix C equations that were defined
+%% in the manuscript with explicit C.x tags, using \label for xref.
+
+%% --- Journal placeholder ---
+\journal{[JOURNAL NAME --- to be filled]}
+
+%% =====================================================================
+\begin{document}
+
+\begin{frontmatter}
+
+%% ----- Title -----
+\title{Label-Aware Masked Autoencoding with Gradient Reversal for
+       Multivariate Time Series Anomaly Detection}
+
+%% ----- Authors (placeholder) -----
+\author{[AUTHOR NAMES --- to be filled]}
+%% Empty address fields omitted (PDF QA r1 MINOR-5: residual commas);
+%% restore addressline/city/postcode/country when the affiliation is filled.
+\affiliation{organization={[AFFILIATION --- to be filled]}}
+
+%% ----- Abstract -----
+\begin{abstract}
+Anomaly detection in multivariate time series is critical for industrial control systems, IT
+infrastructure monitoring, and spacecraft telemetry.
+Yet most existing methods assume that training data are entirely normal --- a condition rarely
+met in practice.
+In real deployments, a small fraction of training observations carry anomaly labels derived from
+recorded fault events, while the majority remain unlabeled; exploiting this partial labeling has
+received limited attention.
+We propose CSMAD, an end-to-end framework that integrates labeled anomaly information directly
+into masked autoencoder representation learning through three orthogonal mechanisms:
+anomaly-priority masking, a Student imitation loss restricted to normal patches, and
+gradient-reversal suppression of anomaly-specific information from the Student's internal
+representation.
+CSMAD employs an asymmetric Teacher--Student decoder architecture in which the
+capacity-limited Student mimics the Teacher less faithfully on anomalous correlation patterns
+than on normal ones, amplifying the Teacher--Student discrepancy signal under contaminated
+training.
+To enable evaluation of labeled-anomaly-aware methods, we introduce a contaminated benchmark
+protocol that incorporates the chronological prefix of the test stream into training, thereby
+exposing labeled anomalies that are absent from the original training splits of standard
+benchmarks.
+On [N] multivariate datasets spanning industrial and telemetry domains, CSMAD achieves
+competitive performance against [N] unsupervised and weakly supervised baselines under five
+complementary evaluation metrics.
+% PH:NUM-001 | number of benchmark dataset families
+% PH:NUM-002 | total number of baselines
+Detection performance degrades gracefully as the labeled anomaly fraction decreases, remaining
+above the unsupervised floor and validating the framework beyond the fully labeled regime.
+Code will be made available at [URL] upon acceptance.
+% PH:TXT-002 | code repository URL
+\end{abstract}
+
+%% ----- Highlights -----
+\begin{highlights}
+\item We formalize the contaminated semi-supervised MTSAD setting and a benchmark protocol
+  enabling its evaluation.
+\item CSMAD combines masked autoencoding, asymmetric self-distillation, and gradient-reversal
+  suppression of anomaly features.
+\item Three orthogonal label-integration paths: anomaly-priority masking, loss bifurcation,
+  and gradient-reversal suppression.
+\item A contaminated benchmark protocol incorporates the test prefix into training, enabling
+  evaluation of label-aware methods.
+\item CSMAD is competitive with unsupervised baselines under five metrics on [N] datasets,
+  degrading gradually with label sparsity.
+  % PH:NUM-003 | dataset-family count
+\end{highlights}
+
+%% ----- Keywords -----
+\begin{keyword}
+Multivariate time series \sep Anomaly detection \sep Semi-supervised learning
+\sep Masked autoencoder \sep Asymmetric self-distillation \sep Gradient reversal
+\sep Contaminated benchmark
+\end{keyword}
+
+\end{frontmatter}
+
+%% =====================================================================
+%% Main text
+%% =====================================================================
+
+\input{sections/sec1_intro}
+\input{sections/sec2_related}
+\input{sections/sec3_method}
+\input{sections/sec4_experiments}
+\input{sections/sec5_conclusion}
+
+%% =====================================================================
+%% References
+%% =====================================================================
+\bibliographystyle{elsarticle-num}
+\bibliography{refs}
+
+%% =====================================================================
+%% Appendices
+%% =====================================================================
+\appendix
+
+%% --- Appendix float numbering (PDF QA r1 MAJOR-5) ---
+%% elsarticle's \appendix prefixes \thetable/\thefigure with the appendix
+%% letter but does NOT reset the counters (main-body tables 1-3 would make
+%% the first appendix table "A.4").  Reset table/figure/algorithm counters
+%% here and at every appendix \section so floats number A.1..., B.1...,
+%% C.1...; redefine the hyperref anchor names so the per-section resets do
+%% not produce duplicate link destinations.
+\makeatletter
+\setcounter{table}{0}\setcounter{figure}{0}\setcounter{algocf}{0}
+\@addtoreset{table}{section}
+\@addtoreset{figure}{section}
+\@addtoreset{algocf}{section}
+\gdef\thealgocf{\@Alph\c@section.\arabic{algocf}}
+\def\theHtable{appx.\arabic{section}.\arabic{table}}
+\def\theHfigure{appx.\arabic{section}.\arabic{figure}}
+\makeatother
+
+%% Appendix equation numbering: prefix with appendix letter
+%% Reset equation counter at each appendix section via \section hooks.
+%% We use a global counter approach: appendix equations are labeled
+%% manually via \tag{} in the section files to match the manuscript
+%% (C.1 through C.5).
+
+\input{sections/appendix_A}
+\input{sections/appendix_B}
+\input{sections/appendix_C}
+
+\end{document}

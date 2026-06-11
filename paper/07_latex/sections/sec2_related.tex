@@ -1,0 +1,50 @@
+% ============================================================
+% §2  Related Work
+% ============================================================
+
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Multivariate Time Series Anomaly Detection}
+\label{sec:related_mtsad}
+
+Deep learning approaches to unsupervised MTSAD fall into several well-defined families: reconstruction-based methods flag inputs that an encoder--decoder trained to reproduce normal data reconstructs poorly~\cite{zong2018dagmm,su2019omnianomaly,audibert2020usad,song2023memto}; prediction-based methods score deviations from a forecast of the expected next state~\cite{deng2021gdn}.
+A more recent strand scores the discrepancy between learned and observed association structure, via transformer-learned temporal dependencies~\cite{xu2022anomalytransformer} or multi-scale contrastive views~\cite{yang2023dcdetector}; frequency-domain reconstruction has been extended with explicit channel-correlation discovery~\cite{wu2025catch}.
+General-purpose time-series backbones and auxiliary training objectives have also been applied directly to MTSAD~\cite{tuli2022tranad,wu2023timesnet}.
+
+All of these families, however, treat the training data as predominantly or entirely normal: when the training stream contains confirmed anomalous events (the contaminated setting of Section~\ref{sec:problem_formulation}), labeled information is either discarded or treated as noise that corrupts the learned normality model~\cite{wang2025nrdetector}.
+
+\subsection{Label-Informed Anomaly Detection: Semi-supervised, PU, and Weakly Supervised}
+\label{sec:related_semi}
+
+Positive and Unlabeled (PU) learning formalizes learning from confirmed positive examples plus unlabeled data that may contain additional positives~\cite{bekker2020pusurvey,duplessis2014pu}; established solutions include non-negative risk estimators~\cite{kiryo2017nnpu}, class-prior-based probability correction~\cite{elkan2008pu}, and two-step techniques that extract reliable negatives before training a classifier~\cite{bekker2020pusurvey}.
+Outside time series, these techniques have been adapted to anomaly detection through deviation networks with scarce labeled anomalies~\cite{pang2019devnet} and deep semi-supervised objectives~\cite{ruff2020deepsad}.
+
+In the time-series domain, methods that incorporate anomaly labels into the representation learning objective itself are rare~\cite{wang2025nrdetector}.
+A weakly supervised strand trains models to classify or rank windows from coarse segment-level annotations~\cite{sultani2018deepmil,lee2021wetas,liu2024treemil}, treating the label as the sole supervision signal, without any self-supervised reconstruction pretext.
+Our use of labels differs in kind: rather than acting as the target of a classification or ranking objective, labels here enter the gradient of the masked-reconstruction pretext task, shaping what the encoder itself learns to represent.
+Two earlier semi-supervised models address label-scarce multivariate time series: an autoregressive normality model with discriminative loss components that separate normal data from the few labeled anomalies~\cite{xue2022fewpositive}, and a variational autoencoder coupled with an active-learning labeling loop~\cite{huang2022slavae}.
+In both, labels act through loss terms attached to a generative or predictive normality objective; neither employs a masked-reconstruction self-distillation pretext nor adversarial gradient-level suppression of anomaly information.
+In the transfer setting, DACAD~\cite{darban2024dacad} exploits labeled anomalies from a related source domain through supervised contrastive learning; in our setting, the scarce labels reside in the target training stream itself.
+
+The closest precedent is NRdetector~\cite{wang2025nrdetector}, which formulates point-level detection under noisy segment-level labels as a PU problem and identifies this as a novel setting that prior time-series anomaly detection methods only partially address.
+Its framework is a pipeline: a pre-trained WETAS-derived backbone extracts temporal embeddings, and a separate PU classifier is trained on those fixed representations; the label signal guides the classifier's output, not the encoder's gradient.
+Our approach differs along this axis: labeled anomaly information enters the gradient of the encoder during training itself, through three orthogonal mechanisms that shape what the model learns to represent rather than what it predicts.
+To our knowledge, CSMAD is the first end-to-end MTSAD model that integrates labeled anomalies into the gradient of a masked-reconstruction self-distillation objective through gradient reversal.
+
+\subsection{Masked Autoencoders and Self-Distillation in Anomaly Detection}
+\label{sec:related_mae}
+
+The masked autoencoder (MAE) of He et al.~\cite{he2022mae} demonstrates that masking random patches and reconstructing the missing regions produces strong transferable representations.
+Our patch-based masking adapts this spatial-domain paradigm to windows of multivariate sensor channels; similar masking-based reconstruction objectives in some time-series models~\cite{fang2024tfmae} constitute independent developments, whereas our design follows directly from vision MAE.
+
+Knowledge distillation has been applied to anomaly detection through teacher--student frameworks: a student trained to match a pre-trained teacher's representations fails to do so on anomalous inputs, revealing the anomaly as a representation gap~\cite{bergmann2020uninformed,deng2022reverse}.
+A more self-contained formulation is self-distillation~\cite{zhang2022selfdistill}, which performs the distillation within a single architecture.
+Ristea et al.~\cite{ristea2024sdmae} adapt this design to video anomaly detection, pairing a capacity-limited student decoder with a deeper teacher inside a masked autoencoder and using their output discrepancy as the anomaly score at inference.
+
+We adapt this asymmetric teacher--student masked autoencoder design to multivariate time series, embedding it within the contaminated semi-supervised framework of Section~\ref{sec:problem_formulation}, where labeled anomalies guide training through the three pathways of Sections~\ref{sec:masking}--\ref{sec:label_training}.\footnote{%
+  The self-distillation terminology is adopted from Zhang et al.~\cite{zhang2022selfdistill} and Ristea et al.~\cite{ristea2024sdmae}.
+  We capitalize Teacher and Student when referring to CSMAD's own decoder branches and use lowercase for the general teacher--student paradigm.
+  Unlike SDMAE, whose student decoder branches off from within the teacher decoder after its first transformer block, our Teacher and Student decoders are independent parallel branches off the shared encoder.
+  The gradient reversal layer that adversarially suppresses anomaly information in the Student is absent from Ristea et al.~\cite{ristea2024sdmae}, who train without real labeled anomalies.
+  The distinction between operating in the target/loss space and in the gradient space of the representation is elaborated in Section~\ref{sec:label_training}.}

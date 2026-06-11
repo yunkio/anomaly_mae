@@ -71,7 +71,12 @@ last_modified: 2026-06-10
 - `AI_PHRASING_LEDGER.md` — corpus 기반 금지 패턴 + 검출 52건 (em-dash 패턴 등). `STYLE_AUDIT_A.md` (영어 산문 품질 88건) / `STYLE_AUDIT_B.md` (분야 관용 67건) / `TERMINOLOGY_AUDIT.md` (Q1/Q3 판정·약어 인벤토리·notation).
 - 결과물은 `05_manuscript/MANUSCRIPT_v3.md` — **현 본문 정본** (문체 패스 + 회귀 검사 통과; MINOR 4건 Phase 7 polish 이월 D-011).
 
-## 07_latex/ — Phase 7 (예정)
+## 07_latex/ — Phase 7 (완료, 게이트 PASS 5/5 2026-06-11)
+
+- `overleaf_package.zip` — **최종 인도물** (12파일: main.tex + sections 8 + refs.bib + elsarticle-num.bst + elsarticle.cls; 단독 컴파일 검증 2회 PASS). 그대로 Overleaf 업로드 가능.
+- `main.tex` + `sections/*.tex` — **본문 정본 (.tex)** (MANUSCRIPT_v3.md는 동결). preprint,12pt 배포 모드.
+- `main.pdf` (46p) — 검수용 PDF. `main_{3p,5p}_measure.*` — 분량 측정 빌드 (5p 본문 8.997p — D-012 기준 판형; zip 미포함).
+- `TEMPLATE_REQUIREMENTS.md` (v2), `PROSE_DIFF_LOG.md` (산문 변경 통제 전 기록 — D-011 7건 + D-013 압축 + 측정 무결성 §5.6), `pdf_qa/` (QA r1 + FIX r2).
 
 ## 08_final_audit/ — Phase 8 (예정)
 
