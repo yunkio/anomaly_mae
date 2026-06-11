@@ -60,8 +60,8 @@
 %% NOTE: We suppress the tag on Appendix C equations that were defined
 %% in the manuscript with explicit C.x tags, using \label for xref.
 
-%% --- Journal placeholder ---
-\journal{[JOURNAL NAME --- to be filled]}
+%% --- Journal (target confirmed 2026-06-11, D-015 4) ---
+\journal{Knowledge-Based Systems}
 
 %% =====================================================================
 \begin{document}
@@ -112,25 +112,25 @@ Code will be made available at [URL] upon acceptance.
 \end{abstract}
 
 %% ----- Highlights -----
+%% KBS GFA: 3-5 bullets, max 85 characters each INCLUDING spaces (D-015 1).
+%% All five bullets verified <=85 chars (79/81/84/84/83); same content is
+%% duplicated in highlights.txt (separate editable submission file).
 \begin{highlights}
-\item We formalize the contaminated semi-supervised MTSAD setting and a benchmark protocol
-  enabling its evaluation.
-\item CSMAD combines masked autoencoding, asymmetric self-distillation, and gradient-reversal
-  suppression of anomaly features.
-\item Three orthogonal label-integration paths: anomaly-priority masking, loss bifurcation,
-  and gradient-reversal suppression.
-\item A contaminated benchmark protocol incorporates the test prefix into training, enabling
-  evaluation of label-aware methods.
-\item CSMAD is competitive with unsupervised baselines under five metrics on [N] datasets,
-  degrading gradually with label sparsity.
+\item We formalize the contaminated semi-supervised MTSAD setting with sparse labels.
+\item Three label paths: anomaly-priority masking, loss bifurcation, gradient reversal.
+\item CSMAD's asymmetric Teacher--Student masked autoencoder amplifies anomaly discrepancy.
+\item A contaminated benchmark adds test prefixes to training, exposing labeled anomalies.
+\item Competitive on [N] datasets under five metrics; graceful decay with label sparsity.
   % PH:NUM-003 | dataset-family count
 \end{highlights}
 
 %% ----- Keywords -----
+%% KBS GFA: maximum 6 keywords, American spelling (D-015 2).
+%% 'Contaminated benchmark' removed (7 -> 6): protocol artifact rather than an
+%% indexing concept; its content is covered by 'Semi-supervised learning'.
 \begin{keyword}
 Multivariate time series \sep Anomaly detection \sep Semi-supervised learning
 \sep Masked autoencoder \sep Asymmetric self-distillation \sep Gradient reversal
-\sep Contaminated benchmark
 \end{keyword}
 
 \end{frontmatter}
@@ -139,11 +139,66 @@ Multivariate time series \sep Anomaly detection \sep Semi-supervised learning
 %% Main text
 %% =====================================================================
 
-\input{sections/sec1_intro}
-\input{sections/sec2_related}
-\input{sections/sec3_method}
-\input{sections/sec4_experiments}
-\input{sections/sec5_conclusion}
+%% Flat file layout (D-015 5): section files live next to main.tex so the
+%% identical tree compiles on Overleaf and uploads to Editorial Manager
+%% ('all files at a single level' — Elsevier LaTeX instructions).
+\input{sec1_intro}
+\input{sec2_related}
+\input{sec3_method}
+\input{sec4_experiments}
+\input{sec5_conclusion}
+
+%% =====================================================================
+%% Declarations (Elsevier/KBS required statements — D-015 3)
+%% Order: CRediT -> competing interest -> generative AI -> data
+%% availability -> funding/acknowledgements; after the Conclusion and
+%% before the References per the KBS Guide for Authors.
+%% NOT part of the R6 body-length measurement (D-015 6: journal-mandated
+%% boilerplate, measured like references — body endpoint stays at the
+%% last line of Section 5).
+%% =====================================================================
+
+\section*{CRediT authorship contribution statement}
+\textbf{[AUTHOR 1 --- to be filled]:} Conceptualization, Methodology, Software,
+Validation, Formal analysis, Investigation, Data curation, Writing -- original
+draft, Visualization.
+\textbf{[AUTHOR 2 --- to be filled]:} Conceptualization, Writing -- review \&
+editing, Supervision, Project administration, Funding acquisition.
+%% [TO BE CONFIRMED BY AUTHORS] Distribute the 14 CRediT roles
+%% (Conceptualization; Methodology; Software; Validation; Formal analysis;
+%% Investigation; Resources; Data curation; Writing - original draft;
+%% Writing - review & editing; Visualization; Supervision; Project
+%% administration; Funding acquisition) across the final author list.
+
+\section*{Declaration of competing interest}
+The authors declare that they have no known competing financial interests or
+personal relationships that could have appeared to influence the work reported
+in this paper.
+[TO BE CONFIRMED BY AUTHORS]
+%% If any competing interest exists, replace the sentence above with a
+%% disclosure; KBS additionally requires the Elsevier declaration-tool
+%% .docx to be generated and attached at submission.
+
+\section*{Declaration of generative AI and AI-assisted technologies in the
+          writing process}
+During the preparation of this work the author(s) used [NAME TOOL / SERVICE]
+in order to [REASON]. After using this tool/service, the author(s) reviewed
+and edited the content as needed and take(s) full responsibility for the
+content of the publication.
+[TO BE CONFIRMED BY AUTHORS --- state the tool(s)/service(s) used and the
+scope of use; Elsevier policy permits readability/language improvement only.]
+
+\section*{Data availability}
+[X --- e.g., The benchmark datasets analyzed in this study are publicly
+available from their original sources; code will be made available at [URL]
+upon acceptance.]
+% PH:TXT-002 | code repository URL (sync with abstract / Section 5)
+
+\section*{Funding and acknowledgements}
+[TO BE FILLED]
+%% If no funding applies, Elsevier's recommended sentence is: "This research
+%% did not receive any specific grant from funding agencies in the public,
+%% commercial, or not-for-profit sectors."
 
 %% =====================================================================
 %% References
@@ -179,8 +234,8 @@ Multivariate time series \sep Anomaly detection \sep Semi-supervised learning
 %% manually via \tag{} in the section files to match the manuscript
 %% (C.1 through C.5).
 
-\input{sections/appendix_A}
-\input{sections/appendix_B}
-\input{sections/appendix_C}
+\input{appendix_A}
+\input{appendix_B}
+\input{appendix_C}
 
 \end{document}

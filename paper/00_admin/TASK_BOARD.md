@@ -134,6 +134,19 @@ last_modified: 2026-06-10
 | P8-6 최종 coverage 전수 감사 (57행 + DoD 7항목) | final-coverage-auditor | DONE | PASS (`p8_final_coverage_r1.md`) |
 | P8-7 마감 commit + 최종 핸드오프 보고 | orchestrator | DONE | |
 
+## 재진입 (2026-06-11 — 일시 중단 중, RESUME_STATE.md 참조)
+
+| Task | 담당 | 상태 | 비고 |
+|------|------|------|------|
+| RE-1 KBS 규정 조사 | journal-format-researcher | DONE | 85자 highlights·2단 판형·선언 5종 등 |
+| RE-2 KBS 적용 8건 (highlights/keywords/선언/journal/flat/재컴파일/재측정/zip) | latex-engineer | DONE | 본문 8.997p 유지, zip flat 13파일 PASS |
+| RE-3 KBS 산문 미니 감사 | kbs-miniauditor | DONE | PASS 4/4, NOTE 3건 핸드오프 예정 |
+| RE-4 Notion 확장판 작성 (B1 본문 / B2 부록+OVERVIEW) | spec-enricher ×2 | DONE | 18페이지 분량 + 대시보드 자료 |
+| RE-5 정제 (한국어·구성 통일 → NOTION_FINAL_PAGES) | notion-polisher-C | **중단됨 (미시작)** | 재개 1순위 — RESUME_STATE §3-1 |
+| RE-6 독립 검수 | 검수자 D | PLANNED | |
+| RE-7 발행 (MAE for AD 하위, 부모+하위 ~19장) + 구 페이지 중립화 | notion-expert | PLANNED | |
+| RE-8 마감 (matrix/ledger/보고/commit) | orchestrator | PLANNED | |
+
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 
 | Phase | 핵심 태스크 (마스터 §7) | 엄격 구역 |

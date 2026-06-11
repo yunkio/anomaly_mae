@@ -284,3 +284,72 @@ Appendix 한정 신규 2문장 — 본문(§1–§5) 무접촉.
 | 신규 문장 렌더 위치 | — | PDF p.15 (appendix §B.2 — 변경 전과 동일 페이지) | appendix 한정 |
 | 빌드 오류 | 0 | 0 (`!` 라인 0, undefined ref 0, "??" 0) | PASS |
 | Overfull | 5p 1건 / preprint 10건 (§5.7 기록) | 5p 1건 / preprint 10건 | 회귀 없음 |
+
+## 7. D-015 — KBS 정합화 (2026-06-11, latex-engineer)
+
+**Authorization**: DECISION_LOG D-015 — KBS_FORMAT_REQUIREMENTS.md 갭 항목 #1–#5 적용.
+본문 산문(§1–§5·Appendix) **무접촉** — 변경은 frontmatter(highlights/keywords)·선언 섹션·구조에 한정.
+
+### 7.1 Highlights 재작성 (5/5 — KBS 한도 공백 포함 ≤85자, python `len()` 실측)
+
+| # | 구 (글자수) | 신 (글자수) | 압축 축 |
+|---|---|---|---|
+| H1 | "We formalize the contaminated semi-supervised MTSAD setting and a benchmark protocol enabling its evaluation." (**109**) | "We formalize the contaminated semi-supervised MTSAD setting with sparse labels." (**79**) | 설정 정식화 (벤치마크 절은 H4로 이관) |
+| H2 | "Three orthogonal label-integration paths: anomaly-priority masking, loss bifurcation, and gradient-reversal suppression." (**120**) | "Three label paths: anomaly-priority masking, loss bifurcation, gradient reversal." (**81**) | 라벨 3경로 주입 |
+| H3 | "CSMAD combines masked autoencoding, asymmetric self-distillation, and gradient-reversal suppression of anomaly features." (**120**) | "CSMAD's asymmetric Teacher--Student masked autoencoder amplifies anomaly discrepancy." (**84** — `--`→en-dash 1자 렌더 기준; 소스 그대로 세어도 85) | 비대칭 teacher–student |
+| H4 | "A contaminated benchmark protocol incorporates the test prefix into training, enabling evaluation of label-aware methods." (**121**) | "A contaminated benchmark adds test prefixes to training, exposing labeled anomalies." (**84**) | 오염 벤치마크 프로토콜 |
+| H5 | "CSMAD is competitive with unsupervised baselines under five metrics on [N] datasets, degrading gradually with label sparsity." (**125**) | "Competitive on [N] datasets under five metrics; graceful decay with label sparsity." (**83**) | 실험·강건성 (PH:NUM-003 유지) |
+
+- 구 5개 모두 85자 초과(109–125) → 신 5개 전부 ≤85 (79/81/84/84/83). 의미 보존: 구 H2(통합 아키텍처)와 구 H3(3경로)의 정보는 신 H2+H3로 재배분 — 누락 개념 없음(masked autoencoding·self-distillation·GRL 모두 잔존).
+- **별도 제출 파일 `highlights.txt`** 생성 (KBS "separate editable file" 규정): 동일 5개 bullet, plain text(en-dash → ASCII hyphen, 84자), 동일 ≤85 검증 통과.
+
+### 7.2 Keywords 7 → 6 (KBS 최대 6)
+
+| 변경 | 내용 | 근거 |
+|---|---|---|
+| 제거 | **"Contaminated benchmark"** (7번째) | 정보량 최소: 색인 개념이 아닌 본 논문의 프로토콜 산물(고유명사화된 자기 지칭)이며, 검색 의도는 "Anomaly detection"+"Semi-supervised learning" 조합이 포섭. KBS_FORMAT_REQUIREMENTS.md §10-2 권고안과 일치 |
+| 잔존 6 | Multivariate time series / Anomaly detection / Semi-supervised learning / Masked autoencoder / Asymmetric self-distillation / Gradient reversal | American spelling 확인 — 영국식 변이형 해당 단어 없음 (-ise/-our/-yse 패턴 0건) |
+
+### 7.3 선언 섹션 신설 (Conclusion 뒤 · References 앞 — KBS 필수 5종) **[미니 감사 대상]**
+
+> 신규 영문 산문 전문 수록. 본문 분량 측정에서 제외(D-015 ⑥ — references와 동급의 저널 의무
+> boilerplate; 측정 종점은 §5 말미 유지). Elsevier 표준 문구 + placeholder로 구성 — 창작 서술 없음.
+
+**① CRediT authorship contribution statement**
+> **[AUTHOR 1 --- to be filled]:** Conceptualization, Methodology, Software, Validation, Formal analysis, Investigation, Data curation, Writing -- original draft, Visualization. **[AUTHOR 2 --- to be filled]:** Conceptualization, Writing -- review \& editing, Supervision, Project administration, Funding acquisition.
+
+(14개 CRediT 역할 배분은 최종 저자 목록 확정 시 — tex 주석으로 전체 역할 목록 병기)
+
+**② Declaration of competing interest** — Elsevier 표준 문구 그대로:
+> The authors declare that they have no known competing financial interests or personal relationships that could have appeared to influence the work reported in this paper. [TO BE CONFIRMED BY AUTHORS]
+
+**③ Declaration of generative AI and AI-assisted technologies in the writing process** — Elsevier 지정 양식 그대로:
+> During the preparation of this work the author(s) used [NAME TOOL / SERVICE] in order to [REASON]. After using this tool/service, the author(s) reviewed and edited the content as needed and take(s) full responsibility for the content of the publication. [TO BE CONFIRMED BY AUTHORS --- state the tool(s)/service(s) used and the scope of use; Elsevier policy permits readability/language improvement only.]
+
+**④ Data availability**
+> [X --- e.g., The benchmark datasets analyzed in this study are publicly available from their original sources; code will be made available at [URL] upon acceptance.]
+
+(PH:TXT-002 — abstract·§5와 URL 동기화 주석 유지)
+
+**⑤ Funding and acknowledgements**
+> [TO BE FILLED]
+
+(무펀딩 시 Elsevier 권장 문구를 tex 주석으로 병기: "This research did not receive any specific grant from funding agencies in the public, commercial, or not-for-profit sectors.")
+
+### 7.4 구조·메타 변경 (산문 아님 — 기록용)
+
+| 항목 | 내용 |
+|---|---|
+| `\journal{}` | `[JOURNAL NAME --- to be filled]` → **`\journal{Knowledge-Based Systems}`** (main / main_3p_measure / main_5p_measure 3종 전부) |
+| flat 재구성 | `sections/*.tex` 8종 → 루트로 `git mv`(rename 기록 확인: `R` status 8건), `\input{sections/...}` → `\input{...}` 3종 main 전부 갱신 — Overleaf·Editorial Manager(단일 레벨 업로드 규정) 양쪽 호환 |
+| zip 재패키징 | `overleaf_package.zip` flat 13파일 (main.tex + 섹션 8 + refs.bib + bst + cls + highlights.txt; measure 빌드·부산물 제외) — **임시 폴더 단독 컴파일 검증 PASS** (exit 0 / `!` 0 / "??" 0 / 47p) |
+
+### 7.5 재컴파일·재측정 (3종)
+
+| 항목 | 변경 전 (§6.3) | 변경 후 | 판정 |
+|---|---|---|---|
+| 빌드 오류 (3종 전부) | 0 | 0 (`!` 0, undefined 0, "??" 0 — main/3p/5p) | PASS |
+| main.pdf (preprint) 총 페이지 | 46 | 47 | 선언 섹션 추가분 (+1p, References 앞) — 예상 범위 |
+| main_5p_measure.pdf 총 페이지 | 19 | 21 | 선언 섹션 + 페이지 흘림 (측정 제외 영역) |
+| **5p 본문 종점 (§5 "…acceptance).")** | printed p.9 (PDF p.10) 우측 컬럼 yMax **762.842847pt** | printed p.9 (PDF p.10) 우측 컬럼, 단어 "ceptance)." yMax **762.842847pt** — 좌표 bit-identical | **8.997p 유지** (8 + 0.5 + 0.5×(762.84−84.8)/682) |
+| 선언 섹션 렌더 위치 (5p) | — | PDF p.11 (CRediT 시작) — 본문 종점 이후 | 측정 무간섭 확인 |
