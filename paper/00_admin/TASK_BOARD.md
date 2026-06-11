@@ -86,6 +86,17 @@ last_modified: 2026-06-10
 | P4-6 refs.bib(49) + REFERENCES_IEEE + LIBRARY_INDEX + 통합 ledger | assembler | DONE | |
 | P4-7 게이트: 전수 재감사 + 무작위 16편 재검증 | gate-auditor | DONE | 조건부 FAIL(GB-1 bib 구문) → 수정 + 49/49 파싱 → PASS |
 
+## Phase 5 — 영어 본문 작성 (엄격 구역: 표절·진실 정합·수치 창작)
+
+| Task | 담당 | 상태 | 비고 |
+|------|------|------|------|
+| P5-1 섹션 drafter 4인 (front/related/method/experiments) | section-drafter ×4 | DONE | |
+| P5-2 v1 통합 + PLACEHOLDER_REGISTRY + 인용 key 검증 | integrator | DONE | 분량 11.8p 적발 |
+| P5-3 분량 수술 1·2차 + Appendix 작성 | budget-surgeon ×2 | DONE | D-009/D-010; 10.42p (Phase 7 실측 인계) |
+| P5-4 검증 5종 병렬 (R36/truth/표절/인용 역방향/adversarial) | 감사 5인 | DONE | 발견 99건 (B17·M다수; placeholder 정책 충돌 2건은 기각) |
+| P5-5 종합 수정 → MANUSCRIPT_v2 | comprehensive fixer | DONE | 94건 처리 + 정본 errata 2건 |
+| P5-6 coverage 게이트 (마감+재추적+A8 스윕+Directive 32) | coverage-auditor | DONE | 조건부 FAIL(F-1 1문장) → orchestrator 정정 → PASS |
+
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 
 | Phase | 핵심 태스크 (마스터 §7) | 엄격 구역 |

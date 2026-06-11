@@ -59,7 +59,12 @@ last_modified: 2026-06-10
 - `library/` — reference card 49 (FULL 22: verbatim 발췌+활용 맥락 / LIGHT 27: 서지+abstract+역할). EXCERPT_UNVERIFIED 잔존 3 (zhang2022selfdistill·xu2018kpivae·ruff2020deepsad — 서지 인용 가능, verbatim 금지).
 - `SCOUT_CANDIDATE_LIST.md`, `VERIFIER_B_SEED.md` — 중간 산출물 (탐색·blind seed).
 
-## 05_manuscript/ — Phase 5 (예정)
+## 05_manuscript/ — Phase 5 (완료, 게이트 PASS 2026-06-11)
+
+- `MANUSCRIPT_v2.md` — **본문 정본** (Title/Abstract/Keywords/Highlights + §1–5 + Appendix A/B/C; 영어 완성본, placeholder 49종). v1·v2_draft는 이력 보존.
+- `PLACEHOLDER_REGISTRY.md` (v2-r3) — placeholder 전수 (NUM 31, TXT 2, FIG 5, TAB 11, ALG 1; ID/위치/완성 캡션/내용 명세/크기) — Phase 7 배치·Phase 8 Notion 명세의 정본.
+- `INTEGRATION_REPORT_v1.md`, `SURGERY_REPORT_v2.md` — 통합·분량 수술 기록 (분량 추정 10.42p, Phase 7 실측 판정 인계 — D-010 ⑤).
+- `sections/` — 섹션별 초안 (이력).
 
 ## 06_style_audit/ — Phase 6 (예정)
 
