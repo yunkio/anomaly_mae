@@ -2,7 +2,7 @@
 phase: 0
 agent: orchestrator
 directives: [M10, A10]
-last_modified: 2026-06-10
+last_modified: 2026-06-11
 ---
 
 # Coverage Matrix — Directive 추적 (총 57행: T 7 + R 37 + M 13)
@@ -28,9 +28,9 @@ last_modified: 2026-06-10
 
 | ID | 요약 | 담당 Phase | 상태 | 충족 근거 |
 |----|------|-----------|------|----------|
-| R1 | Related work·contribution·실험 MECE 구성 | 3, 5, 8 | IN_PROGRESS | | / P3: BLUEPRINT §4.1·§6.1 + §11 결정① MECE 검증문(주입 vs 기판) / P5: §2 구조 + contribution 4-bullet + §4 구성 (게이트 확인) |
+| R1 | Related work·contribution·실험 MECE 구성 | 3, 5, 8 | DONE | | / P3: BLUEPRINT §4.1·§6.1 + §11 결정① MECE 검증문(주입 vs 기판) / P5: §2 구조 + contribution 4-bullet + §4 구성 (게이트 확인) / P8: 최종 감사 2인이 MECE 의무 항목 재확인 (FINAL_AUDIT_reviewer{1,2}.md) |
 | R2 | 참고자료(특히 Notion) 논리·서술은 참고만 — 충분한 판단 후 활용 (contribution 구조 채택 여부 선판단) | 1, 3 | DONE | P1: NOTION_DIGEST 헤더 R2 경고 + [주장]/[사실] 등급 분리 전 섹션 + CONFERENCE_PDF_DIGEST 헤더·§⑦ + RESEARCH_SYNTHESIS §⑥ (Phase 3 판단 유보) / P3: §11 결정① C1–C4 채택/수정/기각 판정표 + stale 판정 (D-005) |
-| R3 | figure/실험 placeholder 틀 + '실험 잘 되었다' 가정 서술 + Notion 하위 페이지에 placeholder별 구체적 한국어 명세 + 실험 데이터 부족 지적 금지(한계 아님) + 캡션·설명은 placeholder여도 완성형 | 5, 7, 8 | IN_PROGRESS | | / P5: placeholder 49종 + 완성 캡션 + 데이터 부족 지적 0 (BP-05 기각으로 보존) / P7: FIG/TAB/ALG placeholder REGISTRY 캡션·크기 그대로 배치 (spot 7건 일치, `99_reviews/p7_coverage_gate_r1.md`) |
+| R3 | figure/실험 placeholder 틀 + '실험 잘 되었다' 가정 서술 + Notion 하위 페이지에 placeholder별 구체적 한국어 명세 + 실험 데이터 부족 지적 금지(한계 아님) + 캡션·설명은 placeholder여도 완성형 | 5, 7, 8 | DONE | | / P5: placeholder 49종 + 완성 캡션 + 데이터 부족 지적 0 (BP-05 기각으로 보존) / P7: FIG/TAB/ALG placeholder REGISTRY 캡션·크기 그대로 배치 (spot 7건 일치, `99_reviews/p7_coverage_gate_r1.md`) / P8: NOTION_PLACEHOLDER_SPECS r2 (검수 통과 — REGISTRY 전수, 한국어 명세, 재현 가능 수준) → Notion 하위 페이지 발행 + re-fetch 렌더링 검증 (https://www.notion.so/37c87856b207810e83e3d1b5f14766fc) |
 | R4 | 'AI가 작성한 티'·도메인 비관용·논문 비관용 표현 엄격 검증 | 5, 6 | DONE | | / P5: 초안 단계 예방 — 금지 패턴 산문 grep 0 / P6: corpus-derived 금지 패턴 LEDGER + 잔존 0 (회귀 검사 포함, `99_reviews/p6_coverage_gate_r1.md`) |
 | R5 | notation 오류 없이 + 최대한 일반적·이해 쉬운 방식 (참고자료는 참고만) | 3, 5, 6 | DONE | | / P3: §9.1 기호 체계(λ_GRL/λ_rev 분리) + §9.2 금지 사항 / P5: Eq(1)–(6)·C.1–C.5 코드 정합 + 기호 충돌 6군 해소 + Table C.2 / P6: notation 최종 — d_model 통일 + Table C.2 동기 (truth-spot 수치 정합, `99_reviews/p6_coverage_gate_r1.md`) |
 | R6 | 분량: appendix·reference 제외, table/figure 합쳐 9page. 크기 넉넉히 가정 | 3, 7 | DONE | | / P3: PAGE_BUDGET r3 단일 정본 9.0p (D-006⑨) / P7: 5p 판형 본문 8.997p (8.5–9.0 內, bbox 독립 재측정 재현; 실수치 투입 후 재측정 경고 등재) (`99_reviews/p7_coverage_gate_r1.md`) |
@@ -41,11 +41,11 @@ last_modified: 2026-06-10
 | R11 | semi-supervised/PU 환경 집중 — 대부분 unlabeled + 소수 핵심 이상 label, 기존 unsupervised는 labeled 활용 불가가 핵심 | 1, 3, 5 | DONE | P1: RESEARCH_SYNTHESIS §②-1~⑥ (3단 프레이밍) + CODEBASE_UNDERSTANDING §4.3 / P3: §5.2 contaminated semi-supervised 정의 + 결정② (D-005②) / P5: contaminated semi-supervised 정의 + 3단 구조 (§3.1, 게이트 확인) |
 | R12 | unsupervised 비교군의 label 활용 최선 = 학습 데이터에서 알려진 이상 제거 (순도 높은 정상 학습) | 1, 5 | DONE | P1: EXPERIMENT_PROTOCOL_TRUTH §③ (normalonly 구현 file:line) + RESEARCH_SYNTHESIS §④ / P5: §4.1.4 "most favorable use of the labels" 서술 (게이트 확인) |
 | R13 | main 실험: 기존 벤치마크는 train에 anomaly 부재가 대부분 → test에 포함된 anomaly를 학습 단계에 반영하기 위해 test를 길이 기준 반반 분할, 앞 50% train 포함. 이때 기존 unsupervised는 알려진 이상 제거로 순도 높은 정상 학습 데이터 구성(이상 포함 시 성능 하락). 시간적으로 뒤쪽 데이터를 test로 사용 + 공정성 위해 취사선택 없이 전 데이터셋 통일 적용 강조 | 1, 5 | DONE | P1: EXPERIMENT_PROTOCOL_TRUTH §② (//2 전수 라인 + safe-cut 실측) + §① train anomaly 실측 / P5: §4.1.1 동기→midpoint re-split→통일→선례 5논거 (게이트 확인) |
-| R14 | 중간 산출물 철저 구조화 + 쉽게 찾을 수 있는 index 유지 | 0, 8 (전 Phase 상시) | IN_PROGRESS | P0: §4 워크스페이스 골격 + `00_admin/INDEX.md` 가동 (frontmatter 규칙 포함) |
+| R14 | 중간 산출물 철저 구조화 + 쉽게 찾을 수 있는 index 유지 | 0, 8 (전 Phase 상시) | DONE | P0: §4 워크스페이스 골격 + `00_admin/INDEX.md` 가동 (frontmatter 규칙 포함) / P8: INDEX.md 최종 갱신 (전 산출물 + 찾는 법) — 전 Phase 누적 |
 | R15 | 불필요한 신규 축약어 금지 — 단 제목·모델명·모델 축약어는 novelty 부각 방향 | 3, 5, 6 | DONE | | / P3: §10 후보 4+5종(장단점) + D-007 선정 (모델명 CSMAD, 제목 후보2) / P5: 제목·CSMAD 본문 반영 + 신규 축약어 0 / P6: 약어 전수 인벤토리 — bare TSAD 해소, 신규 불필요 축약어 0 (`99_reviews/p6_coverage_gate_r1.md`) |
 | R16 | NRdetector의 실험 구성·논리 참고 (거의 유일한 시계열 semi-supervised) | 2, 3, 5 | DONE | P2: NRDETECTOR_DOSSIER §1–3 (2-stage PU 구조·정당화 논리·split·라벨 sweep·baseline 3계층·11지표) / P3: §14 논거⑤ NRdetector 선례 + §6.4·§6.8·§4.3 / P5: re-split 선례 + 차이 축 + Q1-only 처리 (게이트 확인) |
 | R17 | 271 config만 사용 — 미사용 option(예: dynamic margin) 전부 무시, metadata+코드 추적으로 사용/미사용 명확 구분 | 1, 5 | DONE | P1: 271_CONFIG_TRUTH §I–VIII (r3; metadata 37 전수 + verifier 2인 + 재리뷰 α + 게이트 spot 4/4) / P5: 미사용 component 산문 grep 0 + Table A.1=271truth r4 전사 (게이트 확인) |
-| R18 | 완료 후 "정말 출판된 level의 완성 논문인가" 점검 (placeholder 허용) | 8 | PENDING | |
+| R18 | 완료 후 "정말 출판된 level의 완성 논문인가" 점검 (placeholder 허용) | 8 | DONE | | / P8: 신규 리뷰어 2인 모의 피어리뷰 (학회 양식, 점수+판정) + D-014 triage — placeholder-비본질 reject급 약점 0 (채택 2건 반영: B.2 보강+R-PROBE 명세) |
 | R19 | baseline 전부 related work 언급 불필요 — 단순 비교 모델은 실험 섹션 인용으로 충분(NRdetector 논문 참고). 핵심 계승 요소가 있거나 직접 비교 대상이 되는 경우에만 설명 | 2(근거 수집), 3, 5 | DONE | P2: NRDETECTOR_DOSSIER §4 (related work 내 baseline 0건 grep 검증 + §4.3 운영 규칙 3조) / P3: §4.2 괄호 클러스터 정책 + §6.5 / P5: baseline 26종 실험 섹션 클러스터 인용 (게이트 확인) |
 | R20 | SSL/PU related work: 기존 방법론 목표 언급 + 시계열 부재 강조, NRdetector는 차이점 위주 | 2(준비), 3, 5 | DONE | P2: NRDETECTOR_DOSSIER §5 (차이축 D1–D9 + "거의 없음" 정밀 스코핑 + 차이-중심 전략) / P3: §4.3 시계열 PU/SSL 희소 스코핑 + 차이 중심 / P5: "remains rare" 스코핑 + PU 목표 + NRdetector 차이 위주 (게이트 확인) |
 | R21 | self-distillation 용어 — SDMAE 선례를 방어논리로 (해당 논문의 명명 이유 확인) | 2, 3, 5 | DONE | P2: ANCHOR_SDMAE_DOSSIER §3.5·§5.1 (용어 계보 Zhang TPAMI 2022 → SDMAE → 본 연구; coining 금지 플래그 §9) / P3: §4.4 용어 계보 + 결정⑤ 각주 초안 / P5: terminology follows Zhang→Ristea 계보 서술 (게이트 확인) |
@@ -64,25 +64,25 @@ last_modified: 2026-06-10
 | R34 | Gaussian smoothing 내용 제외 (사용 안 함) | 1, 5 | DONE | P1: 271_CONFIG_TRUTH §VI·§VII#18·§IX (gauss() 실재·271 무참조) + RESEARCH_SYNTHESIS §⑤ (CG-1 패치 완료) / P5: Gaussian smoothing 본문 grep 0 (게이트 확인) |
 | R35 | 너무 지엽적인 것 생략 | 5, 6 | DONE | | / P5: 지엽 Appendix 격리 (D-009/D-010) / P6: 지엽 판정 잔존 actionable 0 (`99_reviews/p6_coverage_gate_r1.md`) |
 | R36 | 뒷받침 근거 필요한데 인용 없는 부분 → 인용 가능 논문 찾아 reference 부착 | 4, 5 | DONE | | / P4: CLAIM_CITATION_MAP C-001~085 전수 매핑 (수요→후보→2채널 검증 VERIFIED 78→배치 추적; P5 보강 루프 잔존) / P5: 인용 공백 15건 전수 처리 + 역방향 109 인스턴스 검증 (`99_reviews/p5_coverage_gate_r1.md`) |
-| R37 | ./paper_legacy 작업물 절대 참고 금지 | 0 (전 Phase 상시) | IN_PROGRESS | P0: 전 dispatch 프롬프트에 금지 명문화 (감사 A/B/r2 프롬프트 확인 가능) + `AGENT_ROSTER.md` 공통 규약 ③ |
+| R37 | ./paper_legacy 작업물 절대 참고 금지 | 0 (전 Phase 상시) | DONE | P0: 전 dispatch 프롬프트에 금지 명문화 (감사 A/B/r2 프롬프트 확인 가능) + `AGENT_ROSTER.md` 공통 규약 ③ / P1–P8: 전 dispatch 프롬프트(~50회)에 A4 금지 명문화 + 위반 보고 0건 — 전 Phase 상시 준수 완료 |
 
 ## 메타 지시 (M1–M13)
 
 | ID | 요약 | 담당 Phase | 상태 | 충족 근거 |
 |----|------|-----------|------|----------|
-| M1 | orchestrator: 전체 계획 수립·관리 + sub-agent 정의·배정·관리·팀 작업 | 0 (전 Phase 상시) | IN_PROGRESS | P0: `AGENT_ROSTER.md` 확정 + `TASK_BOARD.md` Phase 1–8 계획 등재 + 감사 dispatch 운영 |
-| M2 | 작업별 리뷰 전문 sub-agent 피드백 루프 = 성공의 핵심 | 0 (전 Phase 상시) | IN_PROGRESS | P0: §5.3 루프 실증 — 감사 r1(MAJOR 1) → 수정 → r2(PASS), `99_reviews/p0_*` 3건 |
-| M3 | agent 간 작업 요청/피드백 가능 — orchestrator가 중간 조율 | 0 (전 Phase 상시) | IN_PROGRESS | P0: `REQUESTS_AND_FEEDBACK.md` 라우팅 테이블 가동 + 전 dispatch에 REQUEST:/FEEDBACK: 규약 포함 |
-| M4 | 퀄리티 최우선 — 시간·토큰 효율 고려 금지, 모든 퀄리티 테크닉 동원 | 0 (전 Phase 상시) | IN_PROGRESS | P0: 독립 감사 2인 병렬 + 수정분 재리뷰 라운드 운영 |
-| M5 | 한꺼번에 과다 지시 금지 — phase 분할, 차례대로 | 0 (전 Phase 상시) | IN_PROGRESS | P0: Phase 0–8 + 태스크 단위 분할 (`TASK_BOARD.md`), dispatch당 단일 역할 원칙 (`AGENT_ROSTER.md` 규약) |
-| M6 | phase별 절대 엄격 파트 존재 (reference 표기, 표절 방지 등) | 0 (전 Phase 상시) | IN_PROGRESS | P0: 엄격 구역 명세 (`TASK_BOARD.md` Phase 계획 열 + `AGENT_ROSTER.md` 강화 프로토콜 행) |
-| M7 | ./paper/ 디렉토리에서 작업 — 계획부터 결과까지 철저 구조화 | 0 (전 Phase 상시) | IN_PROGRESS | P0: §4 구조 생성 완료, 전 산출물 frontmatter 규칙 적용 |
-| M8 | Notion 페이지 MCP 접근 | 0, 1 (전 Phase 상시) | IN_PROGRESS | P0: pre-flight (b) fetch 성공 + P1: NOTION_DIGEST 완전 정독 (75,820/108,461자 본문 + 하위 페이지) |
-| M9 | 매 phase 내용 정리 보고 + 필요·요청사항 전달 | 매 Phase 종료 시 (0–8 전부; §7의 P0/P8 명시 배정 포섭) | IN_PROGRESS | P0: `PHASE_REPORTS/phase0_report.md` + 채팅 보고 |
-| M10 | 지시·참고사항의 어떤 문장·단어도 누락 금지 — 전부 핵심 | 0, 8 (전 게이트) | IN_PROGRESS | P0: Matrix 57행 기계 대조 + 독립 감사 A(원문 충실성 PASS)·B(완전성 r2 PASS) — `99_reviews/p0_registry_fidelity_A_r1.md`, `p0_matrix_completeness_B_r1.md`, `p0_matrix_completeness_B_r2.md` |
-| M11 | 지시 나열 순서가 아닌 효과적 process/phase로 재구성하되 전 내용 포함 + 각 phase 프롬프트 품질 (E-002) | 0 | IN_PROGRESS | P0: 마스터 §7 process 채택·가동 + Phase 0 구축. dispatch 프롬프트 품질은 전 Phase 지속 의무 (ERRATA E-002) |
+| M1 | orchestrator: 전체 계획 수립·관리 + sub-agent 정의·배정·관리·팀 작업 | 0 (전 Phase 상시) | DONE | P0: `AGENT_ROSTER.md` 확정 + `TASK_BOARD.md` Phase 1–8 계획 등재 + 감사 dispatch 운영 / 전 Phase: AGENT_ROSTER 운영 + dispatch ~50회 + TASK_BOARD 전 기록 |
+| M2 | 작업별 리뷰 전문 sub-agent 피드백 루프 = 성공의 핵심 | 0 (전 Phase 상시) | DONE | P0: §5.3 루프 실증 — 감사 r1(MAJOR 1) → 수정 → r2(PASS), `99_reviews/p0_*` 3건 / 전 Phase: 모든 산출물에 독립 리뷰 루프 (99_reviews/ 40+건) — BLOCKER/MAJOR 0까지 반복 실증 |
+| M3 | agent 간 작업 요청/피드백 가능 — orchestrator가 중간 조율 | 0 (전 Phase 상시) | DONE | P0: `REQUESTS_AND_FEEDBACK.md` 라우팅 테이블 가동 + 전 dispatch에 REQUEST:/FEEDBACK: 규약 포함 / 전 Phase: REQUESTS_AND_FEEDBACK RF-001~008 라우팅·해소 |
+| M4 | 퀄리티 최우선 — 시간·토큰 효율 고려 금지, 모든 퀄리티 테크닉 동원 | 0 (전 Phase 상시) | DONE | P0: 독립 감사 2인 병렬 + 수정분 재리뷰 라운드 운영 / 전 Phase: 병렬 다중 agent + 2인 독립 검증 + 재리뷰 라운드 + 기계 diff 등 품질 테크닉 전면 사용 |
+| M5 | 한꺼번에 과다 지시 금지 — phase 분할, 차례대로 | 0 (전 Phase 상시) | DONE | P0: Phase 0–8 + 태스크 단위 분할 (`TASK_BOARD.md`), dispatch당 단일 역할 원칙 (`AGENT_ROSTER.md` 규약) / 전 Phase: Phase 0–8 + 태스크 분할 + dispatch당 단일 역할 |
+| M6 | phase별 절대 엄격 파트 존재 (reference 표기, 표절 방지 등) | 0 (전 Phase 상시) | DONE | P0: 엄격 구역 명세 (`TASK_BOARD.md` Phase 계획 열 + `AGENT_ROSTER.md` 강화 프로토콜 행) / 전 Phase: 엄격 구역 4곳 (271truth/서지/본문 무결성/최종감사) 강화 프로토콜 이행 |
+| M7 | ./paper/ 디렉토리에서 작업 — 계획부터 결과까지 철저 구조화 | 0 (전 Phase 상시) | DONE | P0: §4 구조 생성 완료, 전 산출물 frontmatter 규칙 적용 / 전 Phase: paper/ 구조화 + frontmatter + INDEX 유지 |
+| M8 | Notion 페이지 MCP 접근 | 0, 1 (전 Phase 상시) | DONE | P0: pre-flight (b) fetch 성공 + P1: NOTION_DIGEST 완전 정독 (75,820/108,461자 본문 + 하위 페이지) / P0 pre-flight + P1 정독 + P8 발행 — Notion MCP 전 구간 사용 |
+| M9 | 매 phase 내용 정리 보고 + 필요·요청사항 전달 | 매 Phase 종료 시 (0–8 전부; §7의 P0/P8 명시 배정 포섭) | DONE | P0: `PHASE_REPORTS/phase0_report.md` + 채팅 보고 / P0–P8 보고서 9건 (PHASE_REPORTS/) + 채팅 보고 + ⑤항 질의 운영 |
+| M10 | 지시·참고사항의 어떤 문장·단어도 누락 금지 — 전부 핵심 | 0, 8 (전 게이트) | DONE | P0: Matrix 57행 기계 대조 + 독립 감사 A(원문 충실성 PASS)·B(완전성 r2 PASS) — `99_reviews/p0_registry_fidelity_A_r1.md`, `p0_matrix_completeness_B_r1.md`, `p0_matrix_completeness_B_r2.md` / P0 Matrix 57행 기계 대조 + 매 게이트 coverage 감사 + P8 최종 전수 감사 |
+| M11 | 지시 나열 순서가 아닌 효과적 process/phase로 재구성하되 전 내용 포함 + 각 phase 프롬프트 품질 (E-002) | 0 | DONE | P0: 마스터 §7 process 채택·가동 + Phase 0 구축. dispatch 프롬프트 품질은 전 Phase 지속 의무 (ERRATA E-002) / P0: 마스터 §7 process 채택 + 전 dispatch 프롬프트에 Directive 원문 발췌 (E-002 인지 포함) |
 | M12 | 입력 자료: 방법론 Notion + 비교 실험 Notion + 학회 발표 PDF | 0 | DONE | P0: 접근 확인 + P1: 전량 소화 (NOTION_DIGEST + CONFERENCE_PDF_DIGEST 34p 전수) |
-| M13 | 단일 프롬프트로 받아 누락·생략·유실 없이 Phase 0→8 자율 완주 | 전 Phase 상시, 8 | IN_PROGRESS | P0: 마스터 프롬프트 전체 정독 + Phase 0 완료 + Phase 1 자율 진행 개시 |
+| M13 | 단일 프롬프트로 받아 누락·생략·유실 없이 Phase 0→8 자율 완주 | 전 Phase 상시, 8 | DONE | P0: 마스터 프롬프트 전체 정독 + Phase 0 완료 + Phase 1 자율 진행 개시 / Phase 0→8 자율 완주 (사용자 중단 2회 — 재개 프로토콜로 연속성 유지) + 최종 핸드오프 |
 
 ---
 

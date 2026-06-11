@@ -46,9 +46,16 @@ CSMAD (reference) & {[X.XX]} & --- & {[X.XX]} & --- & {[X.XX]} & --- \\
 \label{sec:epoch_sensitivity}
 
 Section~\ref{sec:impl} reported the asymmetric training budgets (500\,/\,50\,/\,10 epochs).
+Because every method is reported at its best evaluated epoch, the budget asymmetry also entails
+an asymmetry in selection opportunities: under the evaluation cadence of
+Section~\ref{sec:impl}, CSMAD is evaluated at 100 checkpoints (every 5 of 500 epochs), versus
+50 and 10 for the weakly supervised and unsupervised baselines (every epoch).
 To assess whether this asymmetry materially affects the comparison, representative unsupervised
 baselines are re-trained at extended budgets, and CSMAD is re-trained at a reduced budget, under
 the otherwise unchanged protocol.
+These runs keep the evaluation cadence fixed, so the number of evaluated checkpoints scales
+with each budget and the sweep probes the selection-frequency effect together with the
+training-length effect.
 
 % ---- Table B.2 placeholder ----
 \begin{table*}[tp]

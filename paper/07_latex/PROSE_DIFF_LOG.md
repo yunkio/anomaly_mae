@@ -250,3 +250,37 @@ Placeholder box heights were NOT reduced (kept at REGISTRY assumptions — no me
 ### §5.6 측정 무결성 기록 (2026-06-11 orchestrator)
 - 미니 감사 권고의 SMD 셀 `\ref` 환원은 float 배치 임계점 이동을 유발해 **원문 "(\S A.3)"로 재환원** (8.997p 측정 상태 보존). 하드코딩 "A.3" 라벨은 appendix 구조 변경 시 갱신 필요 — Phase 8 핸드오프 노트에 등재.
 - 분량 판정 확정: 5p 빌드의 PDF p.1은 Highlights 별면(미산입), printed p.1(타이틀·초록)~p.9(Conclusion 종점, 우측 컬럼 ~97%) = **본문 ≈8.99p → R6 게이트 PASS (8.5 ≤ x ≤ 9.0)**.
+
+---
+
+## 6. D-014 (a) — Appendix B.2 선택-기회 비대칭 공개 보강 (2026-06-11, p8 spec-fixer)
+
+**Authorization**: DECISION_LOG D-014 ②(a) — "best-epoch 선택-기회 비대칭(≈100 vs 10회)의 명시적
+공개를 Appendix B.2에 보강 (본문 분량 무영향 — 0.003p 여유 보호; §7-3 미니 감사 경유)".
+Appendix 한정 신규 2문장 — 본문(§1–§5) 무접촉.
+
+### 6.1 추가 문장 (appendix_B.tex §B.2 lead 문단, 2문장)
+
+| # | 신규 문장 (원문) | 삽입 위치 |
+|---|---|---|
+| 6-S1 | "Because every method is reported at its best evaluated epoch, the budget asymmetry also entails an asymmetry in selection opportunities: under the evaluation cadence of Section~\ref{sec:impl}, CSMAD is evaluated at 100 checkpoints (every 5 of 500 epochs), versus 50 and 10 for the weakly supervised and unsupervised baselines (every epoch)." | 기존 문장 1("Section~\ref{sec:impl} reported the asymmetric training budgets (500\,/\,50\,/\,10 epochs).") 직후 |
+| 6-S2 | "These runs keep the evaluation cadence fixed, so the number of evaluated checkpoints scales with each budget and the sweep probes the selection-frequency effect together with the training-length effect." | 기존 문장 2("To assess whether this asymmetry … otherwise unchanged protocol.") 직후 — 문단 말미 |
+
+### 6.2 미니 감사 3종 (신규 2문장 대상)
+
+| 검사 | 판정 | 근거 |
+|---|---|---|
+| ① ai-phrasing | **PASS** | SENTENCE_CORPUS 부록 B 금지/자제 패턴 grep 0건 (delve/showcase/pivotal/…/Moreover 연쇄/em-dash/의인화/"It is worth noting" 전부 무검출 — 신규 문장 내 `---` 0개; 스캔 히트 2건은 인접한 LaTeX 주석 "% ---- Table B.2 placeholder ----"로 산문 아님). 구체 수치 결합 선언문 — corpus 양성 신호 B.3-1/4 부합 |
+| ② plagiarism | **PASS** | 변별 n-gram 8종("selection opportunities", "evaluated checkpoints", "selection-frequency", "training-length", "evaluation cadence", "best evaluated epoch", "budget asymmetry", "asymmetry in selection") × 02_venue_study(corpus 105문장+dossier) + 04_references/library 52 cards 전체 grep — **0건 일치**. "best evaluated epoch"는 본문 §4.1.2 자기 원고 표현의 의도적 재사용(용어 일관성) |
+| ③ method-truth | **PASS** | 100회 = [271c] metadata `timing.num_evals=100` 실측 (`config.eval_interval=5` × `num_epochs=500`); 10/50회 = EXPERIMENT_PROTOCOL_TRUTH r4 §④-3 (unsup 10ep·weak 50ep, baseline eval 매 epoch `baseline_common.py:943`); "cadence fixed + checkpoints scales with budget" = exp298/299 실측 (`eval_interval=5` 유지, `num_evals` 60/40 — budget 비례 ✓) + 명세 TAB-B2 ⑤(baseline 50/100 run 매 epoch eval 의무)와 정합. 수치 발명 0건 — 전부 프로토콜 상수 유도값 |
+
+### 6.3 본문 무영향 검증 (재컴파일 2종)
+
+| 항목 | 변경 전 | 변경 후 | 판정 |
+|---|---|---|---|
+| main.pdf (preprint) 총 페이지 | 46 | 46 | 불변 |
+| main_5p_measure.pdf 총 페이지 | 19 | 19 | 불변 |
+| 5p 본문 종점 (§5 "…acceptance).") | printed p.9 우측 컬럼 yMax 762.8pt (§5.7 기록) | printed p.9 (PDF p.10) 우측 컬럼, 단어 "ceptance)." yMax **762.842847pt** — 동일 좌표 | **본문 무영향 (8.997p 보존)** |
+| 신규 문장 렌더 위치 | — | PDF p.15 (appendix §B.2 — 변경 전과 동일 페이지) | appendix 한정 |
+| 빌드 오류 | 0 | 0 (`!` 라인 0, undefined ref 0, "??" 0) | PASS |
+| Overfull | 5p 1건 / preprint 10건 (§5.7 기록) | 5p 1건 / preprint 10건 | 회귀 없음 |

@@ -122,6 +122,18 @@ last_modified: 2026-06-10
 | P7-6 overleaf_package.zip + self-contained 검증 | orchestrator | DONE | 12파일, 독립 컴파일 PASS ×2 |
 | P7-7 coverage 게이트 (5조건+시각 spot) | coverage-auditor | DONE | PASS 5/5 (`p7_coverage_gate_r1.md`) |
 
+## Phase 8 — 최종 감사 + Notion + 핸드오프
+
+| Task | 담당 | 상태 | 비고 |
+|------|------|------|------|
+| P8-1 모의 피어리뷰 ×2 (신규 리뷰어, 학회 양식) | final-reviewer 1·2 | DONE | Major Revision → D-014 triage (placeholder-본질 기각, 채택 2건) |
+| P8-2 NOTION_PLACEHOLDER_SPECS 작성 | placeholder-spec-writer | DONE | placeholder 전수 + 신규 실행 11건 |
+| P8-3 명세 독립 검수 → r2 | spec-reviewer + fixer | DONE | B1(R-PROBE)·M1(w/o OD 전제) 정정 |
+| P8-4 D-014(a) Appendix B.2 보강 + 미니 감사 3종 | fixer | DONE | 본문 좌표 단위 무영향 |
+| P8-5 Notion 발행 + re-fetch 검증 | notion-publisher | DONE | 단일 create-pages, 렌더링 무결 |
+| P8-6 최종 coverage 전수 감사 (57행 + DoD 7항목) | final-coverage-auditor | DONE | PASS (`p8_final_coverage_r1.md`) |
+| P8-7 마감 commit + 최종 핸드오프 보고 | orchestrator | DONE | |
+
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 
 | Phase | 핵심 태스크 (마스터 §7) | 엄격 구역 |

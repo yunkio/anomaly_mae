@@ -2,7 +2,7 @@
 phase: 0
 agent: orchestrator
 directives: [R14]
-last_modified: 2026-06-10
+last_modified: 2026-06-11
 ---
 
 # INDEX — 전 산출물 인덱스
@@ -78,7 +78,19 @@ last_modified: 2026-06-10
 - `main.pdf` (46p) — 검수용 PDF. `main_{3p,5p}_measure.*` — 분량 측정 빌드 (5p 본문 8.997p — D-012 기준 판형; zip 미포함).
 - `TEMPLATE_REQUIREMENTS.md` (v2), `PROSE_DIFF_LOG.md` (산문 변경 통제 전 기록 — D-011 7건 + D-013 압축 + 측정 무결성 §5.6), `pdf_qa/` (QA r1 + FIX r2).
 
-## 08_final_audit/ — Phase 8 (예정)
+## 08_final_audit/ — Phase 8 (완료 2026-06-11)
+
+- `FINAL_AUDIT_reviewer1.md` / `FINAL_AUDIT_reviewer2.md` — 신규 리뷰어 2인 모의 피어리뷰 (학회 양식; placeholder-비본질 약점은 D-014 triage로 처리).
+- `NOTION_PLACEHOLDER_SPECS.md` (r2, 검수 통과) — placeholder 전수(FIG 5/TAB 12/ALG 1/NUM 31/TXT)의 한국어 실험·시각화 명세 + 신규 실행 11건 우선순위 + 재사용 판정 + R-PROBE 권고. **발행본**: https://www.notion.so/37c87856b207810e83e3d1b5f14766fc (비교 실험 페이지 하위, 렌더링 검증 완료).
+
+## 최종 인도물 요약 ("무엇을 어디서 찾는가")
+
+- **Overleaf 업로드용 zip**: `paper/07_latex/overleaf_package.zip` (압축 해제만으로 단독 컴파일 — 검증 3회)
+- **검수용 PDF**: `paper/07_latex/main.pdf` (46p; 본문 8.997p @5p 판형)
+- **placeholder를 채우는 법**: Notion 명세 페이지 (위 URL) 또는 `08_final_audit/NOTION_PLACEHOLDER_SPECS.md`
+- **연구 사실의 정본**: `01_research_understanding/271_CONFIG_TRUTH.md` (r4)
+- **인용 정본**: `04_references/refs.bib` + `VERIFICATION_LEDGER.md`
+- **결정 이력**: `00_admin/DECISION_LOG.md` (D-001~D-014)
 
 ## 99_reviews/ — 모든 리뷰 산출물 `{phase}_{artifact}_{round}.md`
 

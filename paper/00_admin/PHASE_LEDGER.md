@@ -20,7 +20,7 @@ last_modified: 2026-06-10
 | 5 | 영어 본문 작성 (엄격: 표절 0·진실 정합·수치 창작 0) | DONE | 2026-06-11 | 2026-06-11 | PASS (drafter 4 → v1 통합 → 분량 수술 2회(D-009/D-010) → 검증 5종 99건 → 종합 수정 94건 → 게이트: 마감 99/99·재추적 14/14·A8 미등재 0·F-1 정정) | 3 | 0 |
 | 6 | 학술 문체 정밀 검증 | DONE | 2026-06-11 | 2026-06-11 | PASS (검사 4종 214건 → fixer 전수 → 재검사+회귀 2종 (표절 회귀 0·truth PASS) → touch-up 4건 → 게이트 7 Directive 확인; MINOR 4건 D-011 waive) | 2 | 0 |
 | 7 | LaTeX 조판 (Elsevier) & PDF 시각 검증 | DONE | 2026-06-11 | 2026-06-11 | PASS 5/5 (변환→QA r1 B7→수정 r2→D-013 압축(미니 감사 3종 PASS)→본문 8.997p→zip self-contained 2회 검증) | 3 | 0 |
-| 8 | 최종 감사 + Notion placeholder + 핸드오프 | PLANNED | | | | 0 | 0 |
+| 8 | 최종 감사 + Notion placeholder + 핸드오프 | DONE | 2026-06-11 | 2026-06-11 | PASS (피어리뷰 2인 + D-014 triage → 명세 검수 r2 → Notion 발행·렌더링 검증 → 최종 전수 감사 57/57 + DoD 7/7) | 2 | 0 |
 
 ## Phase 0 진행 메모
 
