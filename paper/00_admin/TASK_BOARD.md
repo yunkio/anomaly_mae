@@ -142,10 +142,10 @@ last_modified: 2026-06-10
 | RE-2 KBS 적용 8건 (highlights/keywords/선언/journal/flat/재컴파일/재측정/zip) | latex-engineer | DONE | 본문 8.997p 유지, zip flat 13파일 PASS |
 | RE-3 KBS 산문 미니 감사 | kbs-miniauditor | DONE | PASS 4/4, NOTE 3건 핸드오프 예정 |
 | RE-4 Notion 확장판 작성 (B1 본문 / B2 부록+OVERVIEW) | spec-enricher ×2 | DONE | 18페이지 분량 + 대시보드 자료 |
-| RE-5 정제 (한국어·구성 통일 → NOTION_FINAL_PAGES) | notion-polisher-C | **중단됨 (미시작)** | 재개 1순위 — RESUME_STATE §3-1 |
-| RE-6 독립 검수 | 검수자 D | PLANNED | |
-| RE-7 발행 (MAE for AD 하위, 부모+하위 ~19장) + 구 페이지 중립화 | notion-expert | PLANNED | |
-| RE-8 마감 (matrix/ledger/보고/commit) | orchestrator | PLANNED | |
+| RE-5 단일 페이지 통합·정제 (한국어·toggle 구조 → NOTION_FINAL_SINGLEPAGE) | notion-singlepage-builder | DONE | 21 토글·placeholder 전수·무손실 검증 |
+| RE-6 독립 검수 (사실·실행성·한국어·렌더) | singlepage-reviewer | DONE | PASS (B0/M0/m1 → 수정), `p8_singlepage_review_r1.md` |
+| RE-7 발행 (MAE for AD 하위 단일 페이지) + 구 페이지 중립화 | notion-expert | DONE | 37e87856… 발행·구조 무결 재확인; 구 페이지 [이관됨] |
+| RE-8 마감 (matrix 57/57·ledger 종결·보고·commit) | orchestrator | DONE | |
 
 ## Phase 1–8 계획 (개요 등재 — 상세 태스크는 각 Phase 시작 시 전개)
 

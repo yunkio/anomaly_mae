@@ -29,3 +29,24 @@ last_modified: 2026-06-11
 3. **실수치·실figure 투입 후 분량 재측정** (본문 상한 여유 0.003p — 5p 판형 기준 재확인 필수).
 4. SWaT 재현성 플래그 (RF-005: 모델 입력 45 feat vs 현 로더 51) — 코드 공개 전 정리 권장.
 5. R-PROBE 권고 실험 (rebuttal 대비, 선택).
+
+---
+
+## 부록 — 재진입 round 1 (2026-06-13): KBS 정합화 + Notion 단일 페이지 재구축
+
+### A. KBS (Knowledge-Based Systems) 포맷 정합화
+- 공식 GFA 조사(`07_latex/KBS_FORMAT_REQUIREMENTS.md`) → 적용: Highlights 5개 전부 ≤85자 재작성(KBS 규정; 기존 125자 기준은 초과였음) + 제출용 `highlights.txt` / Keywords 7→6 / 선언 5종(CRediT·이해관계·**GenAI 고지**·Data availability·Funding — 저자 확정 placeholder) / `\journal{Knowledge-Based Systems}` / **flat 구조**(sections/*.tex → 루트) / zip flat 13파일 단독 컴파일 PASS.
+- **GenAI 고지(사용자 지시)**: Elsevier 허용 최소 범위(가독성·문법 교정만)의 완성형 단문으로 축소 — 도구명·사유 템플릿 제거 ("문장 교정 수준"). 3 main*.tex 적용.
+- 본문 8.997p 유지(선언 섹션은 references 동급 — R6 측정 외, 좌표 동일). 미니 감사 4/4 PASS(`99_reviews/p7_kbs_miniaudit_r1.md`).
+
+### B. Notion placeholder 명세 — 단일 페이지 재구축 (사용자 지시 D-016/D-017)
+- 위치 정정: 비교실험 페이지 하위 → **MAE for Anomaly Detection 하위**.
+- 내용 격상: 모든 placeholder에 🎯목적·의도(논증 역할·방어 공격) + 🏁목표·기대 결과 차원 추가 — "Notion만 보고 실험 설계·figure 작성 가능" 수준.
+- 구성: placeholder별 하위 페이지 폐기 → **단일 페이지 1장**(toggle heading 21개 + TOC + callout + 대시보드 + colored table). 한국어 전수 정제.
+- 발행: https://www.notion.so/37e87856b20781fc92f6d8580c4b72a0 — 독립 검수 PASS + orchestrator 구조 무결 재확인(H2 8·토글 21·NUM 31·블록 파싱 확인·절단 0). 구 페이지(37c87856…) 중립화(제목 [이관됨] + 안내).
+
+### C. 저자 액션 추가 항목 (핸드오프 보강)
+1. 선언 5종 확정: CRediT 역할 배분 / 이해관계 / **GenAI 고지(현 최소 문안 검토)** / Data availability(SWaT·WaDi는 iTrust 신청 기반 — "publicly available" 문구 정밀화 권고) / Funding.
+2. Highlights는 KBS 제출 시 **별도 파일**(`highlights.txt`)로도 업로드.
+3. NUM-003([N] datasets) 확정 시 본문·highlights.txt·Notion 동기화.
+4. (KBS) 제출 시스템에서 ORCID·declaration tool .docx 별도 요구 확인.

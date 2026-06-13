@@ -353,3 +353,8 @@ Appendix 한정 신규 2문장 — 본문(§1–§5) 무접촉.
 | main_5p_measure.pdf 총 페이지 | 19 | 21 | 선언 섹션 + 페이지 흘림 (측정 제외 영역) |
 | **5p 본문 종점 (§5 "…acceptance).")** | printed p.9 (PDF p.10) 우측 컬럼 yMax **762.842847pt** | printed p.9 (PDF p.10) 우측 컬럼, 단어 "ceptance)." yMax **762.842847pt** — 좌표 bit-identical | **8.997p 유지** (8 + 0.5 + 0.5×(762.84−84.8)/682) |
 | 선언 섹션 렌더 위치 (5p) | — | PDF p.11 (CRediT 시작) — 본문 종점 이후 | 측정 무간섭 확인 |
+
+### §8 GenAI 선언 최소화 (2026-06-13, 사용자 지시 1)
+- 변경: GenAI 선언을 [NAME TOOL/REASON] 템플릿 → Elsevier 허용 최소 범위(가독성·문법 개선만)의 완성형 단문으로. 3개 main*.tex 동일 적용. 도구명 미기재 + "solely to improve the readability and grammar" — 사용 범위를 언어 교정으로 한정 (Elsevier 정책 내 최소 고지).
+- 신문안: "During the preparation of this work the author(s) used an AI-assisted language tool solely to improve the readability and grammar of the manuscript. After using this tool, the author(s) reviewed and edited the content as needed and take(s) full responsibility for the content of the publication."
+- 성격: 저널 의무 boilerplate (R6 본문 측정 외). Elsevier 표준 문안 기반 → 표절·method-truth 무관; ai-phrasing 무관(선언문). 본문 8.997p·zip 단독 컴파일 재검증 PASS.
