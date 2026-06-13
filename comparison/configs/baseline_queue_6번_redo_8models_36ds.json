@@ -1,0 +1,2021 @@
+{
+  "description": "6\ubc88 \uc7ac\uc2e4\ud5d8 (2026-06-04) \u2014 8 models \u00d7 (4 OLD + 32 simple) = 288 entries. Q3 normalonly. Dataset-major order. .trash/0604/ backup \ud6c4 \ub3d9\uc77c dir \uc7ac\uc2e4\ud589.",
+  "experiments": [
+    {
+      "name": "random_psm",
+      "experiment": "psm_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_psm",
+      "experiment": "psm_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_psm",
+      "experiment": "psm_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_psm",
+      "experiment": "psm_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_psm",
+      "experiment": "psm_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_psm",
+      "experiment": "psm_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_psm",
+      "experiment": "psm_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_psm",
+      "experiment": "psm_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smd_machine-3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smd_machine-3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smd_machine-3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smd_machine-3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smd_machine-3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smd_machine-3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smd_machine-3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smd_machine-3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "random_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gcn_lstm_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "gdn_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "tranad_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "timesnet_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "memto_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "npsr_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    },
+    {
+      "name": "catch_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1
+    }
+  ]
+}

@@ -1,0 +1,773 @@
+{
+  "description": "11번 — 5 weak SSL × 32 simple entities (MSL 5 + SMAP 5 + SMD 22), Q1, model-major. All epochs=50. Paper-faithful interval=10 PA%K AUC. Same setup as 9번 but on simple variant entities. | 2026-06-13: nrdetector/nrdetector_full REMOVED (encoder over-fit fix; re-run separately with corrected code).",
+  "experiments": [
+    {
+      "name": "deepmil_msl_C-1",
+      "experiment": "msl_C-1",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_msl_C-2",
+      "experiment": "msl_C-2",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_msl_F-7",
+      "experiment": "msl_F-7",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_msl_P-11",
+      "experiment": "msl_P-11",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_msl_T-13",
+      "experiment": "msl_T-13",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smap_G-7",
+      "experiment": "smap_G-7",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smap_P-1",
+      "experiment": "smap_P-1",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smap_P-4",
+      "experiment": "smap_P-4",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smap_T-1",
+      "experiment": "smap_T-1",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smap_T-3",
+      "experiment": "smap_T-3",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_1-2",
+      "experiment": "smd_machine-1-2",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_1-3",
+      "experiment": "smd_machine-1-3",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_1-4",
+      "experiment": "smd_machine-1-4",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_1-5",
+      "experiment": "smd_machine-1-5",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_1-6",
+      "experiment": "smd_machine-1-6",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_1-7",
+      "experiment": "smd_machine-1-7",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_1-8",
+      "experiment": "smd_machine-1-8",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_2-1",
+      "experiment": "smd_machine-2-1",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_2-3",
+      "experiment": "smd_machine-2-3",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_2-4",
+      "experiment": "smd_machine-2-4",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_2-5",
+      "experiment": "smd_machine-2-5",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_2-6",
+      "experiment": "smd_machine-2-6",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_2-7",
+      "experiment": "smd_machine-2-7",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_3-1",
+      "experiment": "smd_machine-3-1",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_3-2",
+      "experiment": "smd_machine-3-2",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_3-3",
+      "experiment": "smd_machine-3-3",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_3-4",
+      "experiment": "smd_machine-3-4",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_3-5",
+      "experiment": "smd_machine-3-5",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_3-6",
+      "experiment": "smd_machine-3-6",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_3-7",
+      "experiment": "smd_machine-3-7",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_3-9",
+      "experiment": "smd_machine-3-9",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_smd_3-10",
+      "experiment": "smd_machine-3-10",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_msl_C-1",
+      "experiment": "msl_C-1",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_msl_C-2",
+      "experiment": "msl_C-2",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_msl_F-7",
+      "experiment": "msl_F-7",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_msl_P-11",
+      "experiment": "msl_P-11",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_msl_T-13",
+      "experiment": "msl_T-13",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smap_G-7",
+      "experiment": "smap_G-7",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smap_P-1",
+      "experiment": "smap_P-1",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smap_P-4",
+      "experiment": "smap_P-4",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smap_T-1",
+      "experiment": "smap_T-1",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smap_T-3",
+      "experiment": "smap_T-3",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_1-2",
+      "experiment": "smd_machine-1-2",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_1-3",
+      "experiment": "smd_machine-1-3",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_1-4",
+      "experiment": "smd_machine-1-4",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_1-5",
+      "experiment": "smd_machine-1-5",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_1-6",
+      "experiment": "smd_machine-1-6",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_1-7",
+      "experiment": "smd_machine-1-7",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_1-8",
+      "experiment": "smd_machine-1-8",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_2-1",
+      "experiment": "smd_machine-2-1",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_2-3",
+      "experiment": "smd_machine-2-3",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_2-4",
+      "experiment": "smd_machine-2-4",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_2-5",
+      "experiment": "smd_machine-2-5",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_2-6",
+      "experiment": "smd_machine-2-6",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_2-7",
+      "experiment": "smd_machine-2-7",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_3-1",
+      "experiment": "smd_machine-3-1",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_3-2",
+      "experiment": "smd_machine-3-2",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_3-3",
+      "experiment": "smd_machine-3-3",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_3-4",
+      "experiment": "smd_machine-3-4",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_3-5",
+      "experiment": "smd_machine-3-5",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_3-6",
+      "experiment": "smd_machine-3-6",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_3-7",
+      "experiment": "smd_machine-3-7",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_3-9",
+      "experiment": "smd_machine-3-9",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_smd_3-10",
+      "experiment": "smd_machine-3-10",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_msl_C-1",
+      "experiment": "msl_C-1",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_msl_C-2",
+      "experiment": "msl_C-2",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_msl_F-7",
+      "experiment": "msl_F-7",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_msl_P-11",
+      "experiment": "msl_P-11",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_msl_T-13",
+      "experiment": "msl_T-13",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smap_G-7",
+      "experiment": "smap_G-7",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smap_P-1",
+      "experiment": "smap_P-1",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smap_P-4",
+      "experiment": "smap_P-4",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smap_T-1",
+      "experiment": "smap_T-1",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smap_T-3",
+      "experiment": "smap_T-3",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_1-2",
+      "experiment": "smd_machine-1-2",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_1-3",
+      "experiment": "smd_machine-1-3",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_1-4",
+      "experiment": "smd_machine-1-4",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_1-5",
+      "experiment": "smd_machine-1-5",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_1-6",
+      "experiment": "smd_machine-1-6",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_1-7",
+      "experiment": "smd_machine-1-7",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_1-8",
+      "experiment": "smd_machine-1-8",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_2-1",
+      "experiment": "smd_machine-2-1",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_2-3",
+      "experiment": "smd_machine-2-3",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_2-4",
+      "experiment": "smd_machine-2-4",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_2-5",
+      "experiment": "smd_machine-2-5",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_2-6",
+      "experiment": "smd_machine-2-6",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_2-7",
+      "experiment": "smd_machine-2-7",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_3-1",
+      "experiment": "smd_machine-3-1",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_3-2",
+      "experiment": "smd_machine-3-2",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_3-3",
+      "experiment": "smd_machine-3-3",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_3-4",
+      "experiment": "smd_machine-3-4",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_3-5",
+      "experiment": "smd_machine-3-5",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_3-6",
+      "experiment": "smd_machine-3-6",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_3-7",
+      "experiment": "smd_machine-3-7",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_3-9",
+      "experiment": "smd_machine-3-9",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_smd_3-10",
+      "experiment": "smd_machine-3-10",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    }
+  ]
+}

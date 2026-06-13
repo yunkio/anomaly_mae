@@ -1,0 +1,1125 @@
+{
+  "description": "7\ubc88 simple variant expansion \u2014 Q1 labeled-train, 50ep \u00b7 5 SSL \u00d7 32 entities (SMD 22 + MSL 5 + SMAP 5). exclude list \uc801\uc6a9. 160 entries.",
+  "experiments": [
+    {
+      "name": "wetas_smd_machine-1-2",
+      "experiment": "smd_machine-1-2",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-1-2",
+      "experiment": "smd_machine-1-2",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-1-2",
+      "experiment": "smd_machine-1-2",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-1-2",
+      "experiment": "smd_machine-1-2",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-1-2",
+      "experiment": "smd_machine-1-2",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-1-3",
+      "experiment": "smd_machine-1-3",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-1-3",
+      "experiment": "smd_machine-1-3",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-1-3",
+      "experiment": "smd_machine-1-3",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-1-3",
+      "experiment": "smd_machine-1-3",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-1-3",
+      "experiment": "smd_machine-1-3",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-1-4",
+      "experiment": "smd_machine-1-4",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-1-4",
+      "experiment": "smd_machine-1-4",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-1-4",
+      "experiment": "smd_machine-1-4",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-1-4",
+      "experiment": "smd_machine-1-4",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-1-4",
+      "experiment": "smd_machine-1-4",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-1-5",
+      "experiment": "smd_machine-1-5",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-1-5",
+      "experiment": "smd_machine-1-5",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-1-5",
+      "experiment": "smd_machine-1-5",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-1-5",
+      "experiment": "smd_machine-1-5",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-1-5",
+      "experiment": "smd_machine-1-5",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-1-6",
+      "experiment": "smd_machine-1-6",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-1-6",
+      "experiment": "smd_machine-1-6",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-1-6",
+      "experiment": "smd_machine-1-6",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-1-6",
+      "experiment": "smd_machine-1-6",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-1-6",
+      "experiment": "smd_machine-1-6",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-1-7",
+      "experiment": "smd_machine-1-7",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-1-7",
+      "experiment": "smd_machine-1-7",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-1-7",
+      "experiment": "smd_machine-1-7",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-1-7",
+      "experiment": "smd_machine-1-7",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-1-7",
+      "experiment": "smd_machine-1-7",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-1-8",
+      "experiment": "smd_machine-1-8",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-1-8",
+      "experiment": "smd_machine-1-8",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-1-8",
+      "experiment": "smd_machine-1-8",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-1-8",
+      "experiment": "smd_machine-1-8",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-1-8",
+      "experiment": "smd_machine-1-8",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-2-1",
+      "experiment": "smd_machine-2-1",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-2-1",
+      "experiment": "smd_machine-2-1",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-2-1",
+      "experiment": "smd_machine-2-1",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-2-1",
+      "experiment": "smd_machine-2-1",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-2-1",
+      "experiment": "smd_machine-2-1",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-2-3",
+      "experiment": "smd_machine-2-3",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-2-3",
+      "experiment": "smd_machine-2-3",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-2-3",
+      "experiment": "smd_machine-2-3",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-2-3",
+      "experiment": "smd_machine-2-3",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-2-3",
+      "experiment": "smd_machine-2-3",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-2-4",
+      "experiment": "smd_machine-2-4",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-2-4",
+      "experiment": "smd_machine-2-4",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-2-4",
+      "experiment": "smd_machine-2-4",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-2-4",
+      "experiment": "smd_machine-2-4",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-2-4",
+      "experiment": "smd_machine-2-4",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-2-5",
+      "experiment": "smd_machine-2-5",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-2-5",
+      "experiment": "smd_machine-2-5",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-2-5",
+      "experiment": "smd_machine-2-5",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-2-5",
+      "experiment": "smd_machine-2-5",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-2-5",
+      "experiment": "smd_machine-2-5",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-2-6",
+      "experiment": "smd_machine-2-6",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-2-6",
+      "experiment": "smd_machine-2-6",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-2-6",
+      "experiment": "smd_machine-2-6",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-2-6",
+      "experiment": "smd_machine-2-6",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-2-6",
+      "experiment": "smd_machine-2-6",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-2-7",
+      "experiment": "smd_machine-2-7",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-2-7",
+      "experiment": "smd_machine-2-7",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-2-7",
+      "experiment": "smd_machine-2-7",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-2-7",
+      "experiment": "smd_machine-2-7",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-2-7",
+      "experiment": "smd_machine-2-7",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-3-1",
+      "experiment": "smd_machine-3-1",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-3-1",
+      "experiment": "smd_machine-3-1",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-3-1",
+      "experiment": "smd_machine-3-1",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-3-1",
+      "experiment": "smd_machine-3-1",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-3-1",
+      "experiment": "smd_machine-3-1",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-3-10",
+      "experiment": "smd_machine-3-10",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-3-10",
+      "experiment": "smd_machine-3-10",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-3-10",
+      "experiment": "smd_machine-3-10",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-3-10",
+      "experiment": "smd_machine-3-10",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-3-10",
+      "experiment": "smd_machine-3-10",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-3-2",
+      "experiment": "smd_machine-3-2",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-3-2",
+      "experiment": "smd_machine-3-2",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-3-2",
+      "experiment": "smd_machine-3-2",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-3-2",
+      "experiment": "smd_machine-3-2",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-3-2",
+      "experiment": "smd_machine-3-2",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-3-3",
+      "experiment": "smd_machine-3-3",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-3-3",
+      "experiment": "smd_machine-3-3",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-3-3",
+      "experiment": "smd_machine-3-3",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-3-3",
+      "experiment": "smd_machine-3-3",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-3-3",
+      "experiment": "smd_machine-3-3",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-3-4",
+      "experiment": "smd_machine-3-4",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-3-4",
+      "experiment": "smd_machine-3-4",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-3-4",
+      "experiment": "smd_machine-3-4",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-3-4",
+      "experiment": "smd_machine-3-4",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-3-4",
+      "experiment": "smd_machine-3-4",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-3-5",
+      "experiment": "smd_machine-3-5",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-3-5",
+      "experiment": "smd_machine-3-5",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-3-5",
+      "experiment": "smd_machine-3-5",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-3-5",
+      "experiment": "smd_machine-3-5",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-3-5",
+      "experiment": "smd_machine-3-5",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-3-6",
+      "experiment": "smd_machine-3-6",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-3-6",
+      "experiment": "smd_machine-3-6",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-3-6",
+      "experiment": "smd_machine-3-6",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-3-6",
+      "experiment": "smd_machine-3-6",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-3-6",
+      "experiment": "smd_machine-3-6",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-3-7",
+      "experiment": "smd_machine-3-7",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-3-7",
+      "experiment": "smd_machine-3-7",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-3-7",
+      "experiment": "smd_machine-3-7",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-3-7",
+      "experiment": "smd_machine-3-7",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-3-7",
+      "experiment": "smd_machine-3-7",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smd_machine-3-9",
+      "experiment": "smd_machine-3-9",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smd_machine-3-9",
+      "experiment": "smd_machine-3-9",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smd_machine-3-9",
+      "experiment": "smd_machine-3-9",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smd_machine-3-9",
+      "experiment": "smd_machine-3-9",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smd_machine-3-9",
+      "experiment": "smd_machine-3-9",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_msl_C-1",
+      "experiment": "msl_C-1",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_msl_C-1",
+      "experiment": "msl_C-1",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_msl_C-1",
+      "experiment": "msl_C-1",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_msl_C-1",
+      "experiment": "msl_C-1",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_msl_C-1",
+      "experiment": "msl_C-1",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_msl_C-2",
+      "experiment": "msl_C-2",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_msl_C-2",
+      "experiment": "msl_C-2",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_msl_C-2",
+      "experiment": "msl_C-2",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_msl_C-2",
+      "experiment": "msl_C-2",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_msl_C-2",
+      "experiment": "msl_C-2",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_msl_F-7",
+      "experiment": "msl_F-7",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_msl_F-7",
+      "experiment": "msl_F-7",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_msl_F-7",
+      "experiment": "msl_F-7",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_msl_F-7",
+      "experiment": "msl_F-7",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_msl_F-7",
+      "experiment": "msl_F-7",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_msl_P-11",
+      "experiment": "msl_P-11",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_msl_P-11",
+      "experiment": "msl_P-11",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_msl_P-11",
+      "experiment": "msl_P-11",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_msl_P-11",
+      "experiment": "msl_P-11",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_msl_P-11",
+      "experiment": "msl_P-11",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_msl_T-13",
+      "experiment": "msl_T-13",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_msl_T-13",
+      "experiment": "msl_T-13",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_msl_T-13",
+      "experiment": "msl_T-13",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_msl_T-13",
+      "experiment": "msl_T-13",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_msl_T-13",
+      "experiment": "msl_T-13",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smap_G-7",
+      "experiment": "smap_G-7",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smap_G-7",
+      "experiment": "smap_G-7",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smap_G-7",
+      "experiment": "smap_G-7",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smap_G-7",
+      "experiment": "smap_G-7",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smap_G-7",
+      "experiment": "smap_G-7",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smap_P-1",
+      "experiment": "smap_P-1",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smap_P-1",
+      "experiment": "smap_P-1",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smap_P-1",
+      "experiment": "smap_P-1",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smap_P-1",
+      "experiment": "smap_P-1",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smap_P-1",
+      "experiment": "smap_P-1",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smap_P-4",
+      "experiment": "smap_P-4",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smap_P-4",
+      "experiment": "smap_P-4",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smap_P-4",
+      "experiment": "smap_P-4",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smap_P-4",
+      "experiment": "smap_P-4",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smap_P-4",
+      "experiment": "smap_P-4",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smap_T-1",
+      "experiment": "smap_T-1",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smap_T-1",
+      "experiment": "smap_T-1",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smap_T-1",
+      "experiment": "smap_T-1",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smap_T-1",
+      "experiment": "smap_T-1",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smap_T-1",
+      "experiment": "smap_T-1",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "wetas_smap_T-3",
+      "experiment": "smap_T-3",
+      "model": "wetas",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "treemil_smap_T-3",
+      "experiment": "smap_T-3",
+      "model": "treemil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_smap_T-3",
+      "experiment": "smap_T-3",
+      "model": "nrdetector",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "nrdetector_full_smap_T-3",
+      "experiment": "smap_T-3",
+      "model": "nrdetector_full",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    },
+    {
+      "name": "deepmil_smap_T-3",
+      "experiment": "smap_T-3",
+      "model": "deepmil",
+      "sota_epochs": 50,
+      "eval_interval": 1
+    }
+  ]
+}

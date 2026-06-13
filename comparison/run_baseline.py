@@ -403,8 +403,10 @@ def main():
             # - dcdetector dual-attention OOM-thrashes on WaDi 1.3M train at default
             #   batch_size=128 (GPU mem hits 98% and forward stalls). Halve.
             # - catch on WaDi: halved (64) still stalled in preprocessing 5h+ at GPU 98%.
-            #   Quartered (32) to give more headroom + avoid CPU thrashing on 123 features.
-            _WADI_BATCH_DIVISORS = {'dcdetector': 2, 'catch': 4}
+            #   Quartered (32) gave more headroom but still extremely slow on 130 features.
+            #   Eighth-ed (16) per user request 2026-06-10: combined with sota_epochs=5
+            #   override in queue file for catch×WaDi entries.
+            _WADI_BATCH_DIVISORS = {'dcdetector': 2, 'catch': 8}
             divisor = _WADI_BATCH_DIVISORS.get(model_name)
             if divisor and 'wadi' in args.experiment.lower():
                 if hasattr(model, 'batch_size'):
