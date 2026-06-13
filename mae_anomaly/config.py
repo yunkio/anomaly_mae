@@ -163,6 +163,45 @@ class Config:
     wdgrl_gp_weight: float = 10.0  # Gradient penalty weight (WDGRL only)
     wdgrl_critic_lr: float = 1e-4  # Critic optimizer learning rate (WDGRL only)
 
+    # ── loss_balance_mode (2026-06-14): how the GRL classifier BCE loss is scale-matched
+    #    against the teacher-student MSE discrepancy loss (Axis-A scale matching, NOT
+    #    gradient-direction conflict). SINGLE enum → exactly one active (mutually exclusive,
+    #    incl. legacy adaptive_lambda). DEFAULT 'adaptive_lambda_legacy' is byte-identical
+    #    to the current behavior; new modes are reachable ONLY by explicit config.
+    #    Only intercepts grl_mode='classifier'; WDGRL/SCAD/FM paths are untouched.
+    loss_balance_mode: str = 'adaptive_lambda_legacy'
+    #   ∈ {adaptive_lambda_legacy, fixed, mse_norm_dann, relobralo, famo, uwso}
+    #   - adaptive_lambda_legacy: current dispatch (grl_adaptive_lambda True→VQGAN-ratio / False→fixed)
+    #   - fixed: loss += (fixed_grl_weight if >=0 else grl_loss_weight) * grl_cls_loss  (no scaling)
+    #   - mse_norm_dann: BCE/EMA(|BCE|) magnitude-match + Ganin deterministic ramp (runaway-proof)
+    #   - relobralo: Bischof&Kraus 2110.09813 — loss-ratio softmax + random lookback + EMA
+    #   - famo: Liu et al. NeurIPS2023 2306.03792 — log-loss simplex (O(1), needs post-step re-forward)
+    #   - uwso: Kirchdorfer et al. 2408.07985 (IJCV2025) — analytic tempered-softmax inverse-loss
+    # mse_norm_dann params (calibration: 271, GRL active ep250-500, prioritize ep250-350 ≈ 100ep window)
+    mse_norm_ema_beta: float = 0.1     # EMA new-fraction for running |loss| scale (≈10-step memory)
+    mse_norm_eps: float = 1e-8         # divide-by-zero guard
+    mse_norm_log_variant: bool = False # True: weight log(BCE) instead of BCE/EMA (for >1000x swings)
+    dann_ramp_gamma: float = 10.0      # Ganin logistic ramp steepness (λ_p=2/(1+exp(-γp))-1)
+    dann_ramp_horizon: int = 100       # ramp window in epochs: p=clamp((epoch-warmup)/horizon,0,1)
+    # relobralo params (Bischof&Kraus; α/ρ recalibrated 0.999→0.99 for the ~100-epoch GRL window)
+    relobralo_T: float = 1.0           # softmax temperature
+    relobralo_alpha: float = 0.99      # EMA of historical weights
+    relobralo_rho: float = 0.99        # Bernoulli prob of keeping prev weight vs onset re-anchor
+    relobralo_eps: float = 1e-12       # ratio div guard
+    relobralo_update_freq: str = 'epoch'  # 'epoch' (state update once/epoch) | 'step' (per batch)
+    # famo params (official repo Cranial-XIX/FAMO defaults)
+    famo_gamma: float = 0.01           # weight-decay on logits w (repo famo.py default)
+    famo_w_lr: float = 0.025           # Adam lr for the logit optimizer
+    famo_max_norm: float = 0.0         # 0 = reuse trainer's grad clip (avoid double-clip)
+    famo_reforward: bool = True        # True: post-step same-batch re-forward (faithful); False: next-batch approx
+    # uwso params (Kirchdorfer et al. Eq.4; T mid of NYUv2~2-3 / Cityscapes~20-48 for BCE-vs-MSE gap)
+    uwso_temperature: float = 4.0      # tempered-softmax temperature on (1/L)
+    uwso_loss_floor_mse: float = 1e-3  # cap 1/L_mse blow-up as MSE→1e-4
+    uwso_loss_floor_bce: float = 1e-2  # symmetric floor for BCE
+    uwso_ema_beta: float = 0.9         # EMA new-fraction for loss smoothing (1.0 = paper-faithful, off)
+    # fixed mode param
+    fixed_grl_weight: float = -1.0     # <0 sentinel → use grl_loss_weight; else this explicit weight
+
     # Feature Matching Loss (independent of GRL)
     use_feature_matching: bool = True  # Enable feature matching loss (exp271 canonical default 2026-05-27)
     # cosine(teacher_hidden, student_hidden) on masked normal patches

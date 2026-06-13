@@ -554,6 +554,34 @@ Output: (batch, 1) logit (real/fake)
 
 **Mutual exclusion**: `use_grl` and `use_discriminator` cannot both be True.
 
+### GRL ↔ MSE Loss Balancing (`loss_balance_mode`, 2026-06-14)
+
+**Problem**: the GRL classifier BCE loss (O(1–20)) and the self-distillation MSE
+discrepancy loss (O(0.5→1e-4)) live on fundamentally different scales; summing
+them in one optimizer needs scale-matching (Axis-A). A single mutually-exclusive
+enum `loss_balance_mode` selects the strategy:
+
+| mode | mechanism | source |
+|---|---|---|
+| `adaptive_lambda_legacy` (**default**) | grad-norm ratio λ + prev-epoch carry (current behavior, **byte-identical**) | in-house |
+| `fixed` | constant weight (`fixed_grl_weight`<0 → `grl_loss_weight`) | — |
+| `mse_norm_dann` | normalize BCE by EMA(\|BCE\|) → O(1) + Ganin λ ramp | Ganin et al. 2016 |
+| `relobralo` | softmax of loss ratios + Bernoulli lookback + EMA | Bischof & Kraus, arXiv:2110.09813 |
+| `famo` | log-loss simplex balancer (O(1), streaming `w` update) | Liu et al., NeurIPS 2023, arXiv:2306.03792 |
+| `uwso` | tempered-softmax over 1/L (closed-form, no learned σ) | Kirchdorfer et al., arXiv:2408.07985 |
+
+**Invariants**: recon is the absolute anchor (never renormalized — only the BCE
+term / disc ratio is rescaled, except `famo` which rebalances both tasks); all
+weights are stop-gradient; never multiplied with the Ganin reversal ramp
+(`model._grl_lambda`); defaults calibrated for 271 (ep250→350, GRL's first ~100
+epochs). The 4 new modes require `use_grl=True` + `grl_mode='classifier'` and are
+mutually exclusive with `use_scad` (`Trainer.__init__` raises `ValueError`).
+
+**Code**: dispatch + helpers (`_lbm_apply`, `_lbm_{mse_norm_dann,relobralo,uwso,famo}`)
+and `_lbm_state_dict`/`_lbm_load_state_dict` in `trainer.py`; 20 fields in
+`config.py`; checkpoint `lbm_state` in `run_base_experiments.py`. Full per-mode
+parameter reference: Notion subpage "loss_balance_mode — GRL·MSE 손실 균형 6 선택지".
+
 ### Feature Matching Loss (Optional)
 
 **Purpose**: Align teacher and student hidden representations on normal patches.

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-14: `loss_balance_mode` — GRL BCE ↔ MSE discrepancy 스케일 정합 6 선택지 (default-off, bit-identical)
+
+**배경**: GRL classifier BCE 손실(O(1–20))과 자기증류 MSE discrepancy 손실(O(0.5→1e-4))은 차원·스케일이 근본적으로 다른 점수다. 기존 `grl_adaptive_lambda`(경사-노름 비 λ)는 main 경사가 줄면 λ→0으로 폭주해 GRL 신호를 굶긴다(adaptive runaway). 이를 대체할 **Axis-A 스케일 정합** 방법 4종을 공식 논문/repo line-by-line 기준으로 엄격 구현.
+
+**구현**: 단일 배타 enum `loss_balance_mode ∈ {adaptive_lambda_legacy(기본), fixed, mse_norm_dann, relobralo, famo, uwso}` + 19개 지원 필드(전부 default-off). 각각:
+- `mse_norm_dann`: BCE를 EMA(|BCE|)로 정규화→O(1) + Ganin λ ramp (Ganin et al. 2016).
+- `relobralo`: 손실 비율 softmax + Bernoulli lookback + EMA (Bischof & Kraus, arXiv:2110.09813).
+- `famo`: log-loss simplex balancer, O(1) streaming `w` 갱신 (Liu et al., NeurIPS 2023, arXiv:2306.03792).
+- `uwso`: tempered-softmax over 1/L, closed-form σ (Kirchdorfer et al., arXiv:2408.07985, IJCV 2025).
+
+**파일**: `config.py`(20 필드), `trainer.py`(mutex 검증 + dispatch 3-way[legacy byte-identical/fixed/`_lbm_apply`] + 헬퍼 4종 + state save/load), `run_base_experiments.py`(checkpoint `lbm_state` 저장/복원, 구 ckpt 호환).
+
+**불변식**: recon은 절대 앵커(재정규화 X — BCE 항/disc 비만 재가중; `famo`만 두 task 재가중); weight는 stop-gradient; Ganin reversal ramp(`model._grl_lambda`)와 곱하지 않음(double-ramp 금지); 모든 default는 271(num_epochs=500, warmup=250) ep250→350 구간 calibration. 신규 4모드는 `use_grl=True`+`grl_mode='classifier'` 요구, `use_scad`와 배타(`ValueError`).
+
+**검증(GPU 미사용 — 실험 진행 중)**: import OK(실행 중 큐의 다음 실험 re-import 안전), config defaults 정확, **legacy bit-identical**(`git diff` dispatch 내부 연산 라인 불변, indentation만 +4), 4모드 CPU smoke(정상 0.5·붕괴 1e-4 MSE × onset 250·mid 300에서 loss/weight/grad finite, NaN 0), mutex `ValueError` 4건, state round-trip(FAMO `w`/Adam-step/prev·RNG 복원 + 구 ckpt no-op back-compat). 상세 → Notion subpage "loss_balance_mode — GRL·MSE 손실 균형 6 선택지", `docs/ARCHITECTURE.md` GRL 섹션.
+
 ## 2026-06-09: (정정) 위 metadata 버그의 **진짜 원인 = finalize evaluate-path score divergence** (best_checkpoint는 정상)
 
 2026-06-08 항목이 원인을 "async best_checkpoint 정렬불일치(뒤 epoch weights)"로 기술했으나 **틀렸다.** weight-level forensic 재실행으로 `best_checkpoint.pt` = **`model@best_epoch` (bit-identical)** 임을 4 cell(SMAP/P-4@255, MSL/C-2@295, SMD/machine-1-4@470, SMAP/T-3@470)에서 확인. 실제 원인은 finalize의 `evaluate(lite=False)` **anomaly-score 경로가 per-epoch npz / best-epoch 선택 / viz(`derive_pred_data`)와 다른 score**를 낸 것 (= FM-omission류 score-path 중복; 같은 `model@255`에서 evaluate=0.4337 vs npz/selection/viz=0.4858). `0.4337`이 우연히 `epoch_metrics@470`(0.4338)과 비슷해 "epoch 470 model을 썼다"고 오인했을 뿐이다.

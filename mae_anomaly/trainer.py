@@ -95,6 +95,23 @@ class Trainer:
                 "use_scad=True는 patch_level_loss=True를 필요로 합니다. "
                 "SCAD는 patch-level supervision으로 동작합니다.")
 
+        # 11. loss_balance_mode (단일 enum, 상호배타 — 한 값만 선택 가능하므로 구조적 보장).
+        #     adaptive_lambda_legacy(기본)는 기존 grl_adaptive_lambda bool을 그대로 따른다.
+        _VALID_LBM = {'adaptive_lambda_legacy', 'fixed', 'mse_norm_dann', 'relobralo', 'famo', 'uwso'}
+        _lbm = getattr(config, 'loss_balance_mode', 'adaptive_lambda_legacy')
+        if _lbm not in _VALID_LBM:
+            raise ValueError(f"loss_balance_mode must be one of {_VALID_LBM}, got {_lbm!r}")
+        if _lbm not in ('adaptive_lambda_legacy', 'fixed'):
+            # NEW scale-matching modes only operate on the classifier-mode GRL BCE term.
+            if not getattr(config, 'use_grl', False):
+                raise ValueError(f"loss_balance_mode={_lbm!r}는 use_grl=True를 필요로 합니다.")
+            if getattr(config, 'grl_mode', 'classifier') != 'classifier':
+                raise ValueError(
+                    f"loss_balance_mode={_lbm!r}는 grl_mode='classifier'에서만 동작합니다 "
+                    f"(현재 {getattr(config, 'grl_mode', 'classifier')!r}; WDGRL은 자체 minimax 사용).")
+            if getattr(config, 'use_scad', False):
+                raise ValueError(f"loss_balance_mode={_lbm!r}와 use_scad=True는 동시 사용 불가합니다.")
+
         # 10. seq_length / patch_size / num_patches 일관성 (defense-in-depth;
         #    make_config()에서도 검증되나 Trainer가 직접 호출되는 경로 보호)
         if config.seq_length % config.patch_size != 0:
@@ -188,6 +205,22 @@ class Trainer:
         self._prev_epoch_adv_lambda = 1.0   # Discriminator
         self._prev_epoch_fm_lambda = 1.0    # Feature Matching
         self._prev_epoch_grl_lambda = 1.0   # GRL
+
+        # loss_balance_mode state (2026-06-14; NEW Axis-A scale-matchers only —
+        # legacy/fixed paths never read these, so default behavior is unaffected).
+        self._lbm = getattr(config, 'loss_balance_mode', 'adaptive_lambda_legacy')
+        self._mn_ema_bce = None            # mse_norm_dann: EMA of |grl_cls_loss|
+        self._mn_ema_mse = None            # (symmetry/logging)
+        self._rlb_lam = [1.0, 1.0]         # relobralo EMA weights [MSE, BCE]
+        self._rlb_l = [1.0, 1.0]           # relobralo prev losses
+        self._rlb_l0 = [1.0, 1.0]          # relobralo onset losses
+        self._rlb_l0_captured = False
+        self._rlb_steps_done = 0
+        self._rlb_last_epoch = -1
+        self._rlb_rng = random.Random(getattr(config, 'random_seed', 0) + 777)
+        self._uwso_ema_mse = None          # uwso EMA losses (when uwso_ema_beta<1.0)
+        self._uwso_ema_bce = None
+        self._famo = None                  # famo lazy dict(w, opt, min, prev)
 
         # WDGRL critic (separate optimizer, alternating training)
         self.wdgrl_critic = None
@@ -346,6 +379,184 @@ class Trainer:
         if student_epoch < warmup_length:
             return (student_epoch + 1) / warmup_length
         return 1.0
+
+    # ===== loss_balance_mode helpers (2026-06-14) — NEW Axis-A scale-matchers ONLY. =====
+    # Never called for adaptive_lambda_legacy/fixed (default), so they cannot affect the
+    # legacy path. All weights are computed from DETACHED magnitudes (stop-gradient);
+    # gradient flows only through the trailing loss tensors. They never touch the
+    # gradient-reversal ramp (model._grl_lambda) — no double-ramp.
+    def _lbm_apply(self, mode, loss, grl_cls_loss, grl_w, loss_tensors, epoch, teacher_only):
+        if mode == 'mse_norm_dann':
+            return self._lbm_mse_norm_dann(loss, grl_cls_loss, grl_w, epoch)
+        elif mode == 'relobralo':
+            return self._lbm_relobralo(loss, grl_cls_loss, epoch)
+        elif mode == 'uwso':
+            return self._lbm_uwso(loss, grl_cls_loss)
+        elif mode == 'famo':
+            return self._lbm_famo(loss, grl_cls_loss)
+        raise ValueError(f"unknown loss_balance_mode in _lbm_apply: {mode!r}")
+
+    def _lbm_mse_norm_dann(self, loss, grl_cls_loss, grl_w, epoch):
+        # BCE scale-normalization (divide BCE by EMA(|BCE|) -> stable O(1) so it is NOT
+        # starved as the MSE numerator decays) + Ganin deterministic ramp (runaway-proof:
+        # weight is a pure function of training progress, not of either gradient norm).
+        cfg = self.config
+        with torch.no_grad():
+            bce_mag = float(grl_cls_loss.detach().float())
+            mse_mag = float(loss.detach().float())
+            b = cfg.mse_norm_ema_beta
+            if self._mn_ema_bce is None:
+                self._mn_ema_bce, self._mn_ema_mse = bce_mag, mse_mag
+            else:
+                self._mn_ema_bce = b * bce_mag + (1.0 - b) * self._mn_ema_bce
+                self._mn_ema_mse = b * mse_mag + (1.0 - b) * self._mn_ema_mse
+        eps = cfg.mse_norm_eps
+        horizon = max(1, int(getattr(cfg, 'dann_ramp_horizon', 100)))
+        p = (epoch - cfg.teacher_only_warmup_epochs) / horizon
+        p = min(max(p, 0.0), 1.0)
+        lam_p = 2.0 / (1.0 + math.exp(-cfg.dann_ramp_gamma * p)) - 1.0
+        if cfg.mse_norm_log_variant:
+            w = lam_p * grl_w
+            loss = loss + w * torch.log(grl_cls_loss + eps)
+        else:
+            s_bce = 1.0 / (self._mn_ema_bce + eps)
+            w = lam_p * grl_w * s_bce
+            loss = loss + w * grl_cls_loss
+        return loss, float(w)
+
+    def _lbm_relobralo(self, loss, grl_cls_loss, epoch):
+        # Bischof & Kraus 2110.09813: per-term softmax of loss RATIOS (vs prev step + vs onset),
+        # random Bernoulli(rho) lookback, EMA(alpha) of weights. m=2 [MSE=loss, BCE=grl_cls].
+        # recon+disc anchored at weight 1; only the BCE term gets the relative weight lam_bce/lam_mse.
+        cfg = self.config
+        T = cfg.relobralo_T; alpha = cfg.relobralo_alpha; rho_p = cfg.relobralo_rho; eps = cfg.relobralo_eps
+        update_now = (epoch != self._rlb_last_epoch) if getattr(cfg, 'relobralo_update_freq', 'epoch') == 'epoch' else True
+        with torch.no_grad():
+            l_mse = float(loss.detach().float()); l_bce = float(grl_cls_loss.detach().float())
+            if update_now:
+                if not self._rlb_l0_captured:
+                    self._rlb_l0 = [max(l_mse, eps), max(l_bce, eps)]; self._rlb_l0_captured = True
+
+                def _sm2(ratios):
+                    mx = max(ratios); e = [math.exp(r - mx) for r in ratios]; Z = sum(e)
+                    return [2.0 * ei / Z for ei in e]  # *m=2 rescale (mean 1)
+                cur = [max(l_mse, eps), max(l_bce, eps)]
+                prev = [max(self._rlb_l[0], eps), max(self._rlb_l[1], eps)]
+                onset = [max(self._rlb_l0[0], eps), max(self._rlb_l0[1], eps)]
+                lamb_hat = _sm2([cur[0] / (T * prev[0]), cur[1] / (T * prev[1])])
+                lamb0_hat = _sm2([cur[0] / (T * onset[0]), cur[1] / (T * onset[1])])
+                if self._rlb_steps_done == 0:      # onset epoch: freeze weights=1, capture l0
+                    a = 1.0
+                elif self._rlb_steps_done == 1:    # 2nd: fresh ratio
+                    a = 0.0
+                else:
+                    a = alpha
+                rho_t = 1.0 if self._rlb_rng.random() < rho_p else 0.0
+                self._rlb_lam = [rho_t * a * self._rlb_lam[i] + (1.0 - rho_t) * a * lamb0_hat[i]
+                                 + (1.0 - a) * lamb_hat[i] for i in range(2)]
+                self._rlb_l = [l_mse, l_bce]
+                self._rlb_last_epoch = epoch
+                self._rlb_steps_done += 1
+        rel = self._rlb_lam[1] / max(self._rlb_lam[0], eps)
+        loss = loss + rel * grl_cls_loss
+        return loss, float(rel)
+
+    def _lbm_uwso(self, loss, grl_cls_loss):
+        # Kirchdorfer et al. 2408.07985 (IJCV 2025) Eq.4: tempered-softmax over (1/L) with
+        # log-sum-exp stabilization; loss floors cap 1/L blow-up as MSE->0. recon anchored;
+        # BCE gets relative weight w_bce/w_mse. sigma closed-form (not learned) -> no extra params.
+        cfg = self.config; T = cfg.uwso_temperature
+        with torch.no_grad():
+            Lm = max(float(loss.detach().float()), cfg.uwso_loss_floor_mse)
+            Lb = max(float(grl_cls_loss.detach().float()), cfg.uwso_loss_floor_bce)
+            if cfg.uwso_ema_beta < 1.0:
+                b = cfg.uwso_ema_beta
+                if self._uwso_ema_mse is None:
+                    self._uwso_ema_mse, self._uwso_ema_bce = Lm, Lb
+                else:
+                    self._uwso_ema_mse = b * Lm + (1.0 - b) * self._uwso_ema_mse
+                    self._uwso_ema_bce = b * Lb + (1.0 - b) * self._uwso_ema_bce
+                Lm, Lb = self._uwso_ema_mse, self._uwso_ema_bce
+            a_m = (1.0 / Lm) / T; a_b = (1.0 / Lb) / T
+            mx = max(a_m, a_b); e_m = math.exp(a_m - mx); e_b = math.exp(a_b - mx); Z = e_m + e_b
+            w_m = e_m / Z; w_b = e_b / Z
+        rel = w_b / max(w_m, 1e-12)
+        loss = loss + rel * grl_cls_loss
+        return loss, float(rel)
+
+    def _lbm_famo(self, loss, grl_cls_loss):
+        # Liu et al. NeurIPS 2023 (Cranial-XIX/FAMO) — log-loss simplex balancer. 2 tasks:
+        # [task0 = recon+disc (loss), task1 = BCE (grl_cls_loss)]. Full MTL balancer:
+        # it reweights BOTH tasks (recon NOT anchored here) via the log-combination, and
+        # updates softmax logits w by the consecutive-step log-loss change (streaming/
+        # next-batch approximation of the official post-step re-forward). O(1), no per-task grads.
+        cfg = self.config
+        if self._famo is None:
+            dev = loss.device
+            w = torch.zeros(2, device=dev, requires_grad=True)
+            opt = torch.optim.Adam([w], lr=cfg.famo_w_lr, weight_decay=cfg.famo_gamma)
+            self._famo = {'w': w, 'opt': opt, 'min': torch.zeros(2, device=dev), 'prev': None}
+        f = self._famo
+        with torch.no_grad():
+            curr = torch.stack([loss.detach().float(), grl_cls_loss.detach().float()])
+        if f['prev'] is not None:
+            delta = (f['prev'] - f['min'] + 1e-8).log() - (curr - f['min'] + 1e-8).log()
+            with torch.enable_grad():
+                z_w = torch.softmax(f['w'], -1)
+                d = torch.autograd.grad(z_w, f['w'], grad_outputs=delta.detach())[0]
+            f['opt'].zero_grad(); f['w'].grad = d; f['opt'].step()
+        f['prev'] = curr
+        z = torch.softmax(f['w'], -1).detach()                 # detached weight (safe for model backward)
+        D = torch.stack([loss, grl_cls_loss]) - f['min'] + 1e-8
+        c = (z / D.detach()).sum().detach()
+        weighted = (D.log() * z / c).sum()
+        return weighted, float(z[1].item())
+
+    def _lbm_state_dict(self):
+        """Serialize loss_balance_mode runtime state for checkpoint resume.
+        Plain dict (CPU tensors); legacy/fixed modes carry only inert defaults."""
+        st = {
+            'mode': self._lbm,
+            'mn_ema_bce': self._mn_ema_bce, 'mn_ema_mse': self._mn_ema_mse,
+            'rlb_lam': list(self._rlb_lam), 'rlb_l': list(self._rlb_l), 'rlb_l0': list(self._rlb_l0),
+            'rlb_l0_captured': self._rlb_l0_captured, 'rlb_steps_done': self._rlb_steps_done,
+            'rlb_last_epoch': self._rlb_last_epoch, 'rlb_rng': self._rlb_rng.getstate(),
+            'uwso_ema_mse': self._uwso_ema_mse, 'uwso_ema_bce': self._uwso_ema_bce,
+        }
+        if self._famo is not None:
+            st['famo'] = {
+                'w': self._famo['w'].detach().cpu(),
+                'opt': self._famo['opt'].state_dict(),
+                'min': self._famo['min'].detach().cpu(),
+                'prev': None if self._famo['prev'] is None else self._famo['prev'].detach().cpu(),
+            }
+        return st
+
+    def _lbm_load_state_dict(self, st):
+        """Restore loss_balance_mode state; no-op for absent/None (legacy ckpt back-compat)."""
+        if not st:
+            return
+        self._mn_ema_bce = st.get('mn_ema_bce'); self._mn_ema_mse = st.get('mn_ema_mse')
+        self._rlb_lam = list(st.get('rlb_lam', [1.0, 1.0]))
+        self._rlb_l = list(st.get('rlb_l', [1.0, 1.0]))
+        self._rlb_l0 = list(st.get('rlb_l0', [1.0, 1.0]))
+        self._rlb_l0_captured = st.get('rlb_l0_captured', False)
+        self._rlb_steps_done = st.get('rlb_steps_done', 0)
+        self._rlb_last_epoch = st.get('rlb_last_epoch', -1)
+        if st.get('rlb_rng') is not None:
+            try:
+                self._rlb_rng.setstate(st['rlb_rng'])
+            except (TypeError, ValueError):
+                pass
+        self._uwso_ema_mse = st.get('uwso_ema_mse'); self._uwso_ema_bce = st.get('uwso_ema_bce')
+        _f = st.get('famo')
+        if _f is not None:
+            dev = next(self.model.parameters()).device
+            w = _f['w'].to(dev).detach().requires_grad_(True)
+            opt = torch.optim.Adam([w], lr=self.config.famo_w_lr, weight_decay=self.config.famo_gamma)
+            opt.load_state_dict(_f['opt'])
+            self._famo = {'w': w, 'opt': opt, 'min': _f['min'].to(dev),
+                          'prev': None if _f['prev'] is None else _f['prev'].to(dev)}
 
     def _extract_patches(self, original, student_output, mask, point_labels):
         """Extract patch-level data for discriminator training.
@@ -747,28 +958,46 @@ class Trainer:
                 # === Classifier mode (DANN-style GRL, default) ===
                 _grl_cls_loss = loss_tensors['grl_cls_loss']
                 _grl_w = getattr(self.config, 'grl_loss_weight', 1.0)
+                _lbm = getattr(self.config, 'loss_balance_mode', 'adaptive_lambda_legacy')
 
-                if getattr(self.config, 'grl_adaptive_lambda', True):
-                    # Adaptive scaling: GRL gradient ≈ main gradient (auto 1:1 balancing)
-                    _last_w = list(self.model.student_decoder.parameters())[-1]
-                    with autocast('cuda', enabled=False):
-                        _main_g = torch.autograd.grad(loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
-                        _grl_g = torch.autograd.grad(_grl_cls_loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
-                    if _main_g is None or _grl_g is None:
-                        _grl_lambda_adp = torch.tensor(1.0, device=loss.device)
+                if _lbm == 'adaptive_lambda_legacy':
+                    # ===== LEGACY (byte-identical to pre-2026-06-14): do NOT modify these lines =====
+                    if getattr(self.config, 'grl_adaptive_lambda', True):
+                        # Adaptive scaling: GRL gradient ≈ main gradient (auto 1:1 balancing)
+                        _last_w = list(self.model.student_decoder.parameters())[-1]
+                        with autocast('cuda', enabled=False):
+                            _main_g = torch.autograd.grad(loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
+                            _grl_g = torch.autograd.grad(_grl_cls_loss.float(), _last_w, retain_graph=True, allow_unused=True)[0]
+                        if _main_g is None or _grl_g is None:
+                            _grl_lambda_adp = torch.tensor(1.0, device=loss.device)
+                        else:
+                            _grl_lambda_adp = (_main_g.norm() / (_grl_g.norm() + 1e-4)).clamp(0.0, 10.0).detach()
+
+                        _grl_effective = self._prev_epoch_grl_lambda * _grl_w
+                        loss = loss + _grl_effective * _grl_cls_loss
+                        loss_dict['grl_lambda'] = _grl_lambda_adp.item()
+                        loss_dict['grl_effective_weight'] = _grl_effective
                     else:
-                        _grl_lambda_adp = (_main_g.norm() / (_grl_g.norm() + 1e-4)).clamp(0.0, 10.0).detach()
-
-                    _grl_effective = self._prev_epoch_grl_lambda * _grl_w
-                    loss = loss + _grl_effective * _grl_cls_loss
-                    loss_dict['grl_lambda'] = _grl_lambda_adp.item()
-                    loss_dict['grl_effective_weight'] = _grl_effective
-                else:
-                    # Fixed weight: no adaptive lambda, direct grl_loss_weight
-                    _grl_lambda_adp = torch.tensor(1.0, device=loss.device)
-                    loss = loss + _grl_w * _grl_cls_loss
+                        # Fixed weight: no adaptive lambda, direct grl_loss_weight
+                        _grl_lambda_adp = torch.tensor(1.0, device=loss.device)
+                        loss = loss + _grl_w * _grl_cls_loss
+                        loss_dict['grl_lambda'] = 1.0
+                        loss_dict['grl_effective_weight'] = _grl_w
+                    # ===== END LEGACY =====
+                elif _lbm == 'fixed':
+                    # Explicit fixed weight (enum alias; fixed_grl_weight<0 → grl_loss_weight)
+                    _fw = getattr(self.config, 'fixed_grl_weight', -1.0)
+                    _eff = _grl_w if _fw < 0 else _fw
+                    loss = loss + _eff * _grl_cls_loss
                     loss_dict['grl_lambda'] = 1.0
-                    loss_dict['grl_effective_weight'] = _grl_w
+                    loss_dict['grl_effective_weight'] = float(_eff)
+                else:
+                    # New Axis-A scale-matching modes (mse_norm_dann / relobralo / uwso / famo).
+                    # All isolated in _lbm_apply; loss_dict uses only existing keys (schema unchanged).
+                    loss, _eff_log = self._lbm_apply(
+                        _lbm, loss, _grl_cls_loss, _grl_w, loss_tensors, epoch, teacher_only)
+                    loss_dict['grl_lambda'] = 1.0
+                    loss_dict['grl_effective_weight'] = float(_eff_log)
             elif getattr(self.config, 'use_grl', False):
                 # teacher_only or GRL inactive: zero metrics
                 loss_dict.setdefault('grl_cls_loss', 0.0)

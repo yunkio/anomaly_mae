@@ -3037,6 +3037,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
             'prev_adv_lambda': _tr._prev_epoch_adv_lambda,
             'prev_fm_lambda': _tr._prev_epoch_fm_lambda,
             'prev_grl_lambda': _tr._prev_epoch_grl_lambda,
+            'lbm_state': _tr._lbm_state_dict(),  # loss_balance_mode runtime state (resume)
             '_frozen_eval_modules': getattr(_tr, '_frozen_eval_modules', None),
             # [신규 2026-06-01] teacher warmup early-stop으로 동적 단축된 warmup 종료점.
             # 미트리거면 None. 트리거 시 (epoch+1). resume에서 config.teacher_only_warmup_epochs
@@ -3116,6 +3117,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
                 trainer._prev_epoch_adv_lambda = _rsm['prev_adv_lambda']
                 trainer._prev_epoch_fm_lambda = _rsm['prev_fm_lambda']
                 trainer._prev_epoch_grl_lambda = _rsm['prev_grl_lambda']
+                trainer._lbm_load_state_dict(_rsm.get('lbm_state'))  # back-compat: absent → no-op
                 if 'discriminator_state_dict' in _rsm and trainer.discriminator is not None:
                     trainer.discriminator.load_state_dict(_rsm['discriminator_state_dict'])
                     trainer.d_optimizer.load_state_dict(_rsm['d_optimizer_state_dict'])
