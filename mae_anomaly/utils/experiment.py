@@ -8,9 +8,13 @@ from mae_anomaly import Config
 
 # Dynamic d_model candidates (must be divisible by nhead=8)
 # 64 and 96 added to allow smaller d_model for low-F datasets at small patch_size.
-# patch_size=10 case is unchanged: smallest candidate >= raw is identical to old list
-# for every supported dataset (raw>=80 → 128 was old min, 128 still chosen).
-D_MODEL_CANDIDATES = [64, 96, 128, 192, 256, 384, 512]
+# 768 is INTENDED (not a bug) for HIGH-F datasets: raw = patch*F can exceed 512.
+#   e.g. patch_size=10 → MSL F=55 raw=550→768, WaDi F=123 raw=1230→768.
+#   Low/medium-F datasets still resolve to the old [128..512] choices.
+# ⚠️ d_model=768 carries a heavy per-epoch host-RAM cost (~30GB by ep500 on fast
+#   1-batch datasets like MSL) that is INDEPENDENT of batch_size — recover an OOM
+#   via resume-from-checkpoint, do NOT cap d_model to 512 (768 is correct).
+D_MODEL_CANDIDATES = [64, 96, 128, 192, 256, 384, 512, 768]
 
 
 def resolve_test_stride(config) -> int:
@@ -42,12 +46,12 @@ def resolve_dynamic_d_model(num_features: int, patch_size: int) -> int:
     """Select d_model >= raw patch info from candidate list.
 
     Chooses the smallest candidate in `D_MODEL_CANDIDATES`
-    (= [64, 96, 128, 192, 256, 384, 512]) that is >= `patch_size * num_features`.
-    Caps at 512 (max candidate).
+    (= [64, 96, 128, 192, 256, 384, 512, 768]) that is >= `patch_size * num_features`.
+    Caps at 768 (max candidate).
 
-    For patch_size=10 (Set C baseline), behavior is identical to the prior
-    [128, 192, 256, 384, 512] candidate list for every supported dataset
-    because raw = 10*F is always >= 80 ≥ 64,96 → 128 is still the minimum.
+    For patch_size=10: low/medium-F datasets match the prior [128..512] list, but
+    HIGH-F datasets now resolve to 768 (MSL F=55 → raw 550 → 768; WaDi F=123 → 768).
+    768 is intended — it is NOT clamped to 512.
 
     For smaller patch_sizes (e.g., 5) on low-F datasets (e.g., F=8, raw=40),
     the function now returns 64 instead of 128, providing finer adaptation.
@@ -63,7 +67,7 @@ def resolve_dynamic_d_model(num_features: int, patch_size: int) -> int:
     for d in D_MODEL_CANDIDATES:
         if d >= raw:
             return d
-    return D_MODEL_CANDIDATES[-1]  # cap at 512
+    return D_MODEL_CANDIDATES[-1]  # cap at 768 (max candidate)
 
 
 def get_next_experiment_number(experiments_dir: str) -> int:

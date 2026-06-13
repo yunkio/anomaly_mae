@@ -3187,6 +3187,16 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
     print(f"Training complete: wall={wall_time:.0f}s, pure_train={train_time:.0f}s "
           f"({per_epoch:.1f}s/ep), gpu_infer_callback={callback_infer_time:.0f}s ({n_evals} evals) | {mem_status()}")
 
+    # 2026-06-11: release training-loop host-RAM bloat BEFORE the memory-heavy
+    # finalize (best-epoch inference + VUS sweep + viz). Ultra-fast tiny datasets
+    # (e.g. MSL C-2 = 38 windows, ~0.1s/epoch) accumulate cyclic-ref/d_model=768
+    # bloat during 500 epochs that, added to the finalize, OOMs (~30GB host-RAM).
+    # An explicit collect here lets the finalize start from a low baseline.
+    import gc as _gc
+    _gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     # Save batch profiling from epoch 1 (first N batches with per-component sync timing)
     batch_profiling = history.get('batch_profiling', [])
     if batch_profiling:
