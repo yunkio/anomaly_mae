@@ -58,9 +58,10 @@ batch and applied as the previous epoch's average:
   \quad \beta_{\mathrm{GRL}} = 0.2,\;\; \beta_{\mathrm{FM}} = 1.0
   \label{eq:adaptive_weight}
 \end{equation}
-where $L_{\mathrm{main}} = L_{\mathrm{recon}} + L_{\mathrm{OD}}$ is the main reconstruction
-objective and $L_{\bullet} \in \{L_{\mathrm{FM}}, L_{\mathrm{cls}}\}$ the respective auxiliary
-term.
+where $L_{\mathrm{main}}$ is the main reconstruction objective
+($L_{\mathrm{recon}} + L_{\mathrm{OD}}$ for the FM ratio; the running objective with the
+FM term already incorporated for the GRL ratio) and $L_{\bullet} \in \{L_{\mathrm{FM}},
+L_{\mathrm{cls}}\}$ the respective auxiliary term.
 The adversarial gradient reaching the Student hidden state is therefore
 $-\lambda_{\mathrm{rev}} \cdot \lambda_{\mathrm{GRL}} \cdot
 \partial L_{\mathrm{cls}} / \partial(\text{GRL output})$: the reversal coefficient and the loss
@@ -140,7 +141,7 @@ Min--max scale per feature on each entity's training portion\;
       $\{o^{\mathrm{S}}_i\}, \{h^{\mathrm{S}}_i\} \leftarrow \mathrm{StudentDecoder}(h^{\mathrm{S}}_{\mathrm{in}})$\;
       Compute $L_{\mathrm{OD}}$ (Eq.~\ref{eq:lod}), $L_{\mathrm{FM}}$ (Eq.~\ref{eq:lfm})\;
       \tcp{GRL adversarial branch}
-      $\tau \leftarrow \mathrm{clip}((e - 250)/(500 - 250), 0, 1)$\;
+      $\tau \leftarrow \mathrm{clip}((e - 250 + 1)/(500 - 250), 0, 1)$\;
       $\lambda_{\mathrm{rev}} \leftarrow \frac{2}{1 + \exp(-10\tau)} - 1$\;
       $\tilde{h}^{\mathrm{S}} \leftarrow \mathrm{GRL}(h^{\mathrm{S}}, -\lambda_{\mathrm{rev}})$\;
       $L_{\mathrm{cls}} \leftarrow$ Eq.~\ref{eq:lcls_app} \textbf{if} batch contains positive window \textbf{else} 0\;

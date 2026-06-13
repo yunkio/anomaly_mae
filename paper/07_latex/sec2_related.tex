@@ -29,8 +29,8 @@ In the transfer setting, DACAD~\cite{darban2024dacad} exploits labeled anomalies
 
 The closest precedent is NRdetector~\cite{wang2025nrdetector}, which formulates point-level detection under noisy segment-level labels as a PU problem and identifies this as a novel setting that prior time-series anomaly detection methods only partially address.
 Its framework is a pipeline: a pre-trained WETAS-derived backbone extracts temporal embeddings, and a separate PU classifier is trained on those fixed representations; the label signal guides the classifier's output, not the encoder's gradient.
-Our approach differs along this axis: labeled anomaly information enters the gradient of the encoder during training itself, through three orthogonal mechanisms that shape what the model learns to represent rather than what it predicts.
-To our knowledge, CSMAD is the first end-to-end MTSAD model that integrates labeled anomalies into the gradient of a masked-reconstruction self-distillation objective through gradient reversal.
+Our approach differs along this axis: labeled anomaly information enters the gradient of the encoder during training itself, through co-designed mechanisms that shape what the model learns to represent rather than what it predicts.
+We are not aware of prior end-to-end MTSAD work that integrates labeled anomalies into the gradient of a masked-reconstruction self-distillation objective through gradient reversal.
 
 \subsection{Masked Autoencoders and Self-Distillation in Anomaly Detection}
 \label{sec:related_mae}

@@ -1,7 +1,7 @@
 Highlights
 
 - We formalize the contaminated semi-supervised MTSAD setting with sparse labels.
-- Three label paths: anomaly-priority masking, loss bifurcation, gradient reversal.
+- Gradient reversal makes labels shape the representation, not just the loss.
 - CSMAD's asymmetric Teacher-Student masked autoencoder amplifies anomaly discrepancy.
 - A contaminated benchmark adds test prefixes to training, exposing labeled anomalies.
 - Competitive on [N] datasets under five metrics; graceful decay with label sparsity.

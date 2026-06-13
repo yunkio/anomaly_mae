@@ -88,14 +88,14 @@ In real deployments, a small fraction of training observations carry anomaly lab
 recorded fault events, while the majority remain unlabeled; exploiting this partial labeling has
 received limited attention.
 We propose CSMAD, an end-to-end framework that integrates labeled anomaly information directly
-into masked autoencoder representation learning through three orthogonal mechanisms:
-anomaly-priority masking, a Student imitation loss restricted to normal patches, and
-gradient-reversal suppression of anomaly-specific information from the Student's internal
-representation.
-CSMAD employs an asymmetric Teacher--Student decoder architecture in which the
-capacity-limited Student mimics the Teacher less faithfully on anomalous correlation patterns
-than on normal ones, amplifying the Teacher--Student discrepancy signal under contaminated
-training.
+into the masked-reconstruction objective: a Student imitation loss restricted to normal patches
+and, as the central novelty, gradient-reversal suppression that removes anomaly-specific
+information from the Student's representation, with anomaly-priority masking exposing the labeled
+positions on which the two act.
+These label-guided mechanisms rely on an asymmetric Teacher--Student decoder: the
+capacity-limited Student mimics the Teacher less faithfully on anomalous correlation patterns than
+on normal ones, so suppressing anomaly information keeps that discrepancy sharp and amplifies it
+under contaminated training.
 To enable evaluation of labeled-anomaly-aware methods, we introduce a contaminated benchmark
 protocol that incorporates the chronological prefix of the test stream into training, thereby
 exposing labeled anomalies that are absent from the original training splits of standard
@@ -113,11 +113,11 @@ Code will be made available at [URL] upon acceptance.
 
 %% ----- Highlights -----
 %% KBS GFA: 3-5 bullets, max 85 characters each INCLUDING spaces (D-015 1).
-%% All five bullets verified <=85 chars (79/81/84/84/83); same content is
+%% All five bullets verified <=85 chars (79/75/84/84/83); same content is
 %% duplicated in highlights.txt (separate editable submission file).
 \begin{highlights}
 \item We formalize the contaminated semi-supervised MTSAD setting with sparse labels.
-\item Three label paths: anomaly-priority masking, loss bifurcation, gradient reversal.
+\item Gradient reversal makes labels shape the representation, not just the loss.
 \item CSMAD's asymmetric Teacher--Student masked autoencoder amplifies anomaly discrepancy.
 \item A contaminated benchmark adds test prefixes to training, exposing labeled anomalies.
 \item Competitive on [N] datasets under five metrics; graceful decay with label sparsity.

@@ -10,11 +10,11 @@ small fraction of labeled anomalies alongside a majority of unlabeled observatio
 This configuration is common in industrial deployments yet unaddressed by standard MTSAD
 benchmarks or existing unsupervised methods.
 CSMAD integrates labeled anomaly information into masked autoencoder representation learning
-through three orthogonal paths --- anomaly-priority masking, loss bifurcation that restricts
-Student mimicry to normal patches, and gradient-reversal suppression of anomaly-specific
-information --- built on an asymmetric Teacher--Student decoder architecture (3-layer Teacher,
-2-layer Student) that converts the capacity gap into a reliable discrepancy signal under
-contaminated training.
+through co-designed, interacting paths --- loss bifurcation that restricts Student mimicry to
+normal patches and gradient-reversal suppression of anomaly-specific information, with
+anomaly-priority masking surfacing the labeled positions they act on. Together with the asymmetric
+Teacher--Student decoder (3-layer Teacher, 2-layer Student), these paths turn the capacity gap into
+a reliable, amplified discrepancy signal under contaminated training.
 A contaminated benchmark protocol supports evaluation by incorporating the chronological prefix
 of each test stream into training.
 Experiments on [N] multivariate datasets demonstrate competitive performance against [N]

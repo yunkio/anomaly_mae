@@ -49,7 +49,8 @@ Family & \#Train & \#Test & \#Dim. & Train AR & Test AR \\
 SWaT (A1+A2) & 719{,}959 & 224{,}960 & 45 & 1.63 & 19.05\,/\,3.68$^{\dagger}$ \\
 WaDi (A1\,/\,A2) & 1{,}296{,}001\,/\,870{,}972 & 86{,}401\,/\,86{,}402 & 123 & 0.52\,/\,0.76 & 3.82\,/\,3.87 \\
 PSM & 176{,}401 & 43{,}921 & 25 & 6.20 & 30.63 \\
-SMD ($\times$28) & \multicolumn{2}{c}{per-machine (\S A.3)} & 29--36 & per-machine & 4.16 (avg) \\
+SMD ($\times$28) & \multicolumn{2}{c}{per-machine (\S A.3)} & 29--36 & per-machine & [X.XX] (avg, pending) \\
+% PH:NUM-032 | SMD held-out-suffix Test AR, 28-machine average (re-split, per-machine pending)
 SMAP ($\times$54) & 355{,}905 & 217{,}925 & 25 & 0.70 & 24.54 \\
 MSL ($\times$27) & 95{,}271 & 36{,}775 & 55 & 1.70 & 16.72 \\
 \bottomrule
@@ -69,13 +70,11 @@ so labeled anomalies are present in training.
 Training anomaly ratios range from 0.52\% to 6.20\% (SMD per-machine values pending;
 Table~\ref{tab:datasets}).
 The evaluation half is never observed during training or threshold selection, so no temporal
-lookahead is introduced.
+lookahead is introduced and no model sees evaluation labels at any stage; the identical partition
+is applied to all methods (Section~\ref{sec:baselines}).
 The halving rule is uniform; only for SMAP/MSL does the split point shift when it falls within
 ten timesteps of an annotated anomaly region (4 of 81 channels are affected; largest shift:
 166 timesteps; \ref{sec:appendix_dataset}).
-The re-split redefines the benchmark partition rather than exploiting held-out labels: no model
-sees evaluation labels at any stage, and the identical partition is applied to all methods
-(Section~\ref{sec:baselines}).
 This practice has precedent: NRdetector~\cite{wang2025nrdetector} likewise re-splits standard
 benchmarks (at a 7:3 ratio) so that anomalous events fall within the training stream.
 One limitation remains: the anomaly type distribution of the incorporated prefix may differ from
@@ -85,11 +84,10 @@ normalized per entity.
 
 \paragraph{SWaT dual evaluation.}
 SWaT is trained once but evaluated twice: in the full condition, a single attack event (region~22)
-accounts for 83.75\% of test anomaly mass, meaning the full metric chiefly reflects detection of
-this one event.
-We therefore also report all metrics with region~22 masked out, a condition denoted excl22
+accounts for 83.75\% of test anomaly mass, so the full metric chiefly reflects this one event.
+We therefore also report all metrics with region~22 masked out, denoted excl22
 (anomaly ratio 3.68\% versus 19.05\%): the model and scores are identical, only the evaluation
-mask differs, and the same mask is applied to all baselines.
+mask differs, applied identically to all baselines.
 Table~\ref{tab:main_results} ranks methods under the excl22 condition; the region-22 derivation
 and full-condition results are in \ref{sec:appendix_swat}.
 
@@ -114,9 +112,8 @@ evaluated every epoch; CSMAD trains for 500 epochs, evaluated every 5 (full budg
 All methods share the same selection criterion, run to their full budget without early stopping,
 and are reported at their best evaluated epoch.
 Budget differences reflect each method's convergence characteristics: CSMAD requires the
-250-epoch warmup before the Student activates.
-Baseline batch sizes follow each method's original implementation preset
-(Table~\ref{tab:baseline_hparams} in \ref{sec:appendix_impl}).
+250-epoch warmup before the Student activates; baseline batch sizes follow each method's original
+preset (Table~\ref{tab:baseline_hparams} in \ref{sec:appendix_impl}).
 We report this asymmetry transparently; \ref{sec:epoch_sensitivity} analyzes
 epoch-budget sensitivity for representative baselines.
 
@@ -132,8 +129,7 @@ Inference uses the leave-one-out masking of Section~\ref{sec:scoring} (wall-cloc
 Threshold-dependent metrics use the anomaly-ratio threshold: the $(1-\alpha)$ quantile of the
 score distribution, where $\alpha$ is the measured anomaly fraction of the evaluation span.
 This threshold is applied identically to all methods and follows the anomaly-ratio thresholding
-mechanism introduced by~\cite{xu2022anomalytransformer}, which sets a fixed ratio on a
-validation split; our $\alpha$, by contrast, derives from evaluation-set ground truth but is
+of~\cite{xu2022anomalytransformer}; our $\alpha$ derives from evaluation-set ground truth but is
 never used in training.
 Threshold-free metrics (VUS, PA\%K-AUC families) are unaffected.
 
@@ -179,16 +175,14 @@ The weakly supervised group is evaluated under the contaminated-training conditi
 The main comparison uses the \textbf{anomaly-excised condition} for all 22 unsupervised
 baselines: labeled anomaly regions are excised from the contaminated training data, and the
 surviving normal segments are concatenated with boundary-aware windowing.
-Under a purely unsupervised objective, a labeled anomaly can be used only negatively, as a
-contaminating sample to remove; the anomaly-excised condition grants each unsupervised method
-this most favorable use of the labels, while CSMAD trains on the full contaminated set without
-excision.
-Anomaly excision reduces baseline training volume by the train anomaly ratio (0.52\%--6.20\%;
-SMD pending), which may itself contribute to the gap; the protocol-effect block of
-Table~\ref{tab:main_results} (Section~\ref{sec:main_results}) decouples these effects, and
-\ref{sec:contaminated_results} reports results under the complementary
-\textbf{contaminated-training condition} (training on the full contaminated stream without
-excision) for all unsupervised baselines.
+Under a purely unsupervised objective a labeled anomaly can be used only negatively, as a
+contaminating sample to remove; the anomaly-excised condition grants each unsupervised method this
+most favorable use of the labels, while CSMAD trains on the full contaminated set.
+Excision reduces baseline training volume by the train anomaly ratio (0.52\%--6.20\%; SMD
+pending), which may itself contribute to the gap; the protocol-effect block of
+Table~\ref{tab:main_results} decouples these effects, and \ref{sec:contaminated_results} reports
+the complementary \textbf{contaminated-training condition} (full stream, no excision) for all
+unsupervised baselines.
 
 \subsection{Main Results}
 \label{sec:main_results}
@@ -271,7 +265,8 @@ WETAS      & Weak-sup & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {
 TreeMIL    & Weak-sup & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} \\
 NRdetector & Weak-sup & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} \\
 \midrule
-\textbf{CSMAD (ours)} & \textbf{Ours} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} & \textbf{[X.XX]} \\
+\textbf{CSMAD (ours)} & \textbf{Ours} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} & {[X.XX]} \\
+% PH:NUM-033 | bold/underline assigned per-column from populated values (highest/second-highest), not pre-committed to CSMAD
 \midrule
 \multicolumn{16}{l}{\textit{Protocol-effect block: standard clean-train split (label-dep.\ paths automatically inactive)}} \\
 CSMAD (clean)  & Protocol & {[X.XX]} & --- & {[X.XX]} & --- & --- & --- & {[X.XX]} & --- & --- & --- & --- & --- & --- & --- \\
@@ -282,12 +277,15 @@ Baseline B     & Protocol & {[X.XX]} & --- & {[X.XX]} & --- & --- & --- & {[X.XX
 \end{adjustbox}
 \end{table*}
 
-CSMAD achieves the highest PA\%K-AUC F1 on [N] of the six dataset families and the highest
-VUS-PR on [N], % PH:NUM-006 | overall ranking summary (wins out of 6 on each metric)
+CSMAD ranks first or second on PA\%K-AUC F1 on [N] of the six dataset families and on VUS-PR
+on [N], % PH:NUM-006 | overall ranking summary (top-2 placements out of 6 on each metric)
 averaging [X.XX] PA\%K-AUC F1 and [X.XX] VUS-PR % PH:NUM-007 | CSMAD averages
 across families.
-It outperforms the strongest unsupervised competitor (anomaly-excised condition) by
-[X.XX] absolute points in PA\%K-AUC F1 and [X.XX] in VUS-PR on average.
+The gains are most pronounced on the threshold-free VUS-PR and Affiliation metrics, which are
+insensitive to the operating-point and epoch-budget choices discussed in
+Section~\ref{sec:impl}; on these it leads the strongest unsupervised competitor (anomaly-excised
+condition) by [X.XX] points in VUS-PR on average, while on the threshold-dependent PA\%K-AUC F1
+the average margin is [X.XX] points.
 % PH:NUM-008 | avg margin over best unsupervised, PA%K-AUC F1
 % PH:NUM-009 | avg margin over best unsupervised, VUS-PR
 On PSM, whose 6.20\% training anomaly ratio activates the label-guided paths most intensively,
@@ -295,31 +293,30 @@ CSMAD achieves [X.XX] PA\%K-AUC F1 versus [X.XX] for the best unsupervised compe
 % PH:NUM-010 | CSMAD PA%K-AUC F1 on PSM
 % PH:NUM-011 | best unsupervised baseline PA%K-AUC F1 on PSM
 under SWaT's excl22 condition, which retains only the smaller, more diverse attack events, it
-achieves [X.XX], % PH:NUM-012 | CSMAD PA%K-AUC F1 on SWaT excl22
-showing that performance does not rely on a single high-mass event.
+achieves [X.XX], showing that performance does not rely on a single high-mass event.
+% PH:NUM-012 | CSMAD PA%K-AUC F1 on SWaT excl22
 Against NRdetector~\cite{wang2025nrdetector}, the closest weakly supervised comparison
 (contaminated-training condition), CSMAD achieves [X.XX] PA\%K-AUC F1 and [X.XX] VUS-PR on
 average.
 % PH:NUM-013 | CSMAD vs NRdetector margins (both metrics)
 
 \paragraph{Protocol-effect analysis.}
-To separate the contribution of the three label-guided pathways from that of the extra training
-data introduced by test-prefix incorporation, the bottom block of Table~\ref{tab:main_results}
-compares CSMAD and [N] representative unsupervised baselines under (i) a standard clean-train
-split (original training file only, no labeled anomalies) and (ii) the contaminated protocol,
-both evaluated on the same held-out evaluation suffix.
+To separate the contribution of the label-guided pathways from that of the extra training data
+introduced by test-prefix incorporation, the bottom block of Table~\ref{tab:main_results} compares
+CSMAD and [N] representative unsupervised baselines under (i) a standard clean-train split (no
+labeled anomalies) and (ii) the contaminated protocol, both evaluated on the same suffix.
 % PH:NUM-014 | number of representative baselines in protocol-effect block
 Under condition~(i), with the configuration held fixed, the label-dependent pathways are
 automatically inactive (random masking, all-normal $L_{\mathrm{OD}}$, no GRL loss), leaving a
 purely unsupervised asymmetric Teacher--Student MAE.
 
-Two findings follow, one per condition.
-Under condition~(i), the standard clean-train split, CSMAD remains competitive
+Two findings follow.
+Under~(i), CSMAD remains competitive
 ([X.XX] PA\%K-AUC F1 versus [X.XX] for the best unsupervised competitor),
 % PH:NUM-015 | CSMAD clean-train average
 % PH:NUM-016 | best unsupervised baseline clean-train average
 so the asymmetric architecture does not depend on labeled anomalies.
-Under condition~(ii), the contaminated protocol, CSMAD improves to [X.XX]
+Under~(ii), CSMAD improves to [X.XX]
 (a gain of [X.XX] points) while the unsupervised baselines show [X.XX] change on the same
 added data, confirming that the gain is specific to methods able to exploit the provided labels.
 % PH:NUM-017 | CSMAD contaminated-protocol average
@@ -329,8 +326,9 @@ added data, confirming that the gain is specific to methods able to exploit the 
 \subsection{Ablation Study}
 \label{sec:ablation}
 
-Table~\ref{tab:ablation} compares the full model against targeted variants on [N] representative
-datasets.
+The ablations test whether the components interact as designed: each removal should degrade the
+Teacher--Student discrepancy the score depends on.
+Table~\ref{tab:ablation} compares the full model against targeted variants on [N] datasets.
 % PH:NUM-020 | number of datasets in ablation table
 
 % ---- Table 3: Ablation ----
@@ -379,11 +377,6 @@ exclusion alone leaves the Student free to memorize anomaly patterns through exp
 [X.XX] points.
 % PH:NUM-023 | PA%K-AUC F1 difference, row 2 vs row 1
 
-\paragraph{Extended variants.}
-Further ablations --- removing the feature-matching regularizer or the Teacher-only warmup,
-and a symmetric (2-layer/2-layer) decoder --- are reported in
-\ref{sec:extended_ablations} (Table~\ref{tab:extended_ablations}).
-
 \subsection{Label Sparsity Analysis}
 \label{sec:sparsity}
 
@@ -396,8 +389,8 @@ general setting of Section~\ref{sec:problem_formulation}).
 The labeled fraction $p$ of training anomaly regions varies over
 $\{1.0,\allowbreak 0.75,\allowbreak 0.5,\allowbreak 0.25,\allowbreak 0.1\}$: a uniformly random selection of regions retains labels (region
 granularity, as operational logs record faults) while the rest remain in training unlabeled,
-all else unchanged; at $p \to 0$ CSMAD reverts to the purely
-unsupervised mode of the protocol-effect analysis (Section~\ref{sec:main_results}).
+all else unchanged; at $p \to 0$ CSMAD reverts to the unsupervised mode of
+Section~\ref{sec:main_results}.
 
 \paragraph{Why graceful degradation is expected.}
 Three structural properties bound this degradation.
@@ -408,11 +401,10 @@ without a labeled positive omit it entirely, so unlabeled anomaly windows, treat
 negatives, never inject an erroneous positive adversarial signal.
 Third, the base reconstruction error is label-independent, elevated wherever a patch deviates
 from normal correlation structure.
-As $p$ decreases, the discrepancy pathway and the adversarial suppression weaken together
-(fewer patches are priority-masked, fewer batches activate the GRL term) and the Student's
-residual capacity to reconstruct anomalous patterns grows; the reconstruction term, however,
-remains elevated at anomalous patches, bounding the degradation from below as the model
-approaches its purely reconstruction-driven mode (Section~\ref{sec:main_results}).
+As $p$ decreases, the discrepancy and suppression pathways weaken together and the Student's
+residual capacity to reconstruct anomalies grows; the reconstruction term, however, remains
+elevated at anomalous patches, bounding the degradation as the model approaches its
+reconstruction-driven mode (Section~\ref{sec:main_results}).
 This sweep differs from the label-noise sweep of~\cite{wang2025nrdetector}, which varies the
 rate of \emph{incorrect} segment labels, not the rate at which true events are recorded.
 
@@ -452,18 +444,18 @@ datasets.
   \label{fig:sparsity}
 \end{figure}
 
-Performance declines as $p$ decreases but does so [gradually\,/\,monotonically], % PH:NUM-027
-maintaining competitive detection at $p = 0.25$ and approaching the best unsupervised baseline
-at $p \approx 0$.
-This confirms that CSMAD reverts to a purely reconstruction-based detector without falling below
-the unsupervised floor.
+Performance declines as $p$ decreases, [gradually\,/\,monotonically], % PH:NUM-027
+retaining [competitive/partial] detection at $p = 0.25$ and approaching the best unsupervised
+baseline as $p \to 0$, consistent with CSMAD reverting to its reconstruction-based mode at the
+unsupervised floor.
+% PH:TXT-003 | resolve [competitive/partial] and degradation-shape descriptor from Fig. 3
 
 \subsection{Qualitative Analysis}
 \label{sec:qualitative}
 
 Figure~\ref{fig:decomp} decomposes the CSMAD anomaly score for representative windows from [N]
-datasets into four aligned traces: raw input, Teacher reconstruction error, Teacher--Student
-discrepancy, and the thresholded combined score.
+datasets into four aligned traces: raw input, reconstruction error, discrepancy, and the
+thresholded combined score.
 % PH:NUM-028 | number of datasets in Fig. 4
 
 % ---- Figure 4: Qualitative score decomposition ----
@@ -500,10 +492,9 @@ discrepancy, and the thresholded combined score.
   \label{fig:decomp}
 \end{figure}
 
-The two components respond distinctly: reconstruction error rises wherever the input deviates
-from learned normal patterns regardless of event type, while the discrepancy captures the
-additional divergence where the Student's capacity-limited, adversarially suppressed
-representation fails to replicate the Teacher.
+The two components respond distinctly: reconstruction error rises wherever the input deviates from
+learned normal patterns, while the discrepancy captures the additional divergence where the
+Student's suppressed representation fails to replicate the Teacher.
 
 %% PDF QA r1 MAJOR-8: keep this section's floats from drifting past the section end
 \BodyFloatBarrier

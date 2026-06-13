@@ -86,8 +86,7 @@ exploit.
 
 CSMAD comprises five functional blocks (Figure~\ref{fig:architecture}): a linear patch
 embedding, a shared Transformer encoder, a Teacher decoder, a Student decoder, and a
-training-only adversarial branch that couples the Student decoder's hidden states to a
-window-level anomaly classifier through gradient reversal.
+training-only adversarial branch.
 The encoder receives only the \emph{visible} patches; each decoder reconstructs the full window
 from the latent sequence, the Teacher strictly deeper than the Student
 (Section~\ref{sec:decoders}).
@@ -95,6 +94,15 @@ The Student and GRL branches receive a stop-gradient copy of the encoder output,
 is optimized exclusively by the Teacher's reconstruction objective.
 The adversarial signal therefore cannot corrupt the normal-pattern representation on which the
 anomaly score is based.
+
+These blocks are co-designed rather than stacked: the asymmetric capacity gap makes the
+Teacher--Student discrepancy informative only if the Student stays poor at anomalies, so loss
+bifurcation (Section~\ref{sec:label_training}) removes the training pull toward anomalous patches,
+gradient-reversal suppression closes the residual representational pathway by which the Student
+could still learn them, and anomaly-priority masking (Section~\ref{sec:masking}) surfaces the
+labeled positions both act on.
+The discrepancy the score reads (Section~\ref{sec:scoring}) is thus preserved and amplified by the
+interaction of these components, not by any one alone.
 
 \subsection{Patch Embedding and Masking}
 \label{sec:masking}
@@ -145,8 +153,9 @@ A deeper Teacher accurately captures the joint normal correlation structure; the
 replicates it on recurring normal patterns but fails more severely on the correlation patterns
 characteristic of anomalies than a matched-capacity decoder would
 (quantified in \ref{sec:extended_ablations}).
-Consequently, the output discrepancy carries a stronger anomaly signal than reconstruction error
-alone.
+The discrepancy is diagnostic precisely because anomalies here are cross-sensor correlation breaks
+rather than single-channel spikes that a shallow decoder cannot reproduce; consequently, the output
+discrepancy carries a stronger anomaly signal than reconstruction error alone.
 This adapts the self-distillation principle of~\cite{zhang2022selfdistill,ristea2024sdmae} to a
 contaminated setting where labeled anomalies additionally widen the discrepancy at known fault
 locations.
@@ -170,8 +179,9 @@ destabilizing early Student learning (exact rules in \ref{sec:aux_formulations})
 \subsection{Label-Guided Training}
 \label{sec:label_training}
 
-Three loss components couple labeled anomaly information to the model at different levels of the
-learning process.
+Three loss components couple labeled anomaly information to the model as a dependency chain rather
+than independent terms: bifurcation removes the training pull toward anomalies, and gradient
+reversal then closes the residual representational pathway it leaves open (argued below).
 
 \paragraph{Output discrepancy loss $L_{\mathrm{OD}}$.}
 Let $P_n = \{i \in M : y^p_i = 0\}$ be the masked patches labeled normal; $L_{\mathrm{OD}}$
