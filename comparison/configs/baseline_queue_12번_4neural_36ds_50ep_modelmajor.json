@@ -1,0 +1,1157 @@
+{
+  "description": "12\ubc88 \u2014 4 Neural \ubaa8\ub378 (mlp/mlpmixer/transformer/gcn_lstm) \u00d7 36 datasets \u00d7 50 epochs. Q3 normalonly. Re-run with longer training. Output \u2192 8\ubc88 dir (8_20260606_175756_baseline) via watcher chain.",
+  "experiments": [
+    {
+      "name": "mlp_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_psm",
+      "experiment": "psm_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_smd_3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_psm",
+      "experiment": "psm_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_smd_3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_psm",
+      "experiment": "psm_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_smd_3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_msl_C-1",
+      "experiment": "msl_C-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_msl_C-2",
+      "experiment": "msl_C-2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_msl_F-7",
+      "experiment": "msl_F-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_msl_P-11",
+      "experiment": "msl_P-11_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_msl_T-13",
+      "experiment": "msl_T-13_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_psm",
+      "experiment": "psm_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smap_G-7",
+      "experiment": "smap_G-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smap_P-1",
+      "experiment": "smap_P-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smap_P-4",
+      "experiment": "smap_P-4_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smap_T-1",
+      "experiment": "smap_T-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smap_T-3",
+      "experiment": "smap_T-3_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_1-2",
+      "experiment": "smd_machine-1-2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_1-3",
+      "experiment": "smd_machine-1-3_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_1-4",
+      "experiment": "smd_machine-1-4_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_1-5",
+      "experiment": "smd_machine-1-5_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_1-6",
+      "experiment": "smd_machine-1-6_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_1-7",
+      "experiment": "smd_machine-1-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_1-8",
+      "experiment": "smd_machine-1-8_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_2-1",
+      "experiment": "smd_machine-2-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_2-3",
+      "experiment": "smd_machine-2-3_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_2-4",
+      "experiment": "smd_machine-2-4_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_2-5",
+      "experiment": "smd_machine-2-5_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_2-6",
+      "experiment": "smd_machine-2-6_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_2-7",
+      "experiment": "smd_machine-2-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_3-10",
+      "experiment": "smd_machine-3-10_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_3-1",
+      "experiment": "smd_machine-3-1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_3-2",
+      "experiment": "smd_machine-3-2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_3-3",
+      "experiment": "smd_machine-3-3_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_3-4",
+      "experiment": "smd_machine-3-4_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_3-5",
+      "experiment": "smd_machine-3-5_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_3-6",
+      "experiment": "smd_machine-3-6_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_3-7",
+      "experiment": "smd_machine-3-7_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_smd_3-9",
+      "experiment": "smd_machine-3-9_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_swat",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_wadi_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_wadi_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "neural_epochs": 50
+    }
+  ]
+}

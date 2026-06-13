@@ -163,8 +163,9 @@ class NRdetectorBaseline:
         self.granularity = hparams.get('granularity', 4)
         self.beta = hparams.get('beta', 0.1)
         self.gamma = hparams.get('gamma', 0.1)  # soft-DTW smoothing (main.py:74)
-        self.encoder_epochs = hparams.get('encoder_epochs', 50)  # Stage-0 (recipe not in repo; see docs)
-        self.encoder_lr = hparams.get('encoder_lr', 1e-3)        # Stage-0 Adam lr (recipe not in repo; see docs)
+        self.encoder_epochs = hparams.get('encoder_epochs', 50)  # Stage-0 cap (recipe not in repo; see docs)
+        self.encoder_lr = hparams.get('encoder_lr', 1e-4)        # Stage-0 Adam lr = WETAS DiCNN recipe (donalee/WETAS train_classifier.py:113,232-234); 1e-3 over-fit BCE->0, 1e-5 was classifier lr (wrong component)
+        self.encoder_bce_min = hparams.get('encoder_bce_min', 0.05)  # Stage-0 BCE early-stop: halt when epoch-mean BCE <= this (prevents actmap-collapsing memorization; see docs)
 
         # ---- classifier / optimization (main.py:78-80, solver.py:109) ----
         self.classifier_hidden = hparams.get('classifier_hidden', 128)
@@ -254,6 +255,7 @@ class NRdetectorBaseline:
         dl = torch.utils.data.DataLoader(ds, batch_size=self.batch_size, shuffle=True, drop_last=False)
         self.encoder.train()
         for ep in range(self.encoder_epochs):
+            ep_bce_sum, ep_dtw_sum, ep_n = 0.0, 0.0, 0
             for bx, bw in dl:
                 bx = bx.to(self.device); bw = bw.to(self.device)
                 opt.zero_grad()
@@ -264,9 +266,24 @@ class NRdetectorBaseline:
                 loss = bce_loss + dtw_loss                                  # extractor.py:129
                 loss.backward()
                 opt.step()
+                nb = bx.size(0)
+                ep_bce_sum += bce_loss.item() * nb   # sample-weighted -> epoch-mean (stable; not last-batch)
+                ep_dtw_sum += dtw_loss.item() * nb
+                ep_n += nb
+            ep_bce = ep_bce_sum / max(ep_n, 1)
+            ep_dtw = ep_dtw_sum / max(ep_n, 1)
             if self.verbose and (ep + 1) % 10 == 0:
                 print(f"  [NRdetector enc] epoch {ep+1}/{self.encoder_epochs} "
-                      f"bce={bce_loss.item():.4f} dtw={dtw_loss.item():.4f}", flush=True)
+                      f"bce={ep_bce:.4f} dtw={ep_dtw:.4f}", flush=True)
+            # BCE early-stop (2026-06-13): halt BEFORE the encoder memorizes the weak
+            # segment labels. BCE->0 saturates the per-window dense logit and collapses
+            # the min-max actmap that IS the point-level anomaly score (wrapper.py:809,878).
+            # Threshold self.encoder_bce_min (default 0.05) is a sweepable knob.
+            if ep_bce <= self.encoder_bce_min:
+                if self.verbose:
+                    print(f"  [NRdetector enc] early-stop at epoch {ep+1}/{self.encoder_epochs} "
+                          f"(epoch-mean bce={ep_bce:.4f} <= {self.encoder_bce_min})", flush=True)
+                break
 
     @torch.no_grad()
     def _encode(self, windows: torch.Tensor):
@@ -1006,6 +1023,7 @@ class NRdetectorBaseline:
                 'pulp_a': self.pulp_a, 'gamma': self.gamma,
                 'encoder_epochs': self.encoder_epochs,
                 'encoder_lr': self.encoder_lr,
+                'encoder_bce_min': self.encoder_bce_min,
                 'lr': self.lr, 'batch_size': self.batch_size,
                 'seed': self.seed,
                 'n_features': self.n_features,

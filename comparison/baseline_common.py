@@ -348,12 +348,16 @@ def _get_default_model_params():
         #     property → kept as a fixed parameter (estimation would be a category error).
         #   normalization: original = per-split z-score StandardScaler (paper §5.2 "following Xu 2021";
         #     data_loader.py:50-53). Applied inside the wrapper on raw data (run_baseline SELF_NORMALIZING_WEAK).
-        #   encoder_epochs/encoder_lr = IMPL-INVENTED (official loads pretrained .pth, no training recipe).
+        #   encoder = WETAS DiCNN; official NRdetector loads a pretrained .pth (no runtime recipe), but
+        #     §4.2.1 "put into the WETAS framework" => encoder recipe IS WETAS's: Adam lr=1e-4, BCE+DTW,
+        #     50ep (train_classifier.py:113,127-129,232-234; identical to wetas/deepmil baselines).
+        #   encoder_bce_min = BCE early-stop backstop (2026-06-13); at lr=1e-4 it rarely fires (wetas proves no collapse).
         'nrdetector': {
             'win_size': 100, 'noisy_rate': 0.4, 'prior': 0.25,  # upstream main.py:98 default 0.25
             'hidden_size': 64, 'output_size': 64, 'kernel_size': 2, 'n_layers': 7, 'd_model': 64,
-            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 50, 'encoder_epochs': 50,  # 2026-06-06: weak unified to 50
-            'encoder_lr': 1e-3,  # IMPL-INVENTED (parameterized 2026-05-30; no official recipe)
+            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 50, 'encoder_epochs': 50,  # 2026-06-06: weak unified to 50 (encoder_epochs = early-stop CAP)
+            'encoder_lr': 1e-4,        # 2026-06-13: WETAS DiCNN encoder's OWN optimizer (donalee/WETAS train_classifier.py:113,232-234). Same encoder+BCE+DTW loss+50ep as wetas/deepmil, which do NOT collapse at 1e-4. (1e-3 over-fit BCE->0; 1e-5 was the classifier lr, wrong component)
+            'encoder_bce_min': 0.05,   # 2026-06-13: BCE early-stop threshold (halt before actmap-collapsing memorization; sweepable)
             'lr': 1e-5, 'knn_k': 5, 'seed': 0, 'train_stride': 1,
         },
         # NRdetector full-reveal ablation variant (2026-05-31). Same wrapper, same preset
@@ -364,8 +368,9 @@ def _get_default_model_params():
         'nrdetector_full': {
             'win_size': 100, 'noisy_rate': 1.0, 'prior': 0.25,  # upstream main.py:98 default 0.25
             'hidden_size': 64, 'output_size': 64, 'kernel_size': 2, 'n_layers': 7, 'd_model': 64,
-            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 50, 'encoder_epochs': 50,  # 2026-06-06: weak unified to 50
-            'encoder_lr': 1e-3,
+            'classifier_hidden': 128, 'batch_size': 32, 'epochs': 50, 'encoder_epochs': 50,  # 2026-06-06: weak unified to 50 (encoder_epochs = early-stop CAP)
+            'encoder_lr': 1e-4,        # 2026-06-13: WETAS DiCNN encoder's OWN optimizer (donalee/WETAS train_classifier.py:113,232-234). Same encoder+BCE+DTW loss+50ep as wetas/deepmil, which do NOT collapse at 1e-4. (1e-3 over-fit BCE->0; 1e-5 was the classifier lr, wrong component)
+            'encoder_bce_min': 0.05,   # 2026-06-13: BCE early-stop threshold (halt before actmap-collapsing memorization; sweepable)
             'lr': 1e-5, 'knn_k': 5, 'seed': 0, 'train_stride': 1,
         },
         # DeepMIL — Sultani CVPR'18 MIL ranking head+loss (code-sourced, FAITHFUL) on the
