@@ -65,12 +65,12 @@ references/
 ResearchProposal/
 comparison/results/
 docs/report_images/
-# paper/ (2026-06-10): 신규 논문 워크스페이스는 매 Phase 게이트마다 commit 대상 (MASTER_ORCHESTRATION_PROMPT §4).
-# 이전 작업물은 paper_legacy/로 이동되어 아래에서 ignore. LaTeX build 부산물만 제외.
+# paper workspaces (2026-06-13): paper/ · paper_gpt/ · paper_legacy/ 등 모든 논문 워크스페이스는
+# 로컬 전용 scratch 로 git 추적에서 제외. (정책 변경: 이전엔 paper/ 를 Phase 게이트마다 commit 했으나
+# 사용자 지시로 전체 ignore. 과거 작업물은 git history 에 그대로 보존됨.)
+paper/
+paper_gpt/
 paper_legacy/
-paper/07_latex/build/
-paper/**/*.aux
-paper/**/*.synctex.gz
 .claude/
 CLAUDE.md
 .poe/
