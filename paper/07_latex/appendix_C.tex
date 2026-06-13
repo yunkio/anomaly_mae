@@ -1,0 +1,206 @@
+% ============================================================
+% Appendix C — Method Details
+% ============================================================
+
+\section{Method Details}
+\label{sec:appendix_method}
+
+\subsection{Auxiliary Formulations}
+\label{sec:aux_formulations}
+
+\paragraph{Reversal-coefficient schedule (Section~\ref{sec:decoders}).}
+The reversal coefficient follows the sigmoid schedule of Ganin et al.~\cite{ganin2016dann} over the
+student-training phase:
+\begin{equation}
+  \lambda_{\mathrm{rev}}(\tau) = \frac{2}{1 + \exp(-10\,\tau)} - 1,
+  \quad \tau = \mathrm{clip}\!\left(\frac{e - e_0 + 1}{e_1 - e_0},\; 0,\; 1\right),
+  \label{eq:rev_schedule}
+\end{equation}
+where $e$ is the current epoch, $[e_0, e_1]$ is the student-training phase (epochs 250--500 in
+the main configuration), and $\tau$ is its normalized progress; $\lambda_{\mathrm{rev}}$ rises
+monotonically from ${\approx}0.02$ at the first Student epoch to ${\approx}1$ at the end of
+training.
+
+\paragraph{Gradient reversal (Section~\ref{sec:label_training}).}
+The GRL~\cite{ganin2016dann} is an identity map in the forward pass,
+$\tilde{h}^{\mathrm{S}}_i = h^{\mathrm{S}}_i$, where $\tilde{h}^{\mathrm{S}}_i$ denotes the
+GRL output forwarded to the classifier head $g_\phi$; in the backward pass it multiplies the
+gradient by $-\lambda_{\mathrm{rev}}$:
+\begin{equation}
+  \frac{\partial \tilde{h}^{\mathrm{S}}_i}{\partial h^{\mathrm{S}}_i}
+    = -\lambda_{\mathrm{rev}} \cdot \mathbf{I}
+  \label{eq:grl}
+\end{equation}
+
+\paragraph{Classification loss, exact form (Section~\ref{sec:label_training}).}
+Let $\hat{y}_i = g_\phi(\tilde{h}^{\mathrm{S}}_i)$ be the classifier prediction for masked
+patch $i$, $\ell_i = \mathrm{BCE}_{w_+}(\hat{y}_i,\, y^w)$ its class-prior-weighted binary
+cross-entropy, and $w_+$ the per-entity normal-to-anomalous patch ratio (the anomalous-patch
+fraction floored at $10^{-3}$):
+\begin{equation}
+  L_{\mathrm{cls}} = \frac{1}{|M|}
+    \sum_{i \in M} \left(1 - e^{-\ell_i}\right)^{\!\gamma} \ell_i,
+    \quad \gamma = 2
+  \label{eq:lcls_app}
+\end{equation}
+Unlike the standard focal loss~\cite{lin2017focal}, which derives its modulating probability
+$p_t$ from the raw prediction, the present variant defines $p_t := e^{-\ell_i}$ from the
+pos-weight-adjusted BCE, weighting hard examples by both confidence and prior imbalance; this
+formulation is introduced as part of the present design rather than adopted from prior work.
+
+\paragraph{Adaptive loss weights (Sections~\ref{sec:decoders}--\ref{sec:label_training}).}
+The loss weights of the FM and GRL terms are derived from gradient-norm ratios computed per
+batch and applied as the previous epoch's average:
+\begin{equation}
+  \lambda_{\bullet} = \beta_{\bullet} \cdot \mathrm{clip}\!\left(
+    \frac{\|\nabla L_{\mathrm{main}}\|}{\|\nabla L_{\bullet}\| + 10^{-4}},\;
+    0,\; 10\right),
+  \quad \beta_{\mathrm{GRL}} = 0.2,\;\; \beta_{\mathrm{FM}} = 1.0
+  \label{eq:adaptive_weight}
+\end{equation}
+where $L_{\mathrm{main}}$ is the main reconstruction objective
+($L_{\mathrm{recon}} + L_{\mathrm{OD}}$ for the FM ratio; the running objective with the
+FM term already incorporated for the GRL ratio) and $L_{\bullet} \in \{L_{\mathrm{FM}},
+L_{\mathrm{cls}}\}$ the respective auxiliary term.
+The adversarial gradient reaching the Student hidden state is therefore
+$-\lambda_{\mathrm{rev}} \cdot \lambda_{\mathrm{GRL}} \cdot
+\partial L_{\mathrm{cls}} / \partial(\text{GRL output})$: the reversal coefficient and the loss
+weight enter the gradient multiplicatively and remain distinct quantities.
+
+\paragraph{Masking selection rule (Section~\ref{sec:masking}).}
+With priorities $\pi_i = 10^3 \cdot y^p_i + \eta_i$,
+$\eta_i \sim \mathrm{Uniform}(0,1)$,
+\begin{equation}
+  M = \mathrm{argtopk}_{|M|}\!\left\{\pi_i\right\}_{i=1}^{N}
+  \label{eq:masking_rule}
+\end{equation}
+which masks all anomalous patches whenever they number at most $|M|$ (the remainder drawn
+uniformly from normal patches) and a uniform random subset of $|M|$ anomalous patches otherwise.
+
+\subsection{Input Dimensionality}
+\label{sec:appendix_dimensionality}
+
+All entities share $d_{\mathrm{model}} = 512$; only the raw input dimensionality $F$ varies.
+
+%% PDF QA r1 MAJOR-9: Derivation column truncated at the right margin in both
+%% builds; table* + breakable p{} Derivation column + max-width cap.
+\begin{table*}[tp]
+\footnotesize
+\centering
+\caption{Input dimensionality per dataset.}
+\label{tab:dimensionality}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{lrp{0.55\linewidth}}
+\toprule
+Dataset & $F$ & Derivation \\
+\midrule
+SWaT (A1+A2) & 45  & 51 raw $-$ 6 constant columns \{P202, P401, P404, P502, P601, P603\} \\
+WaDi A1      & 123 & raw sensor set \\
+WaDi A2      & 123 & 127 raw $-$ 4 all-NaN columns \\
+PSM          & 25  & raw \\
+SMD          & 29--36 (per machine) & 38 raw $-$ per-machine constant columns \\
+SMAP         & 25  & 1 telemetry + 24 command channels \\
+MSL          & 55  & 1 telemetry + 54 command channels \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table*}
+
+\subsection{Training Procedure Pseudocode}
+\label{sec:appendix_pseudocode}
+
+% ---- Algorithm C.1 placeholder ----
+%% PDF QA r1 BLOCKER-4/MAJOR-10: the single-column [h] algorithm overprinted
+%% neighbouring tables (5p) and ran into the footer (preprint); algorithm* is
+%% the algorithm2e two-column-spanning float, placed at a page top.
+\begin{algorithm*}[t]
+\footnotesize % keeps the 30-line ruled box within \textheight in the 12pt preprint build
+\DontPrintSemicolon
+\SetAlgoLined
+\caption{CSMAD Training (pseudocode placeholder)}
+\label{alg:training}
+\KwIn{Training data $\mathcal{D}_{\mathrm{train}}$ with labels $y^p_i, y^w$; configuration Table~\ref{tab:csmad_config}}
+\KwOut{Trained CSMAD model parameters}
+\BlankLine
+\tcp{Preprocessing}
+Remove constant columns (SWaT: 6 columns \{P202, P401, P404, P502, P601, P603\})\;
+Min--max scale per feature on each entity's training portion\;
+\BlankLine
+\ForEach{epoch $e = 1 \ldots 500$}{
+  \ForEach{batch $\mathbf{B}$}{
+    \tcp{Anomaly-priority masking (Eq.~\ref{eq:masking_rule})}
+    Compute priorities $\pi_i = 10^3 \cdot y^p_i + \eta_i$; select $M = \mathrm{argtopk}_{|M|}$\;
+    \BlankLine
+    \tcp{Teacher forward pass (always active)}
+    $\{o^{\mathrm{T}}_i\}, \{h^{\mathrm{T}}_i\} \leftarrow \mathrm{TeacherDecoder}(\mathrm{Encoder}(\mathbf{B}_V))$\;
+    $L_{\mathrm{recon}} \leftarrow \mathrm{MSE}(o^{\mathrm{T}}_M, \mathbf{B}_M)$\;
+    \BlankLine
+    \tcp{Student forward pass (gated: active only for epochs $e > 250$)}
+    \If{$e > 250$}{
+      $h^{\mathrm{S}}_{\mathrm{in}} \leftarrow \mathrm{stopgrad}(h^{\mathrm{enc}})$\;
+      $\{o^{\mathrm{S}}_i\}, \{h^{\mathrm{S}}_i\} \leftarrow \mathrm{StudentDecoder}(h^{\mathrm{S}}_{\mathrm{in}})$\;
+      Compute $L_{\mathrm{OD}}$ (Eq.~\ref{eq:lod}), $L_{\mathrm{FM}}$ (Eq.~\ref{eq:lfm})\;
+      \tcp{GRL adversarial branch}
+      $\tau \leftarrow \mathrm{clip}((e - 250 + 1)/(500 - 250), 0, 1)$\;
+      $\lambda_{\mathrm{rev}} \leftarrow \frac{2}{1 + \exp(-10\tau)} - 1$\;
+      $\tilde{h}^{\mathrm{S}} \leftarrow \mathrm{GRL}(h^{\mathrm{S}}, -\lambda_{\mathrm{rev}})$\;
+      $L_{\mathrm{cls}} \leftarrow$ Eq.~\ref{eq:lcls_app} \textbf{if} batch contains positive window \textbf{else} 0\;
+      Compute adaptive weights $\lambda_{\mathrm{FM}}, \lambda_{\mathrm{GRL}}$ (Eq.~\ref{eq:adaptive_weight})\;
+    }
+    \BlankLine
+    \tcp{Loss assembly (Eq.~\ref{eq:ltotal})}
+    $L_{\mathrm{total}} \leftarrow L_{\mathrm{recon}} + L_{\mathrm{OD}} + \lambda_{\mathrm{FM}} L_{\mathrm{FM}} + \lambda_{\mathrm{GRL}} L_{\mathrm{cls}}$\;
+    Backward + optimizer step\;
+  }
+  \tcp{Evaluation every 5 epochs; track best PA\%K-AUC F1}
+  \If{$e \bmod 5 = 0$}{
+    Evaluate on test split; update best checkpoint\;
+  }
+}
+\Return best checkpoint parameters\;
+\end{algorithm*}
+
+\subsection{Notation Summary}
+\label{sec:appendix_notation}
+
+\begin{table*}[tp]
+\footnotesize
+\centering
+\caption{Summary of notation. Upright superscripts $\mathrm{T}$/$\mathrm{S}$ tag the
+  Teacher/Student branches (italic $T$ denotes the series length); the window index $u$ in
+  Eq.~\ref{eq:agg} ranges over the windows covering a timestep.}
+\label{tab:notation}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{lll}
+\toprule
+Symbol & Meaning & Introduced \\
+\midrule
+$\mathbf{X} \in \mathbb{R}^{T \times F}$ & multivariate time series ($T$ timesteps, $F$ channels) & \S\ref{sec:problem_formulation} \\
+$\mathbf{W} \in \mathbb{R}^{L \times F}$ & sliding window ($L = 500$) & \S\ref{sec:problem_formulation} \\
+$\mathbf{P}_i \in \mathbb{R}^{s \times F}$ & $i$-th patch ($s = 10$) & \S\ref{sec:problem_formulation} \\
+$N$ & number of patches per window ($= 50$) & \S\ref{sec:problem_formulation} \\
+$y^w$, $y^p_i$ & window-level\,/\,patch-level anomaly labels & \S\ref{sec:problem_formulation} \\
+$\mathbf{E}$, $\mathbf{b}$ & patch-embedding projection and bias & \S\ref{sec:masking} \\
+$\mathbf{z}_i \in \mathbb{R}^{d_{\mathrm{model}}}$ & patch embedding ($d_{\mathrm{model}} = 512$) & \S\ref{sec:masking} \\
+$\rho$ & masking ratio ($= 0.15$; $|M| = \mathrm{round}(N \cdot \rho)$) & \S\ref{sec:masking} \\
+$M$, $V$ & masked\,/\,visible patch index sets ($|M| = 8$) & \S\ref{sec:masking} \\
+$\pi_i$, $\eta_i$ & masking priority and tie-breaking noise & \S\ref{sec:masking} \\
+$n_e$, $n_{\mathrm{T}}$, $n_{\mathrm{S}}$ & encoder\,/\,Teacher\,/\,Student depths ($4$\,/\,$3$\,/\,$2$) & \S\ref{sec:decoders} \\
+$h^{\mathrm{T}}_i$, $h^{\mathrm{S}}_i$ & Teacher\,/\,Student decoder hidden states at patch $i$ & \S\ref{sec:decoders} \\
+$o^{\mathrm{T}}_i$, $o^{\mathrm{S}}_i$ & Teacher\,/\,Student outputs at patch $i$ & \S\ref{sec:decoders} \\
+$P_n$ & masked patches labeled normal, $\{i \in M : y^p_i = 0\}$ & \S\ref{sec:label_training} \\
+$L_{\mathrm{recon}}, L_{\mathrm{OD}}, L_{\mathrm{FM}}, L_{\mathrm{cls}}$ & loss terms (Eq.~\ref{eq:ltotal}); $L_{\mathrm{main}} = L_{\mathrm{recon}} + L_{\mathrm{OD}}$ & \S\ref{sec:label_training} \\
+$g_\phi$, $\hat{y}_i$, $\tilde{h}^{\mathrm{S}}_i$ & GRL classifier head, prediction, GRL output & \S\ref{sec:label_training} \\
+$w_+$, $\gamma$ & class-prior pos-weight and focal exponent (Eq.~\ref{eq:lcls_app}) & \S\ref{sec:label_training} \\
+$\lambda_{\mathrm{FM}}$, $\lambda_{\mathrm{GRL}}$ & adaptive loss weights (Eq.~\ref{eq:adaptive_weight}) & \S\ref{sec:decoders}--\ref{sec:label_training} \\
+$\lambda_{\mathrm{rev}}$ & GRL gradient reversal coefficient (Eq.~\ref{eq:rev_schedule}; progress $\tau$) & \S\ref{sec:decoders} \\
+$r_i$, $d_i$, $\tilde{d}_i$ & reconstruction error, discrepancy, scaled discrepancy & \S\ref{sec:scoring} \\
+$\bar{r}$, $\bar{d}$ & per-entity means of $r_i$\,/\,$d_i$ over all (window, patch) pairs (Eq.~\ref{eq:dscale}) & \S\ref{sec:scoring} \\
+$\varepsilon$ & scaling stabilizer in Eq.~\ref{eq:dscale} ($= 10^{-4}$) & \S\ref{sec:scoring} \\
+$c$ & score combination ratio (Eq.~\ref{eq:sigma}; $= 4$) & \S\ref{sec:scoring} \\
+$\sigma_i$, $a_t$ & patch-level\,/\,point-level anomaly scores & \S\ref{sec:scoring} \\
+$\alpha$ & anomaly fraction of the evaluation span (threshold quantile) & \S\ref{sec:impl} \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table*}

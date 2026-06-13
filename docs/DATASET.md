@@ -1202,7 +1202,7 @@ Pattern A vs Pattern B use the **same raw npy + same 50/50 PSM-style split + sam
 - Channel inventories: `SMAP_CHANNEL_NAMES` (54), `MSL_CHANNEL_NAMES` (27).
 - `comparison/data/unified_loader.py` accepts `dataset='smap'|'msl'|'smap_simple'|'msl_simple'` (+ `channel` kwarg for `*_simple`).
 - `comparison/experiment_configs.py` generates the 162 Pattern B entries via for-loop over channel name lists (mirrors SMD's `for _machine in SMD_MACHINE_NAMES`).
-- **MAE side**: SMAP/MSL not yet registered in `DATASET_LOADERS`; available for `comparison/` baselines first. MAE-side training integration is intentionally deferred and is a separate work item.
+- **MAE side (registered 2026-06-02)**: SMAP/MSL are registered in `mae_anomaly/datasets/loaders.py:DATASET_LOADERS` — `SMAP_concat`/`MSL_concat` (all-channels stream via `load_smap_combined`/`load_msl_combined`) + `SMAP_simple_<ch>` ×54 / `MSL_simple_<ch>` ×27 (`load_smap_simple`/`load_msl_simple`). `scripts/run_base_experiments.py` registers `SMAP_concat`/`MSL_concat` in the base `DATASETS` list and the per-channel `*_simple` keys in `SMAP_MSL_SIMPLE_DATASETS` (`results_subdir` = `SMAP/concat`·`MSL/concat` and `SMAP/<ch>`·`MSL/<ch>`).
 
 ### Per-channel statistics
 

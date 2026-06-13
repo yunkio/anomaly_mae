@@ -24,6 +24,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--only', type=int, default=None, help='run only this exp')
     ap.add_argument('--start-exp', type=int, default=0, help='start from this exp num')
+    ap.add_argument('--resume', action='store_true',
+                    help='preserve cells already re-run this session (metadata lacks '
+                         '_evalrevert_recompute) so run_base skips them; only re-run the rest')
     args = ap.parse_args()
 
     m = json.load(open(os.path.join(PROJECT, 'temp/reexp_manifest.json')))
@@ -34,11 +37,25 @@ def main():
     for e in exps:
         d = e['dir']
         assert os.path.isdir(d), f"exp dir missing: {d}"
-        # 1. delete reexp cells (idempotent)
+        # 1. delete reexp cells (idempotent). --resume: keep cells already re-run this
+        #    session (fresh metadata has NO '_evalrevert_recompute' field; the original
+        #    recompute-touched cells DO) so run_base's dataset-skip marker skips them.
+        kept = 0
         for cell in e['reexp_cells']:
             p = os.path.join(d, cell)
+            mdp = os.path.join(p, 'experiment_metadata.json')
+            if args.resume and os.path.exists(mdp):
+                try:
+                    md = json.load(open(mdp))
+                    if '_evalrevert_recompute' not in md:
+                        kept += 1
+                        continue  # freshly re-run — preserve (run_base will skip via marker)
+                except Exception:
+                    pass
             if os.path.isdir(p):
                 shutil.rmtree(p)
+        if args.resume and kept:
+            print(f"  [resume] preserved {kept} already-re-run cells (run_base will skip them)", flush=True)
         # sanity: non-flip cells untouched (count check)
         remaining = sum(os.path.exists(os.path.join(d, c, 'experiment_metadata.json')) for c in e['reviz_cells'])
         print(f"\n##### exp{e['exp']} ({os.path.basename(d)}): deleted {len(e['reexp_cells'])} reexp cells; "

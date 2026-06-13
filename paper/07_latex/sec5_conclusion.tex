@@ -1,0 +1,32 @@
+% ============================================================
+% §5  Conclusion
+% ============================================================
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper addresses the contaminated semi-supervised setting, in which training data contain a
+small fraction of labeled anomalies alongside a majority of unlabeled observations.
+This configuration is common in industrial deployments yet unaddressed by standard MTSAD
+benchmarks or existing unsupervised methods.
+CSMAD integrates labeled anomaly information into masked autoencoder representation learning
+through co-designed, interacting paths --- loss bifurcation that restricts Student mimicry to
+normal patches and gradient-reversal suppression of anomaly-specific information, with
+anomaly-priority masking surfacing the labeled positions they act on. Together with the asymmetric
+Teacher--Student decoder (3-layer Teacher, 2-layer Student), these paths turn the capacity gap into
+a reliable, amplified discrepancy signal under contaminated training.
+A contaminated benchmark protocol supports evaluation by incorporating the chronological prefix
+of each test stream into training.
+Experiments on [N] multivariate datasets demonstrate competitive performance against [N]
+unsupervised and weakly supervised baselines under five complementary metrics; the label
+sparsity analysis confirms graceful degradation as the labeled fraction decreases.
+% PH:NUM-029 | dataset-family count (sync with NUM-001)
+% PH:NUM-030 | total baseline count (sync with NUM-002)
+A notable limitation is the cost of leave-one-out inference, which requires approximately
+$50{\times}$ more forward-pass computation than single-mask scoring; reducing this cost, for
+example through amortized inference with learned masking schedules or sparse patch selection,
+is a direction for future work.
+The graceful degradation toward the unsupervised limit also motivates a fully unsupervised
+variant of CSMAD obtained by disabling the gradient-reversal pathway.
+Code is available at [URL] (to be released upon acceptance).
+% PH:TXT-002 | code repository URL

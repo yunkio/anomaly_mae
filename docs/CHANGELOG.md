@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-06-09: (정정) 위 metadata 버그의 **진짜 원인 = finalize evaluate-path score divergence** (best_checkpoint는 정상)
+
+2026-06-08 항목이 원인을 "async best_checkpoint 정렬불일치(뒤 epoch weights)"로 기술했으나 **틀렸다.** weight-level forensic 재실행으로 `best_checkpoint.pt` = **`model@best_epoch` (bit-identical)** 임을 4 cell(SMAP/P-4@255, MSL/C-2@295, SMD/machine-1-4@470, SMAP/T-3@470)에서 확인. 실제 원인은 finalize의 `evaluate(lite=False)` **anomaly-score 경로가 per-epoch npz / best-epoch 선택 / viz(`derive_pred_data`)와 다른 score**를 낸 것 (= FM-omission류 score-path 중복; 같은 `model@255`에서 evaluate=0.4337 vs npz/selection/viz=0.4858). `0.4337`이 우연히 `epoch_metrics@470`(0.4338)과 비슷해 "epoch 470 model을 썼다"고 오인했을 뿐이다.
+
+**viz는 처음부터 정상**: best_model 그림은 정상 checkpoint(`model@best`)에서 `derive_pred_data`로 생성되고 그 score는 npz와 bit-equal(Δ≈1.8e-5). → **재학습/viz 재생성 불필요.** metadata block(별도 evaluate 호출)만 틀렸고 npz@best 재계산 fix로 이미 교정됨.
+
+**검증(2026-06-09)**: **Audit A**(`scripts/reexp_comprehensive_audit.py`, 370 cell 전수, 재실행 없음) — `metadata.metrics == compute_full_metric_set(npz@best)` 전 metric + `best_epoch==argmax(epoch_metrics)` → **370/370 OK, 0 issue**. **Audit B**(`scripts/reexp_auditB_forensic.py`, 4 simple flip cell, 정확 config 재실행) — `best_checkpoint==model@best`(weight bit-identical) + npz bit-identical → **4/4 OK**. **결정론**: `best_config.json`의 정확 config로 재실행 시 bit-for-bit 재현 (이전 "재현 불가"는 Set-C preset drift였음: `d_model 512→256, batch_size 1024→512, dynamic_margin_k 6→2`. config는 항상 `best_config.json`에서 복원).
+
+## 2026-06-08: Finalize metadata가 best-epoch score와 어긋나던 버그 수정 → npz@best 사용 (원인 설명은 위 2026-06-09 항목으로 정정)
+
+**증상**: `experiment_metadata.json["metrics"]`가 saved best-epoch score와 불일치 (특히 small/simple dataset). `timing.best_epoch`·`epoch_metrics.json`·`epoch_scores/*.npz`·**best_model viz** 전부 정상인데 최종 metric block만 어긋남 — 최악 simple cell에서 **pak_auc_f1 ~0.05** 차. 예: `271/SMAP/P-4` `best_epoch=255`(`epoch_metrics@255`=0.4858)인데 `metrics.pak_auc_f1=0.4337`.
+
+**탐지**: 재실험 Phase 4 strict-consistency 검사에서 non-excl22 FLIP cell **176/200 불일치**.
+
+**수정**: (1) **코드** `run_base_experiments.py` `_bg_worker_body` — re-forward 후 primary/disc/teacher metadata를 **`npz@best_epoch`(선택·viz와 일관된 authoritative score)로 재계산**(excl22 block과 동일 패턴, try/except fallback). (2) **데이터**: 210 flip cell metadata를 `npz@best`로 재계산 → Phase 4 재검증 ALL CONSISTENT(360/360).
+
+**영향**: **INFERENCE-only**(재학습 불필요). best epoch의 record-of-truth는 persisted artifact(npz)여야 하며 score를 내는 두 번째 evaluate 경로를 쓰면 안 됨(single-source `scoring.py` 유지). 상세 → `docs/POST_MORTEMS/2026-06-08_finalize_wrong_epoch_metadata.md`.
+
 ## 2026-06-03 (PM): Correction-of-the-correction — nrdetector classifier GATE is faithful; the no-gate `5cff9da` was a regression → **REVERTED**
 
 직전 2026-06-03 (AM) 항목과 commit `5cff9da`("binary mean-gate 제거 → continuous ACTMAP emit")는 **틀렸으며 revert**되었다. nrdetector predict()는 **classifier-gated continuous ACTMAP** = `actmap × [seg_prob ≥ mean(seg_prob)]` 으로 **복원**되었다(= 2026-06-01 형태).

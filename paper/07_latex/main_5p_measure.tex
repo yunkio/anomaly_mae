@@ -1,0 +1,241 @@
+%% =====================================================================
+%% CSMAD — Label-Aware Masked Autoencoding with Gradient Reversal
+%% for Multivariate Time Series Anomaly Detection
+%% Elsevier elsarticle (numbered citations)
+%% Phase 7 LaTeX manuscript — 2026-06-11
+%% Template: elsarticle-template-num.tex (preprint, 12pt)
+%%
+%% Template choice: elsarticle-num (numbered style, [1][2]...) — all
+%% 89 \cite commands in MANUSCRIPT_v3.md use numbered style; converting
+%% to author-year would require non-trivial citation surgery.
+%%
+%% documentclass option: preprint,12pt — standard Elsevier single-column
+%% review submission format.  Body page count in this mode is ~1.5x the
+%% final 3p-journal page count.  See TEMPLATE_REQUIREMENTS.md §1.
+%% =====================================================================
+
+\documentclass[final,5p,times,twocolumn]{elsarticle}
+
+%% --- Packages ---
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}          % \toprule, \midrule, \bottomrule
+\usepackage{tikz}              % placeholder boxes
+\usepackage{array}             % extended column specs
+\usepackage{xcolor}            % gray shading in placeholders
+\usepackage{adjustbox}         % max-width capping of wide tabulars (PDF QA r1)
+\usepackage{placeins}          % \FloatBarrier against figure drift (PDF QA r1 MAJOR-8)
+
+%% Section-end float barrier, active only in one-column builds (preprint/3p),
+%% where r1 found 19-30-page figure drift.  In the twocolumn 5p gate build the
+%% barrier would insert column dead-space before §5 while floats already place
+%% near their references; it is therefore a no-op there.
+\makeatletter
+\if@twocolumn
+  \newcommand{\BodyFloatBarrier}{}
+\else
+  \newcommand{\BodyFloatBarrier}{\FloatBarrier}
+\fi
+\makeatother
+
+%% D-013 (5p body-length recovery): forbid half-empty float columns/pages.
+%% In the twocolumn build, FIG-3 + FIG-4 formed a float-only column with
+%% \@fpsep/\@fpbot rubber stretch (~0.2p dead space).  Requiring float
+%% pages/columns to be >=90% full forces such figures back to [t] placement
+%% with text flowing beneath; loosened text/top fractions keep them placeable.
+\renewcommand{\floatpagefraction}{.90}
+\renewcommand{\topfraction}{.92}
+\renewcommand{\bottomfraction}{.60}
+\renewcommand{\textfraction}{.07}
+
+%\usepackage{microtype}        % disabled: font expansion requires scalable fonts
+\usepackage[ruled,linesnumbered]{algorithm2e}  % ALG-C1 pseudocode
+
+%% hyperref loaded after others per standard practice
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+%% --- Equation numbering in appendix sections ---
+%% Main body: (1)–(6); Appendix C: (C.1)–(C.5)
+%% We use \tag{} manually for the main body equations per manuscript,
+%% then switch to section-prefixed for appendix.
+%% NOTE: We suppress the tag on Appendix C equations that were defined
+%% in the manuscript with explicit C.x tags, using \label for xref.
+
+%% --- Journal (target confirmed 2026-06-11, D-015 4) ---
+\journal{Knowledge-Based Systems}
+
+%% =====================================================================
+\begin{document}
+
+\begin{frontmatter}
+
+%% ----- Title -----
+\title{Label-Aware Masked Autoencoding with Gradient Reversal for
+       Multivariate Time Series Anomaly Detection}
+
+%% ----- Authors (placeholder) -----
+\author{[AUTHOR NAMES --- to be filled]}
+%% Empty address fields omitted (PDF QA r1 MINOR-5: residual commas);
+%% restore addressline/city/postcode/country when the affiliation is filled.
+\affiliation{organization={[AFFILIATION --- to be filled]}}
+
+%% ----- Abstract -----
+\begin{abstract}
+Anomaly detection in multivariate time series is critical for industrial control systems, IT
+infrastructure monitoring, and spacecraft telemetry.
+Yet most existing methods assume that training data are entirely normal --- a condition rarely
+met in practice.
+In real deployments, a small fraction of training observations carry anomaly labels derived from
+recorded fault events, while the majority remain unlabeled; exploiting this partial labeling has
+received limited attention.
+We propose CSMAD, an end-to-end framework that integrates labeled anomaly information directly
+into the masked-reconstruction objective: a Student imitation loss restricted to normal patches
+and, as the central novelty, gradient-reversal suppression that removes anomaly-specific
+information from the Student's representation, with anomaly-priority masking exposing the labeled
+positions on which the two act.
+These label-guided mechanisms rely on an asymmetric Teacher--Student decoder: the
+capacity-limited Student mimics the Teacher less faithfully on anomalous correlation patterns than
+on normal ones, so suppressing anomaly information keeps that discrepancy sharp and amplifies it
+under contaminated training.
+To enable evaluation of labeled-anomaly-aware methods, we introduce a contaminated benchmark
+protocol that incorporates the chronological prefix of the test stream into training, thereby
+exposing labeled anomalies that are absent from the original training splits of standard
+benchmarks.
+On [N] multivariate datasets spanning industrial and telemetry domains, CSMAD achieves
+competitive performance against [N] unsupervised and weakly supervised baselines under five
+complementary evaluation metrics.
+% PH:NUM-001 | number of benchmark dataset families
+% PH:NUM-002 | total number of baselines
+Detection performance degrades gracefully as the labeled anomaly fraction decreases, remaining
+above the unsupervised floor and validating the framework beyond the fully labeled regime.
+Code will be made available at [URL] upon acceptance.
+% PH:TXT-002 | code repository URL
+\end{abstract}
+
+%% ----- Highlights -----
+%% KBS GFA: 3-5 bullets, max 85 characters each INCLUDING spaces (D-015 1).
+%% All five bullets verified <=85 chars (79/75/84/84/83); same content is
+%% duplicated in highlights.txt (separate editable submission file).
+\begin{highlights}
+\item We formalize the contaminated semi-supervised MTSAD setting with sparse labels.
+\item Gradient reversal makes labels shape the representation, not just the loss.
+\item CSMAD's asymmetric Teacher--Student masked autoencoder amplifies anomaly discrepancy.
+\item A contaminated benchmark adds test prefixes to training, exposing labeled anomalies.
+\item Competitive on [N] datasets under five metrics; graceful decay with label sparsity.
+  % PH:NUM-003 | dataset-family count
+\end{highlights}
+
+%% ----- Keywords -----
+%% KBS GFA: maximum 6 keywords, American spelling (D-015 2).
+%% 'Contaminated benchmark' removed (7 -> 6): protocol artifact rather than an
+%% indexing concept; its content is covered by 'Semi-supervised learning'.
+\begin{keyword}
+Multivariate time series \sep Anomaly detection \sep Semi-supervised learning
+\sep Masked autoencoder \sep Asymmetric self-distillation \sep Gradient reversal
+\end{keyword}
+
+\end{frontmatter}
+
+%% =====================================================================
+%% Main text
+%% =====================================================================
+
+%% Flat file layout (D-015 5): section files live next to main.tex so the
+%% identical tree compiles on Overleaf and uploads to Editorial Manager
+%% ('all files at a single level' — Elsevier LaTeX instructions).
+\input{sec1_intro}
+\input{sec2_related}
+\input{sec3_method}
+\input{sec4_experiments}
+\input{sec5_conclusion}
+
+%% =====================================================================
+%% Declarations (Elsevier/KBS required statements — D-015 3)
+%% Order: CRediT -> competing interest -> generative AI -> data
+%% availability -> funding/acknowledgements; after the Conclusion and
+%% before the References per the KBS Guide for Authors.
+%% NOT part of the R6 body-length measurement (D-015 6: journal-mandated
+%% boilerplate, measured like references — body endpoint stays at the
+%% last line of Section 5).
+%% =====================================================================
+
+\section*{CRediT authorship contribution statement}
+\textbf{[AUTHOR 1 --- to be filled]:} Conceptualization, Methodology, Software,
+Validation, Formal analysis, Investigation, Data curation, Writing -- original
+draft, Visualization.
+\textbf{[AUTHOR 2 --- to be filled]:} Conceptualization, Writing -- review \&
+editing, Supervision, Project administration, Funding acquisition.
+%% [TO BE CONFIRMED BY AUTHORS] Distribute the 14 CRediT roles
+%% (Conceptualization; Methodology; Software; Validation; Formal analysis;
+%% Investigation; Resources; Data curation; Writing - original draft;
+%% Writing - review & editing; Visualization; Supervision; Project
+%% administration; Funding acquisition) across the final author list.
+
+\section*{Declaration of competing interest}
+The authors declare that they have no known competing financial interests or
+personal relationships that could have appeared to influence the work reported
+in this paper.
+[TO BE CONFIRMED BY AUTHORS]
+%% If any competing interest exists, replace the sentence above with a
+%% disclosure; KBS additionally requires the Elsevier declaration-tool
+%% .docx to be generated and attached at submission.
+
+\section*{Declaration of generative AI and AI-assisted technologies in the
+          writing process}
+During the preparation of this work the author(s) used an AI-assisted language
+tool solely to improve the readability and grammar of the manuscript. After
+using this tool, the author(s) reviewed and edited the content as needed and
+take(s) full responsibility for the content of the publication.
+%% [AUTHORS] Elsevier policy permits language/readability improvement only;
+%% the statement above is kept to that minimal scope. Adjust only if needed.
+
+\section*{Data availability}
+[X --- e.g., The benchmark datasets analyzed in this study are publicly
+available from their original sources; code will be made available at [URL]
+upon acceptance.]
+% PH:TXT-002 | code repository URL (sync with abstract / Section 5)
+
+\section*{Funding and acknowledgements}
+[TO BE FILLED]
+%% If no funding applies, Elsevier's recommended sentence is: "This research
+%% did not receive any specific grant from funding agencies in the public,
+%% commercial, or not-for-profit sectors."
+
+%% =====================================================================
+%% References
+%% =====================================================================
+\bibliographystyle{elsarticle-num}
+\bibliography{refs}
+
+%% =====================================================================
+%% Appendices
+%% =====================================================================
+\appendix
+
+%% --- Appendix float numbering (PDF QA r1 MAJOR-5) ---
+%% elsarticle's \appendix prefixes \thetable/\thefigure with the appendix
+%% letter but does NOT reset the counters (main-body tables 1-3 would make
+%% the first appendix table "A.4").  Reset table/figure/algorithm counters
+%% here and at every appendix \section so floats number A.1..., B.1...,
+%% C.1...; redefine the hyperref anchor names so the per-section resets do
+%% not produce duplicate link destinations.
+\makeatletter
+\setcounter{table}{0}\setcounter{figure}{0}\setcounter{algocf}{0}
+\@addtoreset{table}{section}
+\@addtoreset{figure}{section}
+\@addtoreset{algocf}{section}
+\gdef\thealgocf{\@Alph\c@section.\arabic{algocf}}
+\def\theHtable{appx.\arabic{section}.\arabic{table}}
+\def\theHfigure{appx.\arabic{section}.\arabic{figure}}
+\makeatother
+
+%% Appendix equation numbering: prefix with appendix letter
+%% Reset equation counter at each appendix section via \section hooks.
+%% We use a global counter approach: appendix equations are labeled
+%% manually via \tag{} in the section files to match the manuscript
+%% (C.1 through C.5).
+
+\input{appendix_A}
+\input{appendix_B}
+\input{appendix_C}
+
+\end{document}

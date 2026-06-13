@@ -1130,6 +1130,19 @@ class Trainer:
             return int(_rng.permutation(_stride)[pos_in_cycle])
 
         for epoch in range(start_epoch, self.config.num_epochs):
+            # 2026-06-11: periodic GC + CUDA cache release. Fast-epoch datasets
+            # (e.g. MSL: 109 windows = 1 batch/epoch ~0.2s) outpace CPython's
+            # cyclic GC, so reclaimable host memory (cyclic refs holding
+            # d_model-sized tensors) bloats ~linearly → ~30GB host-RAM OOM by
+            # ep~420 at d_model=768 (WaDi @768 survives only because its 60
+            # batches/epoch give GC time to keep up). Every-10-epoch collect
+            # bounds it (<=~650MB sawtooth); cost is negligible on large datasets
+            # (epoch 8-21s) and tiny in absolute terms on fast ones. Results unchanged.
+            if epoch % 10 == 0:
+                import gc as _gc
+                _gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             # Pre-epoch hook (DataLoader generator reseed for resume-safe sample order)
             if pre_epoch_hook is not None:
                 pre_epoch_hook(epoch)
