@@ -70,6 +70,20 @@ class SelfDistillationLoss(nn.Module):
         self.scad_margin = getattr(config, 'scad_margin', 0.3)
         self.scad_patch_label_mode = getattr(config, 'scad_patch_label_mode', 'patch')
 
+        # ── Unified anomaly-loss disable (2026-06-13 consistency fix) ─────────────
+        # The output-discrepancy anomaly_loss is REPLACED by an auxiliary anomaly
+        # discrimination head. Historically only GRL gated it (use_grl AND
+        # grl_disable_anomaly_loss); SCAD silently left it active, so SCAD runs were
+        # "OD anomaly push + SCAD" instead of SCAD-only. Both auxiliary mechanisms
+        # now route through this SINGLE flag so they stay consistent and the bug
+        # cannot recur per-mechanism. (GRL ⊕ SCAD is enforced mutually exclusive in
+        # trainer.py.) Configs with neither head keep the OD anomaly_loss (e.g.
+        # noadv); to ablate it there, set anomaly_loss_weight=0.0.
+        self.disable_anomaly_loss = (
+            (self.use_grl and self.grl_disable_anomaly_loss)  # GRL replaces it
+            or self.use_scad                                  # SCAD replaces it
+        )
+
     def _compute_anomaly_loss(
         self,
         discrepancy: torch.Tensor,
@@ -256,8 +270,9 @@ class SelfDistillationLoss(nn.Module):
                     normal_loss = normal_loss * self.normal_loss_weight
 
                     # Anomaly patch loss (with weight multiplier)
-                    if self.use_grl and self.grl_disable_anomaly_loss:
-                        # GRL handles anomaly disc generation → anomaly_loss disabled
+                    if self.disable_anomaly_loss:
+                        # Auxiliary head (GRL or SCAD) handles anomaly discrimination
+                        # → output-discrepancy anomaly_loss disabled (unified gate)
                         anomaly_loss = torch.tensor(0.0, device=teacher_output.device)
                     elif self.anomaly_loss_direction == 'minimize':
                         # Same direction as normal: minimize discrepancy on anomaly patches too
@@ -397,11 +412,17 @@ class SelfDistillationLoss(nn.Module):
                     normal_loss = normal_loss * self.normal_loss_weight
 
                     # Anomaly loss: encourage discrepancy to be large (with weight multiplier)
-                    per_sample_anomaly_loss = self._compute_anomaly_loss(
-                        sample_discrepancy, anomaly_mask, normal_mask, self.margin
-                    )
-                    anomaly_loss = (anomaly_mask * per_sample_anomaly_loss).sum() / (anomaly_mask.sum() + 1e-4)
-                    anomaly_loss = warmup_factor * anomaly_loss * self.anomaly_loss_weight
+                    if self.disable_anomaly_loss:
+                        # Auxiliary head (GRL or SCAD) handles anomaly discrimination
+                        # → output-discrepancy anomaly_loss disabled (unified gate,
+                        # mirrors the patch-level path for consistency)
+                        anomaly_loss = torch.tensor(0.0, device=teacher_output.device)
+                    else:
+                        per_sample_anomaly_loss = self._compute_anomaly_loss(
+                            sample_discrepancy, anomaly_mask, normal_mask, self.margin
+                        )
+                        anomaly_loss = (anomaly_mask * per_sample_anomaly_loss).sum() / (anomaly_mask.sum() + 1e-4)
+                        anomaly_loss = warmup_factor * anomaly_loss * self.anomaly_loss_weight
                 else:
                     # OD disabled — only FM contributes to discrepancy_loss
                     normal_loss = torch.tensor(0.0, device=teacher_output.device)
