@@ -225,6 +225,8 @@ def scan(roots: Optional[dict[str, Path]] = None) -> list[ExperimentRef]:
             d = Path(entry.path)
             if not _EXP_NAME_RE.match(d.name):
                 continue  # non-experiment dir: skipped.
+            if any(d.name.startswith(p) for p in SETTINGS.exclude_prefixes):
+                continue  # hidden by config (e.g. legacy_*): on disk but not shown.
             try:
                 ref = discover_experiment(d, source)
             except Exception as exc:  # noqa: BLE001 - isolation by design

@@ -79,6 +79,17 @@ class Settings:
     leaf_marker_files: tuple[str, ...] = ("epoch_metrics.json", "experiment_metadata.json")
     completion_marker: str = "experiment_metadata.json"
 
+    # ── hidden experiments (2026-06-04) ────────────────────────────────────────
+    # Experiment dirs whose name starts with any of these prefixes are kept on disk
+    # but HIDDEN from the dashboard (discovery skips them). `legacy_*` runs live under
+    # results/experiments yet are excluded per user request; override via
+    # TSMAE_EXCLUDE_PREFIXES (comma-list, empty string ⇒ exclude nothing).
+    exclude_prefixes: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            p.strip() for p in os.environ.get("TSMAE_EXCLUDE_PREFIXES", "legacy_").split(",") if p.strip()
+        )
+    )
+
     @property
     def source_roots(self) -> dict[str, Path]:
         # 2026-06-04: show ONLY ./results/experiments (the live root) by default, per

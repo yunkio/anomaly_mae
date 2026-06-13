@@ -393,6 +393,10 @@ def rankings_aggregate(
         col_vals = value_lookup.get(exp_id, {})
         present = len(col_vals)
         per_col_rank = {c: ranks.get(c) for c in dataset_cols}
+        # per-column metric VALUE alongside the rank (2026-06-04): for an "(avg)" column
+        # this is already the mean over the entity leaves (granular stores the mean), so
+        # the frontend can render "rank (value)" with the averaged performance for avg cols.
+        per_col_value = {c: col_vals.get(c) for c in dataset_cols}
         avg_rank = (sum(ranks.values()) / len(ranks)) if ranks else None
         vals = list(col_vals.values())
         mean_value = (sum(vals) / len(vals)) if vals else None
@@ -403,6 +407,7 @@ def rankings_aggregate(
             "coverage_total": total_cols,
             "mean_value": mean_value,
             "per_dataset_rank": per_col_rank,
+            "per_dataset_value": per_col_value,
         })
 
     if rankable:

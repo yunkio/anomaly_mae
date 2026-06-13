@@ -183,6 +183,8 @@ export interface AggregateRow {
   coverage_total: number;
   mean_value: number | null;
   per_dataset_rank: Record<string, number | null>;
+  /** per-column metric VALUE alongside the rank (avg columns = mean over entities). */
+  per_dataset_value?: Record<string, number | null>;
 }
 /** FB-R4c-04: per-column classification advertised by the backend so the dataset-set
  * selector can GROUP the universe (canonical units vs granular machines/channels/concat/

@@ -253,7 +253,8 @@ export default function Rankings() {
               <div className="subtle" style={{ fontSize: "var(--fs-small)" }}>
                 metric <strong>{d.metric}</strong> ({d.direction === "down" ? "lower wins" : d.direction === "up" ? "higher wins" : "neutral"})
                 {d.rankable ? "" : " — neutral metric, not ranked"} · coverage = present / {d.coverage_total} dataset
-                columns · {d.missing_dataset_rule}
+                columns · {d.missing_dataset_rule} · per-dataset cells show <strong>rank ({d.metric} value)</strong>; an{" "}
+                <strong>(avg)</strong> column's value is the mean over its entities
               </div>
               <div className="tbl-wrap" style={{ maxHeight: 480 }}>
                 <table className="tbl tabular" style={{ fontSize: "0.82rem" }}>
@@ -305,11 +306,22 @@ export default function Rankings() {
                         <td className="num">{fmt(a.mean_value)}</td>
                         {d.datasets.map((col) => {
                           const r = a.per_dataset_rank[col];
+                          const v = a.per_dataset_value?.[col];
                           // P3-01/coverage: a missing per-dataset rank is a real GAP — show
-                          // a dash, never a fabricated rank.
+                          // a dash, never a fabricated rank. The metric VALUE is shown next to
+                          // the rank ("rank (value)"); for an "(avg)" column it is the mean.
                           return (
                             <td key={col} className="num" style={{ opacity: r == null ? 0.4 : 1 }}>
-                              {r ?? "—"}
+                              {r == null ? (
+                                "—"
+                              ) : (
+                                <>
+                                  {r}
+                                  {typeof v === "number" && (
+                                    <span className="subtle" style={{ fontSize: "0.82em" }}> ({v.toFixed(4)})</span>
+                                  )}
+                                </>
+                              )}
                             </td>
                           );
                         })}
