@@ -227,10 +227,14 @@ class Config:
     scad_form: str = 'A'  # SCAD loss variant
     # - 'A': Free-energy log-sum-exp (default, smooth hard negative mining)
     # - 'B': Margin hinge (BGAD-spirit, semi-push outside margin only)
+    # - 'C': One-sided thresholded negative repulsion (2026-06-15) — U detached,
+    #        push anchors to cos ≤ gamma. C(one_sided=False, gamma=-margin) ≡ B(margin).
 
     scad_d_proj: int = 128  # Projection head output dim (SimCLR convention)
     scad_temperature: float = 0.1  # Temperature for log-sum-exp (Form A only)
     scad_margin: float = 0.3  # Cosine margin for hinge (Form B only)
+    scad_gamma: float = 0.0  # Form C threshold: penalize cos(z_a, z_u) > gamma (default 0 = decorrelate)
+    scad_one_sided: bool = True  # Form C: detach U (negatives) so only anomaly anchors move
 
     scad_loss_weight: float = 0.5  # SCAD base multiplier × adaptive λ × ramp
     # Smaller than fm_loss_weight (1.0) since SCAD is new; larger than

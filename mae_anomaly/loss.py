@@ -68,6 +68,8 @@ class SelfDistillationLoss(nn.Module):
         self.scad_form = getattr(config, 'scad_form', 'A')
         self.scad_temperature = getattr(config, 'scad_temperature', 0.1)
         self.scad_margin = getattr(config, 'scad_margin', 0.3)
+        self.scad_gamma = getattr(config, 'scad_gamma', 0.0)              # Form C threshold
+        self.scad_one_sided = getattr(config, 'scad_one_sided', True)     # Form C: detach U
         self.scad_patch_label_mode = getattr(config, 'scad_patch_label_mode', 'patch')
 
         # ── Unified anomaly-loss disable (2026-06-13 consistency fix) ─────────────
@@ -382,6 +384,8 @@ class SelfDistillationLoss(nn.Module):
                         form=self.scad_form,
                         temperature=self.scad_temperature,
                         margin=self.scad_margin,
+                        gamma=self.scad_gamma,
+                        one_sided=self.scad_one_sided,
                     )
                     _scad_results = {
                         'scad_loss_tensor': _scad_loss_tensor,
@@ -530,6 +534,12 @@ class SelfDistillationLoss(nn.Module):
             loss_dict['scad_z_separation'] = _scad['scad_z_separation']
             loss_dict['scad_z_anom_var'] = _scad['scad_z_anom_var']
             loss_dict['scad_z_norm_var'] = _scad['scad_z_norm_var']
+            loss_dict['scad_c_mean_sim'] = _scad['scad_c_mean_sim']
+            loss_dict['scad_c_active_pair_frac'] = _scad['scad_c_active_pair_frac']
+            loss_dict['scad_c_active_sim_mean'] = _scad['scad_c_active_sim_mean']
+            loss_dict['scad_c_gamma'] = _scad['scad_c_gamma']
+            loss_dict['scad_c_n_anchor'] = _scad['scad_c_n_anchor']
+            loss_dict['scad_c_n_u'] = _scad['scad_c_n_u']
             if _scad['scad_loss_tensor'] is not None:
                 loss_tensors['scad_loss'] = _scad['scad_loss_tensor']
 
@@ -608,23 +618,33 @@ def compute_scad_loss(
     form: str = 'A',
     temperature: float = 0.1,
     margin: float = 0.3,
+    gamma: float = 0.0,
+    one_sided: bool = True,
     memory_queue: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """SCAD: Supervised Contrastive Anomaly Discrimination loss.
 
-    Anomaly anchor only. No positive pairs. Negatives = all normal patches.
+    Anomaly anchor only. No positive pairs. Negatives = all normal/U patches.
     Form A (default): free-energy log-sum-exp (smooth hard negative mining).
         L = (1/|P_a|) Σ_i log Σ_n exp(z_i · z_n / τ)
     Form B: margin hinge (BGAD-style semi-push, stop when outside margin).
         L = (1/|P_a||P_n|) Σ_i Σ_n max(0, z_i · z_n + m)²
+    Form C: one-sided thresholded negative repulsion (2026-06-15).
+        L = (1/|P_a||P_u|) Σ_i Σ_u max(0, z_i · sg[z_u] − γ)²
+        U(=masked non-anomaly) is stop-gradient (one_sided=True): only anomaly
+        anchors move away from the background, robust to U contamination (PU setting).
+        Note: C(one_sided=False, γ=−m) ≡ B(margin=m); C default γ=0 is a gentler
+        threshold (decorrelate, cos ≤ 0) than B (strong anti-correlation, cos ≤ −m).
 
     Args:
         z: (P, B, d_proj) L2-normalized projection of student hidden (training only).
         patch_has_anomaly: (B, P) — 1 if patch contains anomaly (patch-level or window-mode).
         patch_has_masked: (B, P) — 1 if patch was masked this step.
-        form: 'A' (log-sum-exp) | 'B' (hinge margin).
+        form: 'A' (log-sum-exp) | 'B' (hinge margin) | 'C' (one-sided thresholded repulsion).
         temperature: τ for Form A.
         margin: m for Form B (push to cosine ≤ -m).
+        gamma: γ threshold for Form C (push to cosine ≤ γ; default 0.0 = decorrelate).
+        one_sided: Form C only — if True, detach U (negatives) so only anchors move.
         memory_queue: (Q, d_proj) detached anomaly hidden queue (optional, not used here).
 
     Returns:
@@ -658,10 +678,21 @@ def compute_scad_loss(
             'scad_z_separation': 0.0,
             'scad_z_anom_var': 0.0,
             'scad_z_norm_var': 0.0,
+            'scad_c_mean_sim': 0.0,
+            'scad_c_active_pair_frac': 0.0,
+            'scad_c_active_sim_mean': 0.0,
+            'scad_c_gamma': float(gamma),
+            'scad_c_n_anchor': n_anom,
+            'scad_c_n_u': n_norm,
         }
 
     z_anom = z_v[P_a_mask]
     z_norm = z_v[P_n_mask]
+
+    # Form C diagnostics (populated only for form 'C'; 0.0 otherwise)
+    scad_c_mean_sim = 0.0
+    scad_c_active_pair_frac = 0.0
+    scad_c_active_sim_mean = 0.0
 
     if form == 'A':
         # Free-energy log-sum-exp
@@ -673,8 +704,21 @@ def compute_scad_loss(
         sim_matrix = z_anom @ z_norm.T  # (Na, Nn) — cosine sim ∈ [-1, 1]
         hinge = torch.clamp(sim_matrix + margin, min=0.0).pow(2)
         loss = hinge.mean()
+    elif form == 'C':
+        # One-sided thresholded negative repulsion: push anchors to cos ≤ γ.
+        # U (negatives) detached when one_sided → only anomaly anchors move.
+        neg = z_norm.detach() if one_sided else z_norm
+        sim_matrix = z_anom @ neg.T  # (Na, Nn) — cosine sim ∈ [-1, 1]
+        hinge = torch.clamp(sim_matrix - gamma, min=0.0).pow(2)
+        loss = hinge.mean()
+        with torch.no_grad():
+            _sm = sim_matrix.detach()
+            _active = _sm > gamma
+            scad_c_mean_sim = float(_sm.mean().item())
+            scad_c_active_pair_frac = float(_active.float().mean().item())
+            scad_c_active_sim_mean = float(_sm[_active].mean().item()) if bool(_active.any()) else 0.0
     else:
-        raise ValueError(f"Unknown SCAD form: {form!r}. Use 'A' or 'B'.")
+        raise ValueError(f"Unknown SCAD form: {form!r}. Use 'A', 'B', or 'C'.")
 
     # Diagnostic metrics (no grad)
     with torch.no_grad():
@@ -698,6 +742,12 @@ def compute_scad_loss(
         'scad_z_separation': separation,
         'scad_z_anom_var': z_anom_var,
         'scad_z_norm_var': z_norm_var,
+        'scad_c_mean_sim': scad_c_mean_sim,
+        'scad_c_active_pair_frac': scad_c_active_pair_frac,
+        'scad_c_active_sim_mean': scad_c_active_sim_mean,
+        'scad_c_gamma': float(gamma),
+        'scad_c_n_anchor': n_anom,
+        'scad_c_n_u': n_norm,
     }
 
 

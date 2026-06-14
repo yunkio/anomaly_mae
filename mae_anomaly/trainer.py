@@ -358,6 +358,12 @@ class Trainer:
             'train_scad_z_separation': [],
             'train_scad_z_anom_var': [],
             'train_scad_z_norm_var': [],
+            'train_scad_c_mean_sim': [],            # Form C: mean cos(z_a, z_u)
+            'train_scad_c_active_pair_frac': [],    # Form C: frac of pairs with cos > gamma (loss-active)
+            'train_scad_c_active_sim_mean': [],     # Form C: mean cos over active pairs
+            'train_scad_c_gamma': [],               # Form C: gamma threshold (echo)
+            'train_scad_c_n_anchor': [],            # Form C: # anomaly anchors
+            'train_scad_c_n_u': [],                 # Form C: # U(background) negatives
             'train_scad_lambda': [],            # adaptive λ (raw value)
             'train_scad_adaptive_lambda': [],   # adaptive λ (clamped to [0, 10])
             'train_scad_ramp': [],              # sigmoid ramp ∈ [0, 1]
@@ -1529,6 +1535,12 @@ class Trainer:
                 self.history['train_scad_z_separation'].append(epoch_losses.get('scad_z_separation', 0.0))
                 self.history['train_scad_z_anom_var'].append(epoch_losses.get('scad_z_anom_var', 0.0))
                 self.history['train_scad_z_norm_var'].append(epoch_losses.get('scad_z_norm_var', 0.0))
+                self.history['train_scad_c_mean_sim'].append(epoch_losses.get('scad_c_mean_sim', 0.0))
+                self.history['train_scad_c_active_pair_frac'].append(epoch_losses.get('scad_c_active_pair_frac', 0.0))
+                self.history['train_scad_c_active_sim_mean'].append(epoch_losses.get('scad_c_active_sim_mean', 0.0))
+                self.history['train_scad_c_gamma'].append(epoch_losses.get('scad_c_gamma', 0.0))
+                self.history['train_scad_c_n_anchor'].append(epoch_losses.get('scad_c_n_anchor', 0))
+                self.history['train_scad_c_n_u'].append(epoch_losses.get('scad_c_n_u', 0))
                 self.history['train_scad_lambda'].append(epoch_losses.get('scad_lambda', 0.0))
                 self.history['train_scad_adaptive_lambda'].append(epoch_losses.get('scad_adaptive_lambda', 0.0))
                 self.history['train_scad_ramp'].append(epoch_losses.get('scad_ramp', 0.0))

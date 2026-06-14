@@ -604,6 +604,57 @@
       ],
       "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True loss_balance_mode=uwso amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
       "_note": "271 base + loss_balance_mode=uwso (tempered-softmax over 1/L, Kirchdorfer 2408.07985 IJCV2025)."
+    },
+    {
+      "exp_num": 321,
+      "name": "exp321_scadC_w10_linear",
+      "dir_suffix": "scadC_w10_linear",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True use_grl=False use_scad=True scad_form=C scad_gamma=0.0 scad_one_sided=True scad_loss_weight=1.0 scad_proj_head_arch=linear amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "SCAD-C: one-sided thresholded negative repulsion (gamma=0.0, one_sided=True, U detached). linear head, w=1.0, patch. 322(A)/323(B)와 head/weight 동일 → A/B/C form 순수 비교."
+    },
+    {
+      "exp_num": 322,
+      "name": "exp322_scadA_w10_linear",
+      "dir_suffix": "scadA_w10_linear",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True use_grl=False use_scad=True scad_form=A scad_temperature=0.1 scad_loss_weight=1.0 scad_proj_head_arch=linear amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "SCAD-A (log-sum-exp, tau=0.1) re-run with linear head + w=1.0 (313 scadA_w10은 default head). 321/323과 동일 조건 비교군."
+    },
+    {
+      "exp_num": 323,
+      "name": "exp323_scadB_w10_linear",
+      "dir_suffix": "scadB_w10_linear",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True use_grl=False use_scad=True scad_form=B scad_margin=0.3 scad_loss_weight=1.0 scad_proj_head_arch=linear amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "SCAD-B (margin hinge, m=0.3) re-run with linear head + w=1.0 (315 scadB_w10은 default head). 321/322과 동일 조건 비교군."
     }
   ]
 }

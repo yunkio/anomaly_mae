@@ -1,20 +1,23 @@
 #!/usr/bin/env python
-"""Resume v2f (2026-06-14) — run NEW experiments 316-320 (after v2e finishes 311-315).
+"""Resume v2f (2026-06-14, ext 2026-06-15) — run NEW experiments 316-323 (after v2e finishes 311-315).
 
-Context: 5 new ablations appended to the queue (configs/queue_dedup_renumbered_v6.json):
+Context: new ablations appended to the queue (configs/queue_dedup_renumbered_v6.json):
   - 316 = freeze_enc_after_warmup  (271 + freeze_encoder_only=True; encoder frozen post-warmup)
   - 317 = lbm_mse_norm_dann        (271 + loss_balance_mode=mse_norm_dann)
   - 318 = lbm_relobralo            (271 + loss_balance_mode=relobralo)
   - 319 = lbm_famo                 (271 + loss_balance_mode=famo)
   - 320 = lbm_uwso                 (271 + loss_balance_mode=uwso)
-All 316-320 have NO existing dir -> fresh runs. They re-import the current (2026-06-14)
-mae_anomaly code (subprocess per experiment), so loss_balance_mode + the
-freeze_encoder_only resume fix are active.
+  - 321 = scadC_w10_linear         (271 + SCAD Form C: one-sided thresholded repulsion, gamma=0)
+  - 322 = scadA_w10_linear         (271 + SCAD Form A, linear head, w=1.0 — C 비교군)
+  - 323 = scadB_w10_linear         (271 + SCAD Form B, linear head, w=1.0 — C 비교군)
+All 316-323 have NO existing dir -> fresh runs. They re-import the current
+mae_anomaly code (subprocess per experiment), so loss_balance_mode, the
+freeze_encoder_only resume fix, and SCAD Form C are all active.
 
 ⚠️ DO NOT launch this while the v2e queue (311-315) is still running — it would
 double-book the GPU. Launch only AFTER v2e prints "=== RESUME DEDUP-v2e DONE ===".
 
-FIRST_TORUN = 316. Reuse-existing-dir logic kept (defensive); all 316-320 are fresh.
+FIRST_TORUN = 316. Reuse-existing-dir logic kept (defensive); all 316-323 are fresh.
 
 Usage:
   python scripts/resume_dedup_v2f.py configs/queue_dedup_renumbered_v6.json

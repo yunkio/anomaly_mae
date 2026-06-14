@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-06-15: SCAD Form C (one-sided thresholded negative repulsion) + exp321–323
+
+**SCAD-C**: `L = mean max(0, cos(z_a, sg[z_u]) − γ)²` — anomaly anchor를 U(masked non-anomaly = background)에서 밀어내되 **U는 stop-gradient**(one_sided=True)라 anchor만 이동. 오염된 PU 세팅에서 U contamination에 robust + γ(기본 0)로 over-separation 회피. 수학적 관계: **C(one_sided=False, γ=−m) ≡ B(margin=m)** — C는 B에 (1)U detach (2)threshold reparametrize를 더한 변형.
+
+**구현** (default-off, A/B byte-identical):
+- `config.py`: `scad_gamma=0.0`, `scad_one_sided=True` (2필드).
+- `loss.py compute_scad_loss`: `form='C'` branch + `gamma`/`one_sided` 인자 + 6개 C metric(`scad_c_mean_sim`·`active_pair_frac`·`active_sim_mean`·`gamma`·`n_anchor`·`n_u`) → `_scad_info`→`loss_dict`. `else: raise` 메시지에 'C' 추가. `MAEAnomalyLoss.__init__`에서 읽어 호출부 전달.
+- `trainer.py`: 6개 C metric history init+append. 가중합/ramp/adaptive-λ/`disable_anomaly_loss` 게이트는 기존 재사용(무변경). `model.py` 무변경(`ScadProjectionHead` 재사용).
+
+**실험 321–323** (전부 271 base, `linear` head, `w=1.0`, `patch` mode → A/B/C form 순수 비교):
+- 321 `scadC_w10_linear`: Form C, γ=0.0, one_sided=True.
+- 322 `scadA_w10_linear` / 323 `scadB_w10_linear`: 기존 A/B를 linear head·w=1.0로 재실행(312-315는 default head). v2f(FIRST_TORUN=316)가 320 뒤에 자동 실행. 큐 38→41.
+
+**검증(GPU 미사용)**: import OK, config defaults, **A/B 연산 라인 unchanged**(git diff), C branch CPU smoke — **grad detach 확인**(anomaly>0, U=0), 6 metric finite, **C(os=False,γ=−m)≡B(m) allclose**, bad form raise, edge(no anchor) 안전; 321-323 mutex 3/3 PASS(use_grl=False·use_scad=True·patch_level_loss=True). smooth variant 미구현(hinge만).
+
 ## 2026-06-14: exp316–320 큐 추가 + `freeze_encoder_only` resume 버그 수정
 
 **큐 추가**: `configs/queue_dedup_renumbered_v6.json`에 5개 신규 ablation(33→38개). 271 override string에 단일 토큰 append:
