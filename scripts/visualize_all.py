@@ -168,6 +168,16 @@ def main():
             history=history
         )
 
+        # SCAD-C repulsion diagnostics — guarded no-op unless this run used
+        # scad_form == 'C' (or the train_scad_c_* series carry real signal).
+        if history:
+            from mae_anomaly.visualization import ScadDiagnosticsVisualizer
+            scad_diag_dir = os.path.join(vis_dir, 'scad_diagnostics')
+            ScadDiagnosticsVisualizer(
+                history=history, output_dir=scad_diag_dir,
+                exp_dir=experiment_dir, config=config,
+            ).generate_all()
+
     # 6. Training Progress Visualizations (requires re-training)
     if args.retrain and exp_data['best_config']:
         progress_dir = os.path.join(vis_dir, 'training_progress')

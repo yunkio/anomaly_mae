@@ -2206,6 +2206,21 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
     vis.generate_all(experiment_dir=exp_dir, history=history)
     plt.close('all')
 
+    # SCAD-C repulsion diagnostics — additive, guarded no-op for non-Form-C runs.
+    # Only fires when this experiment trained with scad_form == 'C' (e.g. exp321);
+    # for every other run the train_scad_c_* series are constant 0.0 and nothing
+    # is written, so the existing pipeline is byte-for-byte unchanged.
+    if getattr(config, 'use_scad', False) and str(getattr(config, 'scad_form', '')) == 'C' and history:
+        try:
+            from mae_anomaly.visualization import ScadDiagnosticsVisualizer
+            scad_diag_dir = os.path.join(exp_dir, 'visualization', 'scad_diagnostics')
+            ScadDiagnosticsVisualizer(
+                history=history, output_dir=scad_diag_dir, exp_dir=exp_dir, config=config,
+            ).generate_all()
+            plt.close('all')
+        except Exception as _scad_e:
+            print(f"  - [scad_diagnostics] skipped due to error: {_scad_e}")
+
     viz_time = time.time() - viz_start
 
     # Update metadata with viz_time and total

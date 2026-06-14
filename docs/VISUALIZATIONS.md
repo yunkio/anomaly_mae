@@ -32,8 +32,34 @@ mae_anomaly/visualization/
 ├── experiment_visualizer.py     # ExperimentVisualizer (Stage 1)
 ├── stage2_visualizer.py         # Stage2Visualizer class
 ├── best_model_visualizer.py     # BestModelVisualizer class
-└── training_visualizer.py       # TrainingProgressVisualizer class
+├── training_visualizer.py       # TrainingProgressVisualizer class
+└── scad_diagnostics_visualizer.py  # ScadDiagnosticsVisualizer (SCAD-C only)
 ```
+
+### SCAD-C Diagnostics (`scad_diagnostics/` sub-dir) — 2026-06-15
+
+`ScadDiagnosticsVisualizer` produces a focused diagnostic set for SCAD **Form C**
+(one-sided thresholded repulsion; exp321) answering a single question: *is the
+repulsion actually working — without representation collapse — and does it
+translate into better detection?* It reads the six `train_scad_c_*` series from
+`training_histories.json` plus detection metrics from `epoch_metrics.json`.
+
+Output `<exp>/<dataset>/visualization/scad_diagnostics/`:
+
+| File | What it shows |
+|---|---|
+| `scad_c_repulsion_progress.png` | `mean_sim` ↓ (vs γ line), `active_pair_frac` ↓ (loss surface emptying), SCAD loss convergence |
+| `scad_c_collapse_guard.png` | **Failure-mode check** — cluster separation ↑, intra-cluster variance (→0 = collapse alarm), and a `mean_sim × anom_var` phase trajectory distinguishing *genuine separation* from *collapse* |
+| `scad_c_optimization_signal.png` | grad balance SCAD/main, effective-weight schedule, anchor/negative sample counts (low-anchor = high-variance shading) |
+| `scad_c_detection_coupling.png` | `mean_sim` vs `pak_auc_f1` twin-axis + correlation scatter (negative corr ⇒ repulsion aids detection) |
+| `scad_c_summary.png` + `scad_c_diagnostics_summary.json` | one-page verdict dashboard + machine-readable summary (`crossed_gamma`, `saturated`, `collapse_suspected`, `grad_dominance`, `detection_corr`, `repulsion_success`) |
+
+**Guarded no-op**: for Form A/B / non-SCAD / GRL runs the C-series are constant
+0.0, so `has_scad_c()` returns False and **nothing is written** — the existing
+pipeline is byte-for-byte unchanged. Wired in `run_base_experiments.py` (after the
+best_model viz, guarded by `use_scad and scad_form=='C'`) and `visualize_all.py`.
+Only the post-warmup region is used for the verdict (during teacher-only warmup
+the student forward is skipped, so C-metrics are 0).
 
 ### Dynamic Color Management
 

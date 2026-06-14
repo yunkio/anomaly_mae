@@ -41,6 +41,7 @@ from .experiment_visualizer import ExperimentVisualizer
 from .stage2_visualizer import Stage2Visualizer
 from .best_model_visualizer import BestModelVisualizer
 from .training_visualizer import TrainingProgressVisualizer
+from .scad_diagnostics_visualizer import ScadDiagnosticsVisualizer
 from .parallel import ParallelVisualizer, generate_plots_parallel
 
 __all__ = [
@@ -65,6 +66,7 @@ __all__ = [
     'Stage2Visualizer',
     'BestModelVisualizer',
     'TrainingProgressVisualizer',
+    'ScadDiagnosticsVisualizer',
     'ParallelVisualizer',
     'generate_plots_parallel',
 ]
