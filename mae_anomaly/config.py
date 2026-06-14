@@ -46,6 +46,12 @@ class Config:
     num_shared_decoder_layers: int = 0  # Shared decoder layers before teacher/student decoders
     # - 0: No shared decoder (default)
     # - >0: Shared decoder trained with teacher, separate mask tokens for student
+    decoder_half_dim: bool = False  # [2026-06-15] MAE-style asymmetric decoder width
+    # - False: decoder width = encoder d_model (default, byte-identical)
+    # - True : decoder(teacher/student/shared)·mask token·output proj·GRL/SCAD head = d_model//2,
+    #          decoder dim_feedforward = (d_model//2)*4, nhead reused; encoder stays d_model.
+    #          A decoder_embed Linear(d_model→d_model//2) narrows the latent. Works with dynamic
+    #          d_model (always //2 of resolved). Requires mask_after_encoder + transformer-enc-dec.
     dim_feedforward: int = 512  # 4 * d_model
     dropout: float = 0.15
     masking_ratio: float = 0.15
@@ -156,6 +162,10 @@ class Config:
     # - '2layer': 2-layer MLP (LayerNorm → hidden → GELU → Drop(0.2) → hidden//2 → GELU → Drop(0.2) → 1)
     # - 'dann': DANN-style 3-layer (d_model → d_model*2 → ReLU → Dropout(0.5) → d_model*2 → ReLU → Dropout(0.5) → 1)
     grl_cls_hidden: int = 0  # GRL classifier hidden dimension (0 = auto: d_model//2 for default, d_model for 2layer)
+    grl_attach_layer: str = 'last'  # [2026-06-15] Where the GRL classifier reads from
+    # - 'last' : student decoder FINAL hidden (h2), just before output proj (default, byte-identical)
+    # - 'first': student decoder FIRST-layer output (h1) — invariance on an intermediate rep, the
+    #            final layer specializes for reconstruction. Falls back to 'last' if student depth ≤ 1.
     grl_adaptive_lambda: bool = True  # Adaptive λ for GRL gradient balancing
     # - True: Auto-computed λ to balance GRL vs main gradients (default, VQGAN-style)
     # - False: Fixed weight — loss += grl_loss_weight * grl_cls_loss (no adaptive scaling)

@@ -10,9 +10,12 @@ Context: new ablations appended to the queue (configs/queue_dedup_renumbered_v6.
   - 321 = scadC_w10_linear         (271 + SCAD Form C: one-sided thresholded repulsion, gamma=0)
   - 322 = scadA_w10_linear         (271 + SCAD Form A, linear head, w=1.0 — C 비교군)
   - 323 = scadB_w10_linear         (271 + SCAD Form B, linear head, w=1.0 — C 비교군)
-All 316-323 have NO existing dir -> fresh runs. They re-import the current
+  - 324 = grl_first_layer          (271 + grl_attach_layer=first: GRL on student decoder layer-1)
+  - 325 = dec_dmodel_half          (271 + decoder_half_dim=True: MAE-style decoder width = d_model//2)
+All 316-325 have NO existing dir -> fresh runs. They re-import the current
 mae_anomaly code (subprocess per experiment), so loss_balance_mode, the
-freeze_encoder_only resume fix, and SCAD Form C are all active.
+freeze_encoder_only resume fix, SCAD Form C, grl_attach_layer, and
+decoder_half_dim are all active.
 
 ⚠️ DO NOT launch this while the v2e queue (311-315) is still running — it would
 double-book the GPU. Launch only AFTER v2e prints "=== RESUME DEDUP-v2e DONE ===".

@@ -184,6 +184,25 @@ PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
 - Discrepancy with teacher reveals anomalies
 - Decoder layer count can be varied in ablation studies
 
+**Asymmetric decoder WIDTH (`decoder_half_dim`, 2026-06-15)**: by default the
+decoder width = encoder `d_model` (only DEPTH is asymmetric: e4 > td3 > sd2).
+Set `decoder_half_dim=True` for MAE-style WIDTH asymmetry — teacher/student/shared
+decoders, mask tokens, output projections, and GRL/SCAD heads run at `d_model//2`
+(decoder `dim_feedforward = (d_model//2)*4`, nhead reused), while the **encoder
+stays `d_model`**. A `decoder_embed = Linear(d_model, d_model//2)` narrows the
+encoder latent (teacher-side; student detaches it). Works with dynamic `d_model`
+(always //2 of resolved). Requires `mask_after_encoder` + transformer-enc-dec,
+incompatible with teacher-output-EMA; nhead-non-divisible or odd d_model raise
+`ValueError`. Default (False) → `decoder_embed=Identity`, byte-identical. FM and
+discrepancy are unchanged (both decoders share the same width).
+
+**GRL attachment layer (`grl_attach_layer`, 2026-06-15)**: `'last'` (default) attaches
+the GRL classifier to the student decoder's FINAL hidden (h2, just before output
+projection). `'first'` attaches it to the FIRST student-decoder layer's output (h1),
+so adversarial invariance acts on an intermediate representation and the final layer
+specializes for reconstruction (reconstruction/FM still use h2). Falls back to 'last'
+if student depth ≤ 1; byte-identical when 'last'.
+
 ---
 
 ### 7. Output Projection

@@ -339,9 +339,35 @@ class SelfDistilledMAEMultivariate(nn.Module):
         # Positional encoding (for encoder)
         self.pos_encoder = PositionalEncoding(config.d_model)
 
+        # === [신규 2026-06-15] Asymmetric decoder width (MAE-style) ===
+        # decoder_half_dim=True → decoder(teacher/student/shared)·mask token·output proj·
+        # GRL/SCAD head 를 d_model//2, dim_feedforward 를 (d_model//2)*4, nhead 재사용.
+        # encoder 는 d_model 유지. decoder_embed(Linear d_model→d_model//2)가 latent 를 좁힘.
+        # False → Identity + _dec=d_model → byte-identical. dynamic d_model 도 //2 자동 반영.
+        self._decoder_half = getattr(config, 'decoder_half_dim', False)
+        if self._decoder_half:
+            if not config.mask_after_encoder:
+                raise ValueError("decoder_half_dim requires mask_after_encoder=True (271 setup).")
+            if not config.use_transformer_encoder_decoder:
+                raise ValueError("decoder_half_dim requires use_transformer_encoder_decoder=True.")
+            if getattr(config, 'use_teacher_output_ema', False):
+                raise ValueError("decoder_half_dim is incompatible with use_teacher_output_ema.")
+            if config.d_model % 2 != 0:
+                raise ValueError(f"decoder_half_dim requires even d_model, got {config.d_model}.")
+            _dec = config.d_model // 2
+            if _dec % config.nhead != 0:
+                raise ValueError(
+                    f"decoder_half_dim: d_model//2={_dec} not divisible by nhead={config.nhead}.")
+            _dec_ff = _dec * 4
+        else:
+            _dec = config.d_model
+            _dec_ff = config.dim_feedforward
+        self._decoder_d_model = _dec
+        self.decoder_embed = nn.Linear(config.d_model, _dec) if self._decoder_half else nn.Identity()
+
         # Decoder positional encoding (only for TransformerEncoder decoder)
         if config.use_transformer_encoder_decoder:
-            self.decoder_pos_encoder = PositionalEncoding(config.d_model)
+            self.decoder_pos_encoder = PositionalEncoding(_dec)
         else:
             self.decoder_pos_encoder = None
 
@@ -369,9 +395,9 @@ class SelfDistilledMAEMultivariate(nn.Module):
             if config.use_transformer_encoder_decoder:
                 # TransformerEncoder (self-attention only)
                 shared_decoder_layer = nn.TransformerEncoderLayer(
-                    d_model=config.d_model,
+                    d_model=_dec,
                     nhead=config.nhead,
-                    dim_feedforward=config.dim_feedforward,
+                    dim_feedforward=_dec_ff,
                     dropout=config.dropout,
                     batch_first=False,
                     norm_first=True,
@@ -381,14 +407,14 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self.shared_decoder = nn.TransformerEncoder(
                     shared_decoder_layer,
                     num_layers=self.num_shared_decoder_layers,
-                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
+                    norm=nn.LayerNorm(_dec, eps=1e-6),
                 )
             else:
                 # TransformerDecoder (cross-attention with encoder memory)
                 shared_decoder_layer = nn.TransformerDecoderLayer(
-                    d_model=config.d_model,
+                    d_model=_dec,
                     nhead=config.nhead,
-                    dim_feedforward=config.dim_feedforward,
+                    dim_feedforward=_dec_ff,
                     dropout=config.dropout,
                     batch_first=False,
                     norm_first=True,
@@ -398,7 +424,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self.shared_decoder = nn.TransformerDecoder(
                     shared_decoder_layer,
                     num_layers=self.num_shared_decoder_layers,
-                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
+                    norm=nn.LayerNorm(_dec, eps=1e-6),
                 )
 
         # Teacher decoder
@@ -407,9 +433,9 @@ class SelfDistilledMAEMultivariate(nn.Module):
             if config.use_transformer_encoder_decoder:
                 # TransformerEncoder (self-attention only, MAE-style)
                 teacher_decoder_layer = nn.TransformerEncoderLayer(
-                    d_model=config.d_model,
+                    d_model=_dec,
                     nhead=config.nhead,
-                    dim_feedforward=config.dim_feedforward,
+                    dim_feedforward=_dec_ff,
                     dropout=config.dropout,
                     batch_first=False,
                     norm_first=True,
@@ -419,14 +445,14 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self.teacher_decoder = nn.TransformerEncoder(
                     teacher_decoder_layer,
                     num_layers=config.num_teacher_decoder_layers,
-                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
+                    norm=nn.LayerNorm(_dec, eps=1e-6),
                 )
             else:
                 # TransformerDecoder (cross-attention with encoder output)
                 teacher_decoder_layer = nn.TransformerDecoderLayer(
-                    d_model=config.d_model,
+                    d_model=_dec,
                     nhead=config.nhead,
-                    dim_feedforward=config.dim_feedforward,
+                    dim_feedforward=_dec_ff,
                     dropout=config.dropout,
                     batch_first=False,
                     norm_first=True,
@@ -436,7 +462,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self.teacher_decoder = nn.TransformerDecoder(
                     teacher_decoder_layer,
                     num_layers=config.num_teacher_decoder_layers,
-                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
+                    norm=nn.LayerNorm(_dec, eps=1e-6),
                 )
 
         # Student decoder
@@ -445,9 +471,9 @@ class SelfDistilledMAEMultivariate(nn.Module):
             if config.use_transformer_encoder_decoder:
                 # TransformerEncoder (self-attention only, MAE-style)
                 student_decoder_layer = nn.TransformerEncoderLayer(
-                    d_model=config.d_model,
+                    d_model=_dec,
                     nhead=config.nhead,
-                    dim_feedforward=config.dim_feedforward,
+                    dim_feedforward=_dec_ff,
                     dropout=config.dropout,
                     batch_first=False,
                     norm_first=True,
@@ -457,14 +483,14 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self.student_decoder = nn.TransformerEncoder(
                     student_decoder_layer,
                     num_layers=config.num_student_decoder_layers,
-                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
+                    norm=nn.LayerNorm(_dec, eps=1e-6),
                 )
             else:
                 # TransformerDecoder (cross-attention with encoder output)
                 student_decoder_layer = nn.TransformerDecoderLayer(
-                    d_model=config.d_model,
+                    d_model=_dec,
                     nhead=config.nhead,
-                    dim_feedforward=config.dim_feedforward,
+                    dim_feedforward=_dec_ff,
                     dropout=config.dropout,
                     batch_first=False,
                     norm_first=True,
@@ -474,7 +500,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self.student_decoder = nn.TransformerDecoder(
                     student_decoder_layer,
                     num_layers=config.num_student_decoder_layers,
-                    norm=nn.LayerNorm(config.d_model, eps=1e-6),
+                    norm=nn.LayerNorm(_dec, eps=1e-6),
                 )
 
         # Output projections
@@ -484,24 +510,24 @@ class SelfDistilledMAEMultivariate(nn.Module):
             output_dim = config.num_features
 
         if config.use_teacher:
-            self.teacher_output_projection = nn.Linear(config.d_model, output_dim)
+            self.teacher_output_projection = nn.Linear(_dec, output_dim)
         if config.use_student:
-            self.student_output_projection = nn.Linear(config.d_model, output_dim)
+            self.student_output_projection = nn.Linear(_dec, output_dim)
 
         # Mask token(s) - shared or separate for teacher/student
         self.shared_mask_token = config.shared_mask_token
         self.mask_after_encoder = config.mask_after_encoder
 
         if self.shared_mask_token:
-            self.mask_token = nn.Parameter(torch.zeros(1, 1, config.d_model))
+            self.mask_token = nn.Parameter(torch.zeros(1, 1, _dec))
             nn.init.normal_(self.mask_token, std=0.02)
         else:
             # Separate mask tokens for teacher and student
             if config.use_teacher:
-                self.teacher_mask_token = nn.Parameter(torch.zeros(1, 1, config.d_model))
+                self.teacher_mask_token = nn.Parameter(torch.zeros(1, 1, _dec))
                 nn.init.normal_(self.teacher_mask_token, std=0.02)
             if config.use_student:
-                self.student_mask_token = nn.Parameter(torch.zeros(1, 1, config.d_model))
+                self.student_mask_token = nn.Parameter(torch.zeros(1, 1, _dec))
                 nn.init.normal_(self.student_mask_token, std=0.02)
 
         # === [신규 2026-06-01] Teacher output EMA modules ===
@@ -531,16 +557,16 @@ class SelfDistilledMAEMultivariate(nn.Module):
             _grl_mode = getattr(config, 'grl_mode', 'classifier')
             if _grl_mode == 'wdgrl':
                 self.wasserstein_critic = WassersteinCritic(
-                    config.d_model, getattr(config, 'grl_cls_hidden', 0))
+                    _dec, getattr(config, 'grl_cls_hidden', 0))
             else:
                 self.anomaly_classifier = AnomalyClassifierHead(
-                    config.d_model, getattr(config, 'grl_cls_hidden', 0),
+                    _dec, getattr(config, 'grl_cls_hidden', 0),
                     arch=getattr(config, 'grl_cls_arch', 'default'))
 
         # SCAD (use_scad=True일 때만) — replaces GRL classifier
         if getattr(config, 'use_scad', False):
             self.scad_head = ScadProjectionHead(
-                d_model=config.d_model,
+                d_model=_dec,
                 d_proj=getattr(config, 'scad_d_proj', 128),
                 arch=getattr(config, 'scad_proj_head_arch', 'default'),
             )
@@ -1024,12 +1050,18 @@ class SelfDistilledMAEMultivariate(nn.Module):
         teacher_output = None
         student_output = None
 
+        # [신규 2026-06-15] decoder_embed: encoder latent 을 decoder 폭으로 좁힘 (off면 Identity).
+        # teacher 쪽에서 1회 계산(grad→decoder_embed+encoder); student 는 .detach()로 받음
+        # (현재 encoder↔student detach 비대칭과 동일). mask_after_encoder=True 경로 전용.
+        if self.mask_after_encoder:
+            _lat_dec = self.decoder_embed(latent_visible)
+
         if self.config.use_teacher and self.teacher_decoder is not None:
             if self.mask_after_encoder:
                 # Insert mask tokens before teacher decoder
                 teacher_mask_token = self._get_mask_token('teacher')
                 teacher_latent = self._insert_mask_tokens_and_unshuffle(
-                    latent_visible, ids_restore, seq_len, teacher_mask_token
+                    _lat_dec, ids_restore, seq_len, teacher_mask_token
                 )
                 # Add decoder positional encoding (only for TransformerEncoder)
                 if self.config.use_transformer_encoder_decoder:
@@ -1122,7 +1154,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 # Detach encoder output to prevent encoder updates from student loss
                 student_mask_token = self._get_mask_token('student')
                 student_latent = self._insert_mask_tokens_and_unshuffle(
-                    latent_visible.detach(), ids_restore, seq_len, student_mask_token
+                    _lat_dec.detach(), ids_restore, seq_len, student_mask_token
                 )
                 # Add decoder positional encoding (only for TransformerEncoder)
                 if self.config.use_transformer_encoder_decoder:
@@ -1135,22 +1167,42 @@ class SelfDistilledMAEMultivariate(nn.Module):
                     student_latent = student_latent + self.decoder_pos_encoder.pe[:seq_len]
 
             # Student uses its own decoder directly (no shared decoder)
+            # [신규 2026-06-15] grl_attach_layer='first' → GRL classifier 가 student decoder 의
+            # FIRST-layer 출력(h1)을 읽음. reconstruction/FM 는 그대로 최종 hidden(h2) 사용.
+            # 'last'(기본)는 기존 호출 그대로 → byte-identical.
+            _grl_first = (self.training and getattr(self.config, 'grl_attach_layer', 'last') == 'first'
+                          and hasattr(self, 'anomaly_classifier'))
             if self.config.use_transformer_encoder_decoder:
                 # TransformerEncoder: self-attention only
-                student_hidden = self.student_decoder(student_latent)
+                if _grl_first and len(self.student_decoder.layers) > 1:
+                    # 수동 layer loop 로 layer-0 출력(h1) 포착. 최종 norm 까지 적용해 h2 는
+                    # self.student_decoder(student_latent) 와 동일(복원/FM 불변).
+                    _h = student_latent
+                    _grl_src = None
+                    for _i, _layer in enumerate(self.student_decoder.layers):
+                        _h = _layer(_h)
+                        if _i == 0:
+                            _grl_src = _h
+                    if self.student_decoder.norm is not None:
+                        _h = self.student_decoder.norm(_h)
+                    student_hidden = _h
+                else:
+                    student_hidden = self.student_decoder(student_latent)
+                    _grl_src = student_hidden
             else:
                 # TransformerDecoder: cross-attention with encoder output
                 # Use detached encoder output for memory
                 student_hidden = self.student_decoder(student_latent, latent_visible.detach())
+                _grl_src = student_hidden
 
             # Store for FM distance computation (evaluator/loss)
             self._student_hidden = student_hidden  # (num_patches, batch, d_model)
 
             # GRL / WDGRL: adversarial training on student hidden (training only)
             if self.training and hasattr(self, 'anomaly_classifier'):
-                # Classifier mode (DANN-style GRL)
+                # Classifier mode (DANN-style GRL); _grl_src = h1 if grl_attach_layer='first' else h2
                 lambda_grl = getattr(self, '_grl_lambda', 0.0)
-                cls_logits = self.anomaly_classifier(student_hidden, lambda_grl)
+                cls_logits = self.anomaly_classifier(_grl_src, lambda_grl)
                 self._grl_cls_logits = cls_logits.squeeze(-1).transpose(0, 1)
             else:
                 self._grl_cls_logits = None

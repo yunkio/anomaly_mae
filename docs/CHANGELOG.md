@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-15: GRL 부착층(`grl_attach_layer`) + MAE식 비대칭 decoder 폭(`decoder_half_dim`) + exp324–325
+
+두 구조 ablation 추가 (둘 다 default-off, **byte-identical**; `.trash/0615` 백업).
+
+**(1) `grl_attach_layer: str = 'last'`** — `'first'`면 GRL classifier가 student decoder **1번째 층 출력(h1)** 을 읽음(reconstruction/FM은 최종 hidden h2 유지). adversarial invariance를 중간 표현에 걸고 마지막 층은 복원에 특화. `model.py` student forward에서 `'first'`일 때만 layer 수동 루프로 h1 포착(student depth≤1이면 'last' fallback). `'last'`는 기존 호출 그대로.
+
+**(2) `decoder_half_dim: bool = False`** — `True`면 MAE식 비대칭 폭: teacher/student/shared decoder·mask token·output proj·GRL/SCAD head = **d_model//2**, decoder dim_feedforward = `(d_model//2)*4`, nhead 재사용, **encoder는 d_model 유지**. `decoder_embed=Linear(d_model, d_model//2)`가 latent를 좁힘(teacher side 학습, student는 detach — encoder↔student 비대칭 미러). dynamic d_model도 //2 자동. FM/discrepancy 무변경(양 decoder 동일 폭). guard: mask_after_encoder+transformer-enc-dec 필수, ema 비호환, nhead 비가분/홀수 d_model → ValueError. `False`면 `decoder_embed=Identity`.
+
+**파일**: `config.py`(2 flag), `model.py`(decoder/proj/mask/head를 `_dec`/`_dec_ff`로, encoder 불변; forward에 decoder_embed + grl_first 분기). loss/trainer 무변경.
+
+**실험 324·325** (271 base, 각 1개, v2f가 323 뒤 자동 실행): **324** `grl_first_layer` · **325** `dec_dmodel_half`. 큐 41→43. Notion Group R + Results 반영.
+
+**검증(GPU 미사용, backup model.py와 직접 대조)**: **param-level byte-identity**(default 104 param 전부 bit-equal, 신규 key 0) + **forward byte-identity**(EVAL·TRAIN teacher·student·grl_logits bit-equal) → 실행 중 큐(315·316-323) 무영향. grl_first: forward finite + **h1≠h2 확인**(동일 weight서 first/last logits 상이). half: enc512/dec256·embed512→256·ff1024·FM 호환(양쪽 256). guard ValueError 2건. half+grl_first 결합 정상. 324·325 271 config 빌드 OK.
+
 ## 2026-06-15: SCAD Form C (one-sided thresholded negative repulsion) + exp321–323
 
 **SCAD-C**: `L = mean max(0, cos(z_a, sg[z_u]) − γ)²` — anomaly anchor를 U(masked non-anomaly = background)에서 밀어내되 **U는 stop-gradient**(one_sided=True)라 anchor만 이동. 오염된 PU 세팅에서 U contamination에 robust + γ(기본 0)로 over-separation 회피. 수학적 관계: **C(one_sided=False, γ=−m) ≡ B(margin=m)** — C는 B에 (1)U detach (2)threshold reparametrize를 더한 변형.

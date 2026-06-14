@@ -655,6 +655,40 @@
       ],
       "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True use_grl=False use_scad=True scad_form=B scad_margin=0.3 scad_loss_weight=1.0 scad_proj_head_arch=linear amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
       "_note": "SCAD-B (margin hinge, m=0.3) re-run with linear head + w=1.0 (315 scadB_w10은 default head). 321/322과 동일 조건 비교군."
+    },
+    {
+      "exp_num": 324,
+      "name": "exp324_grl_first_layer",
+      "dir_suffix": "grl_first_layer",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True grl_attach_layer=first amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "271 + grl_attach_layer=first: GRL classifier가 student decoder 1번째 층(h1) 출력을 읽음(reconstruction/FM은 h2 유지). 'invariance를 중간층에, 마지막층은 복원 특화'. 271은 sd2라 적용."
+    },
+    {
+      "exp_num": 325,
+      "name": "exp325_dec_dmodel_half",
+      "dir_suffix": "dec_dmodel_half",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True decoder_half_dim=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "271 + decoder_half_dim=True: MAE식 비대칭 decoder 폭. teacher/student decoder·mask·proj·GRL head = d_model//2 (512→256), decoder ff=256*4=1024, nhead 재사용, decoder_embed(512→256). encoder는 512 유지. FM/discrepancy 무변경."
     }
   ]
 }
