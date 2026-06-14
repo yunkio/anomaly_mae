@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-14: exp316–320 큐 추가 + `freeze_encoder_only` resume 버그 수정
+
+**큐 추가**: `configs/queue_dedup_renumbered_v6.json`에 5개 신규 ablation(33→38개). 271 override string에 단일 토큰 append:
+- **316 freeze_enc_after_warmup**: `freeze_encoder_only=True` — warmup(250) 이후 shared encoder(+patchify) freeze, decoder/GRL/FM는 학습 지속.
+- **317–320 lbm_***: `loss_balance_mode=mse_norm_dann|relobralo|famo|uwso` — GRL BCE↔MSE discrepancy 스케일 정합 ablation(use_grl=True/classifier/use_scad=False 유지 → mutex 통과).
+
+**launcher**: `scripts/resume_dedup_v2f.py`(FIRST_TORUN=316) 신규. 실행 중 v2e(311-315)는 큐를 시작 시 1회만 읽으므로 316-320을 무시(무중단) → v2e 완료 후 v2f로 실행. subprocess per-exp라 신규 코드 re-import됨.
+
+**버그 수정 — `freeze_encoder_only` resume**: 트레이너의 encoder freeze 트리거는 `epoch==teacher_warmup`에서만 발화하는데, `_frozen_encoder_modules`가 checkpoint에 저장/복원되지 않아 warmup 이후 crash·resume 시 encoder가 조용히 un-freeze되던 잠재 버그를 수정(`run_base_experiments.py` save+restore, `_frozen_eval_modules` 패턴 미러링). **byte-identical when off**: 키는 freeze 발화 시에만 non-None → 그 외 실험(271 포함) 전부 무영향(구 ckpt no-op back-compat). exp316만 영향(정확성 회복).
+
+**검증(GPU 미사용)**: queue JSON 유효성 + 316-320 override→Config mutex 재현(5/5 PASS), v2f syntax, freeze fix byte-identical-off 논리. Notion Spec(Group R)·Results(4 table 미실행 행) 반영.
+
 ## 2026-06-14: `loss_balance_mode` — GRL BCE ↔ MSE discrepancy 스케일 정합 6 선택지 (default-off, bit-identical)
 
 **배경**: GRL classifier BCE 손실(O(1–20))과 자기증류 MSE discrepancy 손실(O(0.5→1e-4))은 차원·스케일이 근본적으로 다른 점수다. 기존 `grl_adaptive_lambda`(경사-노름 비 λ)는 main 경사가 줄면 λ→0으로 폭주해 GRL 신호를 굶긴다(adaptive runaway). 이를 대체할 **Axis-A 스케일 정합** 방법 4종을 공식 논문/repo line-by-line 기준으로 엄격 구현.

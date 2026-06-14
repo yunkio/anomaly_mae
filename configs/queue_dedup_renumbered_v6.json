@@ -519,6 +519,91 @@
         "MSL_concat"
       ],
       "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True use_grl=False use_scad=True scad_form=B scad_margin=0.3 scad_loss_weight=1.0 amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1"
+    },
+    {
+      "exp_num": 316,
+      "name": "exp316_freeze_enc_after_warmup",
+      "dir_suffix": "freeze_enc_after_warmup",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True freeze_encoder_only=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "271 base + freeze_encoder_only=True: warmup(250) 이후 shared encoder+patchify를 freeze(eval+requires_grad=False); teacher/student decoder·output projection·mask token·GRL·FM은 계속 학습. resume시 _frozen_encoder_modules 복원(2026-06-14 fix)."
+    },
+    {
+      "exp_num": 317,
+      "name": "exp317_lbm_mse_norm_dann",
+      "dir_suffix": "lbm_mse_norm_dann",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True loss_balance_mode=mse_norm_dann amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "271 base + loss_balance_mode=mse_norm_dann (GRL BCE를 EMA(|BCE|)로 O(1) 정규화 + Ganin ramp). use_grl=True/classifier/use_scad=False 충족 → mutex 통과."
+    },
+    {
+      "exp_num": 318,
+      "name": "exp318_lbm_relobralo",
+      "dir_suffix": "lbm_relobralo",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True loss_balance_mode=relobralo amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "271 base + loss_balance_mode=relobralo (손실비 softmax + Bernoulli lookback + EMA, Bischof&Kraus 2110.09813)."
+    },
+    {
+      "exp_num": 319,
+      "name": "exp319_lbm_famo",
+      "dir_suffix": "lbm_famo",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True loss_balance_mode=famo amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "271 base + loss_balance_mode=famo (log-loss simplex balancer, streaming w 갱신, Liu NeurIPS2023 2306.03792)."
+    },
+    {
+      "exp_num": 320,
+      "name": "exp320_lbm_uwso",
+      "dir_suffix": "lbm_uwso",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True loss_balance_mode=uwso amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "271 base + loss_balance_mode=uwso (tempered-softmax over 1/L, Kirchdorfer 2408.07985 IJCV2025)."
     }
   ]
 }

@@ -3039,6 +3039,9 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
             'prev_grl_lambda': _tr._prev_epoch_grl_lambda,
             'lbm_state': _tr._lbm_state_dict(),  # loss_balance_mode runtime state (resume)
             '_frozen_eval_modules': getattr(_tr, '_frozen_eval_modules', None),
+            # [신규 2026-06-14] freeze_encoder_only 활성 시 frozen 모듈 목록. 미트리거면 None.
+            # resume에서 재적용 안 하면 epoch==warmup 트리거를 놓쳐 encoder가 조용히 un-freeze됨.
+            '_frozen_encoder_modules': getattr(_tr, '_frozen_encoder_modules', None),
             # [신규 2026-06-01] teacher warmup early-stop으로 동적 단축된 warmup 종료점.
             # 미트리거면 None. 트리거 시 (epoch+1). resume에서 config.teacher_only_warmup_epochs
             # 복원에 사용 → post-trigger resume가 warmup으로 재진입하지 않도록 보장.
@@ -3140,6 +3143,17 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
                         _p = getattr(trainer.model, _name, None)
                         if _p is not None:
                             _p.requires_grad_(False)
+                # [신규 2026-06-14] Re-apply encoder-only freeze if it activated pre-crash.
+                # 트레이너의 freeze 트리거는 epoch==warmup에서만 발화하므로, warmup 이후
+                # resume 시 이 재적용이 없으면 encoder가 다시 학습되어 freeze_encoder_only가 무효화됨.
+                if _rsm.get('_frozen_encoder_modules'):
+                    trainer._frozen_encoder_modules = _rsm['_frozen_encoder_modules']
+                    for _name in trainer._frozen_encoder_modules:
+                        _m = getattr(trainer.model, _name, None)
+                        if _m is not None:
+                            _m.eval()
+                            for _p in _m.parameters():
+                                _p.requires_grad_(False)
                 # [신규 2026-06-01] teacher warmup early-stop으로 동적 단축된 warmup 종료점 복원.
                 # 트리거 후 저장된 ckpt에서 재개 시, config의 원래 warmup(상한)으로 되돌아가
                 # 다시 warmup에 진입하는 것을 방지. 트리거 전(또는 flag OFF)이면 _eswe is None
