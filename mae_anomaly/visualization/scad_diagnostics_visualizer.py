@@ -121,6 +121,16 @@ class ScadDiagnosticsVisualizer:
         self.adapt_lam = self._arr('train_scad_adaptive_lambda')
         self.ramp = self._arr('train_scad_ramp')
 
+        # --- transfer diagnostics (hidden/projection separation -> output discrepancy) ---
+        self.disc_gap = self._arr('train_scad_output_disc_gap')   # disc(A+) - disc(U)
+        self.disc_anom = self._arr('train_scad_disc_anom_mean')
+        self.disc_u = self._arr('train_scad_disc_u_mean')
+
+        # where the repulsion was applied: 'projection' (z) or 'hidden_final' (H-SCAD-C)
+        self.apply_space = str(getattr(self.config, 'scad_apply_space', 'projection')) if self.config else 'projection'
+        self._name = 'H-SCAD-C' if self.apply_space == 'hidden_final' else 'SCAD-C'
+        self._tag = f'  [{self.apply_space}]'
+
         n = self.ms.size
         ep = self._arr('epoch')
         self.epochs = ep if ep.size == n and n > 0 else np.arange(1, n + 1)
@@ -230,6 +240,7 @@ class ScadDiagnosticsVisualizer:
                    self._fig_collapse_guard,
                    self._fig_optimization_signal,
                    self._fig_detection_coupling,
+                   self._fig_transfer,
                    self._fig_summary):
             try:
                 path = fn()
@@ -295,6 +306,26 @@ class ScadDiagnosticsVisualizer:
                         det_metric = k
                         break
 
+        # (7) TRANSFER: does the representation separation reach the OUTPUT discrepancy that the
+        #     score path uses? gap = disc(A+) − disc(U). Expect gap up; U should NOT over-drift.
+        post_gap = self._post(self.disc_gap)
+        post_du = self._post(self.disc_u)
+        gap0, gapf = first_last(post_gap)
+        du0, duf = first_last(post_du)
+        gap_grew = bool(np.isfinite(gap0) and np.isfinite(gapf) and gapf > gap0)
+        u_drift = bool(np.isfinite(du0) and np.isfinite(duf) and du0 > 1e-12
+                       and (duf - du0) / abs(du0) > 0.5)
+        # corr(hidden/proj separation, output disc gap) over post-warmup -> expect POSITIVE
+        transfer_corr = np.nan
+        ps = self._post(self.z_sep)
+        if ps.size == post_gap.size and ps.size >= 3:
+            keep = np.isfinite(ps) & np.isfinite(post_gap)
+            if np.count_nonzero(keep) >= 3 and np.std(ps[keep]) > 1e-9 and np.std(post_gap[keep]) > 1e-9:
+                transfer_corr = float(np.corrcoef(ps[keep], post_gap[keep])[0, 1])
+        has_transfer = bool(np.isfinite(gap0) and np.any(post_gap != 0))
+        absorption = bool(has_transfer and sep_grew and not gap_grew)  # separated but not at output
+        transfer_success = bool(has_transfer and gap_grew and not u_drift)
+
         # ---- assemble a human verdict string (English; mirrored in summary JSON) ----
         parts = []
         if np.isfinite(repulsion_drop):
@@ -315,12 +346,22 @@ class ScadDiagnosticsVisualizer:
             sign = "negative (lower sim -> higher detection: helps)" if det_corr < -0.1 else \
                    ("positive (repulsion opposes detection)" if det_corr > 0.1 else "uncorrelated")
             parts.append(f"detection corr(mean_sim,{det_metric})={det_corr:.2f} {sign}")
+        if has_transfer:
+            parts.append(f"output disc gap {gap0:.3g}->{gapf:.3g} "
+                         f"({'transfers to score' if gap_grew else 'flat/absorbed'})")
+            if absorption:
+                parts.append("WARNING output-projection absorption (separation up, disc gap flat)")
+            if u_drift:
+                parts.append(f"WARNING U-drift (disc_u {du0:.3g}->{duf:.3g}, false-positive risk)")
+            if np.isfinite(transfer_corr):
+                parts.append(f"transfer corr(sep,gap)={transfer_corr:.2f}")
 
         # overall flag
         success = bool((crossed or (np.isfinite(repulsion_drop) and repulsion_drop > 0.02))
                        and not collapse)
         return {
             'scad_form': str(getattr(self.config, 'scad_form', 'C')) if self.config else 'C',
+            'apply_space': self.apply_space,
             'gamma': self.gamma,
             'warmup_epoch': self.warmup,
             'mean_sim_start': ms0, 'mean_sim_final': msf, 'mean_sim_min': msmin,
@@ -331,6 +372,10 @@ class ScadDiagnosticsVisualizer:
             'separation_start': sep0, 'separation_final': sepf, 'separation_grew': sep_grew,
             'grad_dominance_scad_over_main': grad_dom,
             'detection_corr': det_corr, 'detection_metric': det_metric,
+            'output_disc_gap_start': gap0, 'output_disc_gap_final': gapf, 'gap_transferred': gap_grew,
+            'disc_u_start': du0, 'disc_u_final': duf, 'u_drift_suspected': u_drift,
+            'transfer_corr_sep_gap': transfer_corr, 'output_absorption_suspected': absorption,
+            'transfer_success': transfer_success,
             'repulsion_success': success,
             'verdict': "; ".join(parts) if parts else "insufficient data",
         }
@@ -405,7 +450,7 @@ class ScadDiagnosticsVisualizer:
         ax.set_title('(C) SCAD loss convergence', fontweight='bold')
         ax.legend(fontsize=7, loc='best'); ax.grid(True, alpha=0.3, which='both')
 
-        fig.suptitle('SCAD-C - Repulsion Progress  (one-sided thresholded decorrelation)',
+        fig.suptitle(f'{self._name} - Repulsion Progress  (one-sided thresholded decorrelation){self._tag}',
                      fontsize=14, fontweight='bold')
         fig.tight_layout(rect=[0, 0, 1, 0.96])
         path = os.path.join(self.output_dir, 'scad_c_repulsion_progress.png')
@@ -471,7 +516,7 @@ class ScadDiagnosticsVisualizer:
         ax.set_title('(C) Separation vs collapse phase trajectory', fontweight='bold')
         ax.legend(fontsize=7, loc='upper right'); ax.grid(True, alpha=0.3)
 
-        fig.suptitle('SCAD-C - Geometry Health  (is the separation real, or collapse?)',
+        fig.suptitle(f'{self._name} - Geometry Health  (is the separation real, or collapse?){self._tag}',
                      fontsize=14, fontweight='bold')
         fig.tight_layout(rect=[0, 0, 1, 0.96])
         path = os.path.join(self.output_dir, 'scad_c_collapse_guard.png')
@@ -538,7 +583,7 @@ class ScadDiagnosticsVisualizer:
         ax.set_title('(C) Anchor / negative sample counts (reliability)', fontweight='bold')
         ax.legend(fontsize=7, loc='best'); ax.grid(True, alpha=0.3)
 
-        fig.suptitle('SCAD-C - Optimization Dynamics & Signal Reliability',
+        fig.suptitle(f'{self._name} - Optimization Dynamics & Signal Reliability{self._tag}',
                      fontsize=14, fontweight='bold')
         fig.tight_layout(rect=[0, 0, 1, 0.96])
         path = os.path.join(self.output_dir, 'scad_c_optimization_signal.png')
@@ -597,10 +642,77 @@ class ScadDiagnosticsVisualizer:
                      fontweight='bold')
         ax.legend(fontsize=7); ax.grid(True, alpha=0.3)
 
-        fig.suptitle('SCAD-C - Detection Coupling  (does repulsion help real detection?)',
+        fig.suptitle(f'{self._name} - Detection Coupling  (does repulsion help real detection?){self._tag}',
                      fontsize=14, fontweight='bold')
         fig.tight_layout(rect=[0, 0, 1, 0.94])
         path = os.path.join(self.output_dir, 'scad_c_detection_coupling.png')
+        fig.savefig(path, dpi=150, bbox_inches='tight')
+        return path
+
+    def _fig_transfer(self) -> Optional[str]:
+        """Does the representation separation reach the OUTPUT discrepancy (the score path)?"""
+        n = self.ms.size
+        if n == 0 or self.disc_gap.size != n or not np.any(self.disc_gap != 0):
+            print("  - scad_c_transfer.png skipped (no output_disc_gap data)")
+            return None
+        ep = self.epochs
+        best = self._best_eval_epoch()
+        post = self.active if self.active.size == n else np.ones(n, bool)
+        fig, axes = plt.subplots(1, 3, figsize=(19, 5.2))
+
+        # (A) separation vs output disc gap (twin axis)
+        ax = axes[0]
+        sep = self.z_sep if self.z_sep.size == n else np.full(n, np.nan)
+        l1, = ax.plot(ep, sep, color=_C['sep'], lw=2.0, label='hidden/proj separation')
+        ax.set_xlabel('Epoch'); ax.set_ylabel('||z_anom - z_norm|| separation', color=_C['sep'])
+        ax.tick_params(axis='y', labelcolor=_C['sep'])
+        ax2 = ax.twinx()
+        l2, = ax2.plot(ep, self.disc_gap, color=_C['active'], lw=2.0, ls='--',
+                       label='output disc gap = disc(A+) - disc(U)')
+        ax2.axhline(0, color='#888', ls=':', lw=1, alpha=0.6)
+        ax2.set_ylabel('output discrepancy gap', color=_C['active'])
+        ax2.tick_params(axis='y', labelcolor=_C['active'])
+        self._mark_phases(ax, best_ep=best)
+        ax.set_title('(A) separation -> output discrepancy gap (transfer)', fontweight='bold')
+        ax.legend(handles=[l1, l2], fontsize=7, loc='best'); ax.grid(True, alpha=0.3)
+
+        # (B) disc(A+) vs disc(U) — U-drift / false-positive watch
+        ax = axes[1]
+        if self.disc_anom.size == n:
+            ax.plot(ep, self.disc_anom, color=_C['anom_var'], lw=2.0, label='disc(A+)')
+        if self.disc_u.size == n:
+            ax.plot(ep, self.disc_u, color=_C['norm_var'], lw=2.0, ls='--', label='disc(U)')
+        self._mark_phases(ax, best_ep=best)
+        ax.set_xlabel('Epoch'); ax.set_ylabel('mean output discrepancy')
+        ax.set_title('(B) disc(A+) vs disc(U)  (U rising = false-positive risk)', fontweight='bold')
+        ax.legend(fontsize=7, loc='best'); ax.grid(True, alpha=0.3)
+
+        # (C) scatter: separation vs gap, colored by epoch + corr
+        ax = axes[2]
+        x = sep[post]; y = self.disc_gap[post]; ce = ep[post]
+        good = np.isfinite(x) & np.isfinite(y)
+        corr = np.nan
+        if np.count_nonzero(good) >= 3:
+            x, y, ce = x[good], y[good], ce[good]
+            sc = ax.scatter(x, y, c=ce, cmap='viridis', s=40, edgecolor='k', linewidth=0.3)
+            cb = fig.colorbar(sc, ax=ax, pad=0.01); cb.set_label('epoch', fontsize=8)
+            if np.std(x) > 1e-9 and np.std(y) > 1e-9:
+                corr = float(np.corrcoef(x, y)[0, 1])
+                b, a = np.polyfit(x, y, 1)
+                xs = np.linspace(x.min(), x.max(), 50)
+                ax.plot(xs, b * xs + a, color='#C62828', lw=1.4, ls='--', alpha=0.8)
+        ax.axhline(0, color='#888', ls=':', lw=1, alpha=0.6)
+        interp = ('positive -> separation transfers to score' if (np.isfinite(corr) and corr > 0.1)
+                  else ('flat/negative -> output-projection absorption' if np.isfinite(corr) else ''))
+        ax.set_xlabel('separation'); ax.set_ylabel('output disc gap')
+        ax.set_title((f'(C) corr = {corr:.2f}\n{interp}') if np.isfinite(corr) else '(C) separation vs gap',
+                     fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        fig.suptitle(f'{self._name} - Hidden->Output Transfer  (does separation reach the score?){self._tag}',
+                     fontsize=14, fontweight='bold')
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        path = os.path.join(self.output_dir, 'scad_c_transfer.png')
         fig.savefig(path, dpi=150, bbox_inches='tight')
         return path
 
@@ -665,7 +777,7 @@ class ScadDiagnosticsVisualizer:
             return f.format(x) if isinstance(x, (int, float)) and np.isfinite(x) else 'n/a'
 
         lines = [
-            f"SCAD-C diagnostics summary   [{flag}]",
+            f"{self._name} diagnostics [{self.apply_space}]   [{flag}]",
             "",
             f"- mean_sim : {g(v['mean_sim_start'])} -> {g(v['mean_sim_final'])}  "
             f"(min {g(v['mean_sim_min'])}, gamma={v['gamma']:g}, "
@@ -678,6 +790,10 @@ class ScadDiagnosticsVisualizer:
             f"({'up' if v['separation_grew'] else 'down'})",
             f"- grad SCAD/main : {g(v['grad_dominance_scad_over_main'],'{:.2f}')}",
             f"- detection corr(mean_sim, {v['detection_metric']}) : {g(v['detection_corr'],'{:.2f}')}",
+            f"- output disc gap : {g(v['output_disc_gap_start'],'{:.3g}')} -> {g(v['output_disc_gap_final'],'{:.3g}')}  "
+            f"({'transfers' if v['gap_transferred'] else 'flat/absorbed'}"
+            f"{', U-DRIFT' if v['u_drift_suspected'] else ''}"
+            f"{', ABSORPTION' if v['output_absorption_suspected'] else ''})",
             "",
             "verdict: " + v['verdict'],
         ]
@@ -685,7 +801,7 @@ class ScadDiagnosticsVisualizer:
                 fontsize=9.5, family='monospace',
                 bbox=dict(boxstyle='round', facecolor='#F5F5F5', edgecolor=col, lw=1.6))
 
-        fig.suptitle('SCAD-C Diagnostics - Summary', fontsize=15, fontweight='bold')
+        fig.suptitle(f'{self._name} Diagnostics - Summary{self._tag}', fontsize=15, fontweight='bold')
         path = os.path.join(self.output_dir, 'scad_c_summary.png')
         fig.savefig(path, dpi=150, bbox_inches='tight')
         return path

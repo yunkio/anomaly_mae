@@ -387,6 +387,19 @@ class SelfDistillationLoss(nn.Module):
                         gamma=self.scad_gamma,
                         one_sided=self.scad_one_sided,
                     )
+                    # Transfer diagnostics (behavior-neutral, no grad): does the representation
+                    # separation reach the OUTPUT discrepancy that the anomaly score actually uses?
+                    # gap = disc(A+) − disc(U); disc_u also flags U-drift / false positives.
+                    # Applies to both projection-SCAD-C and H-SCAD-C (purely measured, never in loss).
+                    with torch.no_grad():
+                        _pd = patch_discrepancy.detach()                              # (B, P)
+                        _am = (_scad_patch_labels * patch_has_masked) > 0.5           # A+ & masked
+                        _um = ((1.0 - _scad_patch_labels) * patch_has_masked) > 0.5   # U(background) & masked
+                        _disc_a = float(_pd[_am].mean().item()) if bool(_am.any()) else 0.0
+                        _disc_u = float(_pd[_um].mean().item()) if bool(_um.any()) else 0.0
+                    _scad_info['scad_disc_anom_mean'] = _disc_a
+                    _scad_info['scad_disc_u_mean'] = _disc_u
+                    _scad_info['scad_output_disc_gap'] = _disc_a - _disc_u
                     _scad_results = {
                         'scad_loss_tensor': _scad_loss_tensor,
                         **_scad_info,
@@ -540,6 +553,10 @@ class SelfDistillationLoss(nn.Module):
             loss_dict['scad_c_gamma'] = _scad['scad_c_gamma']
             loss_dict['scad_c_n_anchor'] = _scad['scad_c_n_anchor']
             loss_dict['scad_c_n_u'] = _scad['scad_c_n_u']
+            # Transfer diagnostics (hidden/projection → output discrepancy)
+            loss_dict['scad_output_disc_gap'] = _scad.get('scad_output_disc_gap', 0.0)
+            loss_dict['scad_disc_anom_mean'] = _scad.get('scad_disc_anom_mean', 0.0)
+            loss_dict['scad_disc_u_mean'] = _scad.get('scad_disc_u_mean', 0.0)
             if _scad['scad_loss_tensor'] is not None:
                 loss_tensors['scad_loss'] = _scad['scad_loss_tensor']
 

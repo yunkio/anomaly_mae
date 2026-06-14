@@ -563,13 +563,19 @@ class SelfDistilledMAEMultivariate(nn.Module):
                     _dec, getattr(config, 'grl_cls_hidden', 0),
                     arch=getattr(config, 'grl_cls_arch', 'default'))
 
-        # SCAD (use_scad=True일 때만) — replaces GRL classifier
+        # SCAD (use_scad=True일 때만) — replaces GRL classifier.
+        # H-SCAD-C (scad_apply_space='hidden_final') applies the repulsion directly on the
+        # final student_hidden via a parameter-free LayerNorm+L2norm, so it needs NO
+        # projection head. Build scad_head only for the 'projection' path (default), which
+        # keeps the projection-SCAD-C model byte-identical.
         if getattr(config, 'use_scad', False):
-            self.scad_head = ScadProjectionHead(
-                d_model=_dec,
-                d_proj=getattr(config, 'scad_d_proj', 128),
-                arch=getattr(config, 'scad_proj_head_arch', 'default'),
-            )
+            self._scad_apply_space = getattr(config, 'scad_apply_space', 'projection')
+            if self._scad_apply_space == 'projection':
+                self.scad_head = ScadProjectionHead(
+                    d_model=_dec,
+                    d_proj=getattr(config, 'scad_d_proj', 128),
+                    arch=getattr(config, 'scad_proj_head_arch', 'default'),
+                )
             if getattr(config, 'scad_use_memory_bank', False):
                 _q_size = getattr(config, 'scad_memory_bank_size', 1024)
                 _d_proj = getattr(config, 'scad_d_proj', 128)
@@ -1208,9 +1214,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 self._grl_cls_logits = None
             # WDGRL: critic scores are computed in trainer.py (separate forward pass)
 
-            # SCAD: project student hidden to L2-normalized embedding space (training only)
-            # Note: stored as (num_patches, batch, d_proj) — same layout as student_hidden
-            if self.training and hasattr(self, 'scad_head'):
+            # SCAD: build the L2-normalized embedding the repulsion is measured on (training only).
+            # Note: stored as (num_patches, batch, d) — same layout as student_hidden.
+            if self.training and getattr(self, '_scad_apply_space', 'projection') == 'hidden_final':
+                # H-SCAD-C: repulsion DIRECTLY on the final student_hidden via a parameter-free
+                # LayerNorm (removes per-token mean / DC) + L2 normalize — no projection head.
+                # Better aligned with the score path (student_hidden → output projection → discrepancy).
+                _d_h = student_hidden.size(-1)
+                self._scad_z = F.normalize(F.layer_norm(student_hidden, (_d_h,)), p=2, dim=-1)
+            elif self.training and hasattr(self, 'scad_head'):
                 self._scad_z = self.scad_head(student_hidden)
             else:
                 self._scad_z = None

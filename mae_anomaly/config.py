@@ -265,6 +265,14 @@ class Config:
     # - 'linear': 1-layer (LN → Linear) — mitigates absorption issue
     # - 'deep': 3-layer MLP — more expressive (absorption risk)
 
+    scad_apply_space: str = 'projection'  # Where the SCAD repulsion is measured/applied
+    # - 'projection' (default): cos repulsion on z = scad_head(student_hidden) — current SCAD-C
+    # - 'hidden_final': H-SCAD-C — cos repulsion on h = L2norm(LayerNorm(student_hidden))
+    #   DIRECTLY on the final student decoder hidden. No projection head (0 new params),
+    #   parameter-free LN (removes per-token mean/DC). Better aligned with the score path
+    #   (student_hidden → student_output_projection → output discrepancy) than projection z,
+    #   so it avoids projection-only absorption. Same Form-C math & 6 scad_c_* metrics.
+
     # Inference scoring weight override (-1 = use training weight)
     eval_disc_weight: float = -1.0  # Disc weight at inference (-1 → 1.0)
     eval_fm_weight: float = -1.0    # FM weight at inference (-1 → fm_loss_weight) — UNUSED in score since 2026-06-01

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-06-15: H-SCAD-C (hidden-space repulsion) + transfer 진단 + scad_c 집계 버그 수정 + exp326
+
+**H-SCAD-C** (`scad_apply_space='hidden_final'`): SCAD Form C one-sided repulsion 수식은 그대로, 측정·적용 위치를 projection `z=scad_head(student_hidden)` → **final student_hidden 직접**(`h=L2norm(LayerNorm(student_hidden))`, **parameter-free LN, 0 new params**, projection head 미생성). score path(student_hidden→student_output_projection→output discrepancy)와 정합 → projection-only absorption 위험↓. 6개 `scad_c_*` metric + 시각화 전부 공유(동일 모듈, `scad_form=='C'` 가드). `config.py: scad_apply_space='projection'`(default) `| 'hidden_final'`; `model.py` forward 분기 + `__init__`에서 projection일 때만 scad_head build(hidden은 0 param).
+
+**Transfer 진단(behavior-neutral)**: hidden/projection 분리가 score가 쓰는 output discrepancy로 전이되는지 측정. `loss.py`에서 `scad_output_disc_gap = disc(A+)−disc(U)`, `scad_disc_anom_mean`, `scad_disc_u_mean`(U-drift watch) 계산(**detach, loss 미포함 → gradient·학습 무변경**). `trainer.py` history + viz `scad_c_transfer.png`(separation↑ vs gap↑ twin-axis · disc(A+)/disc(U) U-drift · sep-vs-gap corr) + verdict(`gap_transferred`/`u_drift_suspected`/`output_absorption_suspected`/`transfer_corr_sep_gap`/`transfer_success`). projection-SCAD-C(exp321)도 동일 진단 산출.
+
+**버그 수정(root cause)**: `epoch_losses` 초기 dict(`trainer.py`)에 6개 `scad_c_*`가 누락 → per-batch 집계 루프(`for key in epoch_losses`)가 건너뛰어 history에 **전부 0.0**으로 기록되던 latent bug(직전 세션 Phase-4 누락). exp321(첫 Form-C)이 미실행이라 아직 데이터로 안 드러났을 뿐. init dict에 6 scad_c + 3 transfer 키 추가로 수정 — **학습 무변경(진단 metric만 올바르게 집계)**.
+
+**시각화 태그**: `apply_space`를 summary JSON + figure suptitle에 표기(`H-SCAD-C [hidden_final]` / `SCAD-C [projection]`).
+
+**실험 326**(271 base, exp321 단일변수 미러): **326** `hscadC_w10_hidden`(`scad_apply_space=hidden_final`). 큐 43→44, v2f가 325 뒤 자동 실행 → **E3(projection) vs E4(hidden) 비교**.
+
+**검증(GPU 미사용, `.trash/0615` backup와 직접 대조)**: byte-identity — projection SCAD-C(94 param)·non-scad(88 param) **old=new bit-equal**(state_dict + forward teacher/student/scad_z sha) → 진행 중 큐(315·316-325) 무영향. hidden 경로 **0 new params**(88=non-scad), `_scad_z`=d_model-dim L2-normalized. 집계 버그 수정 확인. viz A+B 합성 산출(6 PNG + summary, transfer corr 0.98 "transfers to score"). 전 파일 `py_compile` OK.
+
+## 2026-06-15: SCAD-C 진단 시각화 (`scad_diagnostics/` 신규 sub-dir)
+
+`ScadDiagnosticsVisualizer`(`mae_anomaly/visualization/scad_diagnostics_visualizer.py`) — SCAD Form C(one-sided repulsion)의 6개 C-metric을 4개 렌즈("repulsion 작동 → collapse 없이 → 검출 전이")로 판정하는 전용 진단. 산출 `<exp>/<dataset>/visualization/scad_diagnostics/`: `scad_c_repulsion_progress`(mean_sim·active_frac·loss) / `scad_c_collapse_guard`(separation·cluster-var·위상궤적) / `scad_c_optimization_signal`(grad balance·weight·anchor 수) / `scad_c_detection_coupling`(mean_sim vs pak_f1) / `scad_c_summary` + `scad_c_diagnostics_summary.json`(자동 verdict). 데이터: `training_histories.json`+`epoch_metrics.json`, post-warmup만 verdict 계산. **무영향**: Form A/B/non-scad는 C-series 상수 0 → `has_scad_c()` False → 미생성. wiring: `run_base_experiments.py`(best_model viz 직후, guard `scad_form=='C'`) + `visualize_all.py` + `__init__.py` export. 그림 텍스트 영어(env에 CJK 폰트 없음).
+
 ## 2026-06-15: GRL 부착층(`grl_attach_layer`) + MAE식 비대칭 decoder 폭(`decoder_half_dim`) + exp324–325
 
 두 구조 ablation 추가 (둘 다 default-off, **byte-identical**; `.trash/0615` 백업).

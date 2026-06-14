@@ -52,7 +52,15 @@ Output `<exp>/<dataset>/visualization/scad_diagnostics/`:
 | `scad_c_collapse_guard.png` | **Failure-mode check** — cluster separation ↑, intra-cluster variance (→0 = collapse alarm), and a `mean_sim × anom_var` phase trajectory distinguishing *genuine separation* from *collapse* |
 | `scad_c_optimization_signal.png` | grad balance SCAD/main, effective-weight schedule, anchor/negative sample counts (low-anchor = high-variance shading) |
 | `scad_c_detection_coupling.png` | `mean_sim` vs `pak_auc_f1` twin-axis + correlation scatter (negative corr ⇒ repulsion aids detection) |
-| `scad_c_summary.png` + `scad_c_diagnostics_summary.json` | one-page verdict dashboard + machine-readable summary (`crossed_gamma`, `saturated`, `collapse_suspected`, `grad_dominance`, `detection_corr`, `repulsion_success`) |
+| `scad_c_transfer.png` | **H-SCAD-C transfer** — separation ↑ vs `output_disc_gap` ↑ twin-axis, `disc(A+)`/`disc(U)` (U-drift watch), separation-vs-gap correlation (does the representation separation reach the output discrepancy the score uses?) |
+| `scad_c_summary.png` + `scad_c_diagnostics_summary.json` | one-page verdict dashboard + machine-readable summary (`apply_space`, `crossed_gamma`, `saturated`, `collapse_suspected`, `grad_dominance`, `detection_corr`, `gap_transferred`, `u_drift_suspected`, `output_absorption_suspected`, `transfer_corr_sep_gap`, `repulsion_success`, `transfer_success`) |
+
+**Projection vs hidden (H-SCAD-C)**: the same module serves both `scad_apply_space`
+values. Figures are tagged `[projection]` (SCAD-C, exp321) or `[hidden_final]`
+(H-SCAD-C, exp326) in their suptitle, and `apply_space` is recorded in the summary
+JSON. The `scad_c_transfer.png` figure + transfer fields are driven by the
+behavior-neutral `train_scad_output_disc_gap` / `_disc_anom_mean` / `_disc_u_mean`
+series (logged for every SCAD run, never fed into the loss).
 
 **Guarded no-op**: for Form A/B / non-SCAD / GRL runs the C-series are constant
 0.0, so `has_scad_c()` returns False and **nothing is written** — the existing

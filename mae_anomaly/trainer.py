@@ -364,6 +364,9 @@ class Trainer:
             'train_scad_c_gamma': [],               # Form C: gamma threshold (echo)
             'train_scad_c_n_anchor': [],            # Form C: # anomaly anchors
             'train_scad_c_n_u': [],                 # Form C: # U(background) negatives
+            'train_scad_output_disc_gap': [],       # transfer: disc(A+) − disc(U) (hidden/proj → output)
+            'train_scad_disc_anom_mean': [],        # transfer: mean output discrepancy on A+ patches
+            'train_scad_disc_u_mean': [],           # transfer: mean output discrepancy on U patches (drift watch)
             'train_scad_lambda': [],            # adaptive λ (raw value)
             'train_scad_adaptive_lambda': [],   # adaptive λ (clamped to [0, 10])
             'train_scad_ramp': [],              # sigmoid ramp ∈ [0, 1]
@@ -661,6 +664,19 @@ class Trainer:
                 'scad_z_separation': 0.0,
                 'scad_z_anom_var': 0.0,
                 'scad_z_norm_var': 0.0,
+                # Form-C diagnostics — MUST be initialized here or the per-batch accumulation
+                # loop (`for key in epoch_losses`) skips them and they log as 0.0 (latent bug
+                # fixed 2026-06-15; previously these never aggregated into history).
+                'scad_c_mean_sim': 0.0,
+                'scad_c_active_pair_frac': 0.0,
+                'scad_c_active_sim_mean': 0.0,
+                'scad_c_gamma': 0.0,
+                'scad_c_n_anchor': 0,
+                'scad_c_n_u': 0,
+                # Transfer diagnostics (hidden/projection → output discrepancy)
+                'scad_output_disc_gap': 0.0,
+                'scad_disc_anom_mean': 0.0,
+                'scad_disc_u_mean': 0.0,
                 'scad_lambda': 0.0,
                 'scad_adaptive_lambda': 0.0,
                 'scad_ramp': 0.0,
@@ -1541,6 +1557,9 @@ class Trainer:
                 self.history['train_scad_c_gamma'].append(epoch_losses.get('scad_c_gamma', 0.0))
                 self.history['train_scad_c_n_anchor'].append(epoch_losses.get('scad_c_n_anchor', 0))
                 self.history['train_scad_c_n_u'].append(epoch_losses.get('scad_c_n_u', 0))
+                self.history['train_scad_output_disc_gap'].append(epoch_losses.get('scad_output_disc_gap', 0.0))
+                self.history['train_scad_disc_anom_mean'].append(epoch_losses.get('scad_disc_anom_mean', 0.0))
+                self.history['train_scad_disc_u_mean'].append(epoch_losses.get('scad_disc_u_mean', 0.0))
                 self.history['train_scad_lambda'].append(epoch_losses.get('scad_lambda', 0.0))
                 self.history['train_scad_adaptive_lambda'].append(epoch_losses.get('scad_adaptive_lambda', 0.0))
                 self.history['train_scad_ramp'].append(epoch_losses.get('scad_ramp', 0.0))

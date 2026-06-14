@@ -689,6 +689,23 @@
       ],
       "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True decoder_half_dim=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
       "_note": "271 + decoder_half_dim=True: MAE식 비대칭 decoder 폭. teacher/student decoder·mask·proj·GRL head = d_model//2 (512→256), decoder ff=256*4=1024, nhead 재사용, decoder_embed(512→256). encoder는 512 유지. FM/discrepancy 무변경."
+    },
+    {
+      "name": "exp326_hscadC_w10_hidden",
+      "exp_num": 326,
+      "dir_suffix": "hscadC_w10_hidden",
+      "set": "C",
+      "dataset": [
+        "PSM",
+        "SWaT_A1A2",
+        "WaDi_A1",
+        "WaDi_A2",
+        "SMD_concat",
+        "SMAP_concat",
+        "MSL_concat"
+      ],
+      "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True use_grl=False use_scad=True scad_form=C scad_gamma=0.0 scad_one_sided=True scad_loss_weight=1.0 scad_proj_head_arch=linear scad_apply_space=hidden_final amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+      "_note": "H-SCAD-C: SCAD Form C one-sided repulsion을 projection z가 아니라 final student_hidden에 직접 적용(scad_apply_space=hidden_final). parameter-free LayerNorm+L2norm, projection head 없음. score path(student_hidden→output_projection→discrepancy)와 정합. exp321(projection C linear)과 단일변수 비교(E3 vs E4). 6 scad_c metric + transfer 진단(output_disc_gap) 공유."
     }
   ]
 }
