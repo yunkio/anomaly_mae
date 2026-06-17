@@ -178,6 +178,21 @@ def main():
                 exp_dir=experiment_dir, config=config,
             ).generate_all()
 
+        # GRL adversarial-game diagnostics — guarded no-op unless classifier-GRL run
+        # (has_grl() also re-checks). Runs after best_model + epoch viz so it relocates
+        # the legacy GRL pngs. try/except mirrors run_base so a viz error can't break the run.
+        if (history and getattr(config, 'use_grl', False)
+                and str(getattr(config, 'grl_mode', 'classifier')) == 'classifier'):
+            try:
+                from mae_anomaly.visualization import GrlDiagnosticsVisualizer
+                grl_diag_dir = os.path.join(vis_dir, 'grl_diagnostics')
+                GrlDiagnosticsVisualizer(
+                    history=history, output_dir=grl_diag_dir,
+                    exp_dir=experiment_dir, config=config,
+                ).generate_all()
+            except Exception as _grl_e:
+                print(f"  - [grl_diagnostics] skipped due to error: {_grl_e}")
+
     # 6. Training Progress Visualizations (requires re-training)
     if args.retrain and exp_data['best_config']:
         progress_dir = os.path.join(vis_dir, 'training_progress')

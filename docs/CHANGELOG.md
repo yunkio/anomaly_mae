@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-17: GRL effect diagnostics (`grl_diagnostics/`) + 6 new GRL scalars
+
+SCAD-C가 `scad_diagnostics/`로 효과를 검증하듯, **GRL(gradient-reversal adversarial classifier)의 효과 검증** 진단을 추가. GRL은 적대적 minimax라 "성공"이 직관 반대(classifier가 나빠짐=balanced_acc→0.5가 목표)인데, 그 0.5가 **starvation/class-collapse와 구분 불가** → 진단의 핵심은 **진짜 invariance vs 죽은 게임 구분**. (이 세션 분석에서 발견한 #1 실패모드 = adaptive-λ starvation `effective_weight→0`.)
+
+**신규 per-epoch 스칼라 6개**(전부 cheap·대부분 이미 계산됨·**loss 미투입 → 학습 byte-identical**): `train_grl_ramp_lambda`(Ganin 반전강도 `model._grl_lambda`), `train_grl_pos_logit_mean`/`_neg_logit_mean`(연속 invariance — student가 classifier 속일수록 수렴), `train_grl_logit_margin`(mean|logit| 확신도), `train_grl_main_grad_norm`/`_adv_grad_norm`(절대 적대 압력, adaptive-λ grad 블록 재사용). 기존 7개(cls_loss/balanced_acc/anomaly_acc/normal_acc/acc_gap/lambda/effective_weight)에 추가. `loss.py`는 기존 no_grad 블록에서 logit 통계 계산, `trainer.py`는 epoch_losses init+accumulation+history append(SCAD 집계버그 회피 — init·loss_dict 양쪽 등록).
+
+**`GrlDiagnosticsVisualizer`**(`mae_anomaly/visualization/grl_diagnostics_visualizer.py`) — 6 figure(scad 미러): `grl_adversarial_progress`(balanced_acc→0.5·실제 적대 압력=eff_w×‖grad_adv‖, ≈0=STARVED) / `grl_game_health`(TPR·TNR 동시궤적·acc_gap·phase plot으로 invariance vs class-collapse 구분) / `grl_optimization_signal`(λ ratio·‖grad‖ 절대값·starvation fraction) / `grl_detection_coupling`(invariance vs pak_f1, **post-warmup corr**) / `grl_transfer`(hidden invariance vs disc_snr, post-warmup corr — flat/음수=압력이 hidden에 갇힘) / `grl_diagnostics_summary` + JSON(verdict: STARVED/DEGENERATE/no-invariance/no-transfer/EFFECTIVE). 모든 corr은 **post-warmup 구간 한정**(pre-warmup 0-신호 artifact 제거).
+
+**기존 GRL viz 이동**: `_relocate_existing()`가 `best_model/GRL_contribution_trend.png`·`epoch_metrics/epoch_grl.png`를 `grl_diagnostics/`로 **이동**(named 2개만, 삭제 없음, 없으면 no-op) → GRL 시각화 단일화.
+
+**무영향**: `has_grl()` 가드 → `use_grl & grl_mode=='classifier'`일 때만 생성(SCAD/plain/WDGRL no-op). `run_base_experiments.py`(best_model+scad 뒤) + `visualize_all.py` + `__init__` export. 실행 중 exp324(구 코드)는 무영향, exp325+ 신규 subprocess부터 적용.
+
+**검증(GPU 미사용)**: ① 4파일 diff **additive-only**(0 removed) + 신규 스칼라 no_grad/metric → 학습 numerics byte-identical. ② **실제 exp271 PSM** history로 6 figure+verdict("GRL DEGENERATE — balanced_acc 0.50→0.22 below-chance") 생성. ③ 합성 13-series(invariance+transfer)→verdict "EFFECTIVE"(transfer corr 1.00). ④ relocation/guard/logit-formula 테스트 PASS. ⑤ 적대적 다중 에이전트 검증.
+
 ## 2026-06-17: FM↔OD loss balancer (`fm_balance_mode`) + exp327–329
 
 271의 FM **adaptive weight 계산 방식**을, 기존 grad-norm ratio 대신 multi-task loss balancer로 교체하는 옵션 추가. balance 대상은 **OD↔FM 쌍만**(reconstruction은 `total_loss`에 weight 1로 고정, balance 비관여). GRL은 **건드리지 않음**(자체 `loss_balance_mode` 유지, 271=`adaptive_lambda_legacy`). default `'none'`은 exp271과 **byte-identical**.

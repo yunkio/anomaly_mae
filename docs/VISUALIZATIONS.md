@@ -33,7 +33,8 @@ mae_anomaly/visualization/
 ├── stage2_visualizer.py         # Stage2Visualizer class
 ├── best_model_visualizer.py     # BestModelVisualizer class
 ├── training_visualizer.py       # TrainingProgressVisualizer class
-└── scad_diagnostics_visualizer.py  # ScadDiagnosticsVisualizer (SCAD-C only)
+├── scad_diagnostics_visualizer.py  # ScadDiagnosticsVisualizer (SCAD-C only)
+└── grl_diagnostics_visualizer.py   # GrlDiagnosticsVisualizer (classifier-GRL only)
 ```
 
 ### SCAD-C Diagnostics (`scad_diagnostics/` sub-dir) — 2026-06-15
@@ -68,6 +69,46 @@ pipeline is byte-for-byte unchanged. Wired in `run_base_experiments.py` (after t
 best_model viz, guarded by `use_scad and scad_form=='C'`) and `visualize_all.py`.
 Only the post-warmup region is used for the verdict (during teacher-only warmup
 the student forward is skipped, so C-metrics are 0).
+
+### GRL Diagnostics (`grl_diagnostics/` sub-dir) — 2026-06-17
+
+`GrlDiagnosticsVisualizer` is the GRL analogue of the SCAD-C diagnostics: *is the
+gradient-reversal adversarial game actually working — i.e. is the student pushed to
+anomaly-INVARIANT hidden features — and does that translate into better detection?*
+GRL "success" is counter-intuitive (the classifier getting WORSE, `balanced_acc`→0.5,
+is the goal), but `balanced_acc`→0.5 is ALSO what STARVATION or class-collapse look
+like, so the module's job is to **disambiguate genuine invariance from a dead game**.
+It reads the per-epoch `train_grl_*` series and `disc_snr`/`pak_auc_f1` from
+`epoch_metrics.json`. All correlations use the **post-warmup** region only.
+
+New per-epoch scalars logged (2026-06-17, all cheap, mostly already computed — never
+fed into the loss, so training is byte-identical): `train_grl_ramp_lambda` (Ganin
+reversal strength `model._grl_lambda`), `train_grl_pos_logit_mean` / `_neg_logit_mean`
+(continuous invariance — converge as the student fools the classifier),
+`train_grl_logit_margin` (mean |logit| confidence), `train_grl_main_grad_norm` /
+`_adv_grad_norm` (absolute adversarial pressure, reused from the adaptive-λ grad block).
+These join the pre-existing `train_grl_cls_loss / balanced_acc / anomaly_acc / normal_acc /
+acc_gap / lambda / effective_weight`.
+
+Output `<exp>/<dataset>/visualization/grl_diagnostics/`:
+
+| File | What it shows |
+|---|---|
+| `grl_adversarial_progress.png` | `balanced_acc` (→0.5 = invariance), classifier BCE + confidence, and **actual adversarial pressure** = `effective_weight × ramp` / `eff_w × ‖grad_adv‖` (≈0 ⇒ STARVED, the #1 failure mode) |
+| `grl_game_health.png` | **Failure-mode check** — TPR vs TNR co-trajectory, `acc_gap` degeneracy alarm, and a `balanced_acc × acc_gap` phase trajectory distinguishing *genuine invariance* from *class-collapse* |
+| `grl_optimization_signal.png` | adaptive λ ratio (clamp 0..10), absolute `‖grad_main‖` vs `‖grad_adv‖` (log), effective-weight/ramp schedule + **starvation fraction** |
+| `grl_detection_coupling.png` | invariance (`1−balanced_acc`) vs `pak_auc_f1` twin-axis + post-warmup correlation scatter |
+| `grl_transfer.png` | **invariance→discrepancy transfer** — hidden invariance (`−|pos−neg logit|`) vs `disc_snr` twin-axis + post-warmup corr (flat/negative ⇒ adversarial pressure stuck in hidden, never reaches the score) |
+| `grl_diagnostics_summary.png` + `grl_diagnostics_summary.json` | one-page verdict dashboard + machine-readable summary (`grl_active`, `starvation_fraction`, `invariance_achieved`, `class_collapse_suspected`, `acc_gap_late_median`, `detection_coupled`, `transferred`, `transfer_corr_invariance_disc`, …). Verdict resolves one of: STARVED / DEGENERATE (one-class collapse or below-chance over-fooled) / no-invariance / no-transfer / EFFECTIVE |
+
+**Relocation**: at the end of `generate_all()` the module **moves** the pre-existing GRL
+figures (`best_model/GRL_contribution_trend.png`, `epoch_metrics/epoch_grl.png`) into
+`grl_diagnostics/` so all GRL visuals live in one place (only those two named files,
+never deletes, no-op if absent).
+
+**Guarded no-op**: `has_grl()` returns False (writes nothing) unless `use_grl=True` and
+`grl_mode=='classifier'` — SCAD / plain / WDGRL runs are byte-for-byte unchanged. Wired in
+`run_base_experiments.py` (after best_model + scad diagnostics) and `visualize_all.py`.
 
 ### Dynamic Color Management
 

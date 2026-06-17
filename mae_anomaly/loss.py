@@ -316,6 +316,10 @@ class SelfDistillationLoss(nn.Module):
                             'grl_balanced_acc': 0.5,
                             'grl_anomaly_acc': 0.0,
                             'grl_normal_acc': 1.0,
+                            # GRL diagnostics (2026-06-17): continuous invariance signals
+                            'grl_pos_logit_mean': 0.0,
+                            'grl_neg_logit_mean': 0.0,
+                            'grl_logit_margin': 0.0,
                         }
                     else:
                         # Balanced accuracy on ALL patches (monitoring, no grad)
@@ -325,6 +329,12 @@ class SelfDistillationLoss(nn.Module):
                             _tpr = (valid_logits[_pos_m_all] > 0).float().mean() if _pos_m_all.any() else torch.tensor(0.5, device=teacher_output.device)
                             _tnr = (valid_logits[_neg_m_all] <= 0).float().mean() if _neg_m_all.any() else torch.tensor(0.5, device=teacher_output.device)
                             _balanced_acc = (_tpr + _tnr) / 2
+                            # GRL diagnostics (2026-06-17): logit-level continuous invariance.
+                            # As the student fools the classifier, pos/neg logit means converge
+                            # (more sensitive than thresholded acc); |logit| mean = confidence.
+                            _pos_logit_mean = valid_logits[_pos_m_all].mean() if _pos_m_all.any() else torch.tensor(0.0, device=teacher_output.device)
+                            _neg_logit_mean = valid_logits[_neg_m_all].mean() if _neg_m_all.any() else torch.tensor(0.0, device=teacher_output.device)
+                            _logit_margin = valid_logits.abs().mean()
 
                         # Select subset for loss computation
                         if self.grl_balanced_sampling:
@@ -364,6 +374,9 @@ class SelfDistillationLoss(nn.Module):
                             'grl_balanced_acc': _balanced_acc.item(),
                             'grl_anomaly_acc': _tpr.item(),
                             'grl_normal_acc': _tnr.item(),
+                            'grl_pos_logit_mean': _pos_logit_mean.item(),
+                            'grl_neg_logit_mean': _neg_logit_mean.item(),
+                            'grl_logit_margin': _logit_margin.item(),
                         }
                 else:
                     _grl_results = None
@@ -535,6 +548,10 @@ class SelfDistillationLoss(nn.Module):
             loss_dict['grl_balanced_acc'] = _grl['grl_balanced_acc']
             loss_dict['grl_anomaly_acc'] = _grl['grl_anomaly_acc']
             loss_dict['grl_normal_acc'] = _grl['grl_normal_acc']
+            # GRL diagnostics (2026-06-17): continuous invariance signals
+            loss_dict['grl_pos_logit_mean'] = _grl.get('grl_pos_logit_mean', 0.0)
+            loss_dict['grl_neg_logit_mean'] = _grl.get('grl_neg_logit_mean', 0.0)
+            loss_dict['grl_logit_margin'] = _grl.get('grl_logit_margin', 0.0)
             if _grl['grl_cls_loss_tensor'] is not None:
                 loss_tensors['grl_cls_loss'] = _grl['grl_cls_loss_tensor']
 

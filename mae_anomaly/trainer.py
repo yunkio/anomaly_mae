@@ -384,6 +384,17 @@ class Trainer:
             'train_grl_acc_gap': [],
             'train_grl_lambda': [],
             'train_grl_effective_weight': [],  # lambda * grl_loss_weight = actual multiplier
+            # GRL diagnostics (2026-06-17): adversarial-game health (all cheap scalars, mostly
+            # already computed). ramp_lambda = Ganin gradient-reversal strength (model._grl_lambda);
+            # pos/neg_logit_mean = continuous invariance (converge as student fools classifier);
+            # logit_margin = classifier confidence (mean|logit|); main/adv_grad_norm = absolute
+            # adversarial pressure on the student decoder (reused from the adaptive-λ grad block).
+            'train_grl_ramp_lambda': [],
+            'train_grl_pos_logit_mean': [],
+            'train_grl_neg_logit_mean': [],
+            'train_grl_logit_margin': [],
+            'train_grl_main_grad_norm': [],
+            'train_grl_adv_grad_norm': [],
             # SCAD metrics (populated only when use_scad=True) — mirror GRL pattern
             'train_scad_loss': [],
             'train_scad_n_anom': [],
@@ -841,6 +852,11 @@ class Trainer:
             epoch_losses.update({
                 'grl_cls_loss': 0.0, 'grl_balanced_acc': 0.0, 'grl_lambda': 0.0,
                 'grl_anomaly_acc': 0.0, 'grl_normal_acc': 0.0, 'grl_effective_weight': 0.0,
+                # GRL diagnostics (2026-06-17) — per-batch, accumulated+averaged like the above.
+                # MUST be initialized here or the `for key in epoch_losses` loop skips them (→0.0).
+                # (ramp_lambda is appended directly from model._grl_lambda, not accumulated here.)
+                'grl_pos_logit_mean': 0.0, 'grl_neg_logit_mean': 0.0, 'grl_logit_margin': 0.0,
+                'grl_main_grad_norm': 0.0, 'grl_adv_grad_norm': 0.0,
             })
         if getattr(self.config, 'use_scad', False):
             epoch_losses.update({
@@ -1198,6 +1214,11 @@ class Trainer:
                         loss = loss + _grl_effective * _grl_cls_loss
                         loss_dict['grl_lambda'] = _grl_lambda_adp.item()
                         loss_dict['grl_effective_weight'] = _grl_effective
+                        # GRL diagnostics (2026-06-17): absolute adversarial pressure — reuse the
+                        # grad norms already computed above (no extra autograd). main vs adv norm
+                        # exposes starvation in ABSOLUTE terms (grl_lambda only gives the ratio).
+                        loss_dict['grl_main_grad_norm'] = float(_main_g.norm().item()) if _main_g is not None else 0.0
+                        loss_dict['grl_adv_grad_norm'] = float(_grl_g.norm().item()) if _grl_g is not None else 0.0
                     else:
                         # Fixed weight: no adaptive lambda, direct grl_loss_weight
                         _grl_lambda_adp = torch.tensor(1.0, device=loss.device)
@@ -1741,6 +1762,14 @@ class Trainer:
                     abs(epoch_losses.get('grl_normal_acc', 0.0) - epoch_losses.get('grl_anomaly_acc', 0.0)))
                 self.history['train_grl_lambda'].append(epoch_losses['grl_lambda'])
                 self.history['train_grl_effective_weight'].append(epoch_losses.get('grl_effective_weight', 0.0))
+                # GRL diagnostics (2026-06-17): ramp_lambda appended directly (epoch-level scalar,
+                # set per-epoch before the batch loop); the rest are epoch-mean from epoch_losses.
+                self.history['train_grl_ramp_lambda'].append(float(getattr(self.model, '_grl_lambda', 0.0)))
+                self.history['train_grl_pos_logit_mean'].append(epoch_losses.get('grl_pos_logit_mean', 0.0))
+                self.history['train_grl_neg_logit_mean'].append(epoch_losses.get('grl_neg_logit_mean', 0.0))
+                self.history['train_grl_logit_margin'].append(epoch_losses.get('grl_logit_margin', 0.0))
+                self.history['train_grl_main_grad_norm'].append(epoch_losses.get('grl_main_grad_norm', 0.0))
+                self.history['train_grl_adv_grad_norm'].append(epoch_losses.get('grl_adv_grad_norm', 0.0))
                 # _grl_lambda is now set BEFORE train_epoch (see above), no post-epoch update needed
 
             if getattr(self.config, 'use_scad', False):

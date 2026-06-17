@@ -2312,6 +2312,23 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
             print(f"  [{exp_name}] WARN dashboard render failed: "
                   f"{type(_render_e).__name__}: {_render_e}", flush=True)
 
+    # GRL adversarial-game diagnostics — additive, guarded no-op for non-GRL runs.
+    # Placed AFTER the epoch dashboard (epoch_grl.png, rendered in the finally above)
+    # AND the best_model viz (GRL_contribution_trend.png) so _relocate_existing() can
+    # consolidate BOTH legacy GRL pngs into grl_diagnostics/. has_grl() is False for
+    # SCAD/plain/WDGRL → nothing written (existing pipeline byte-for-byte unchanged).
+    if (getattr(config, 'use_grl', False)
+            and str(getattr(config, 'grl_mode', 'classifier')) == 'classifier' and history):
+        try:
+            from mae_anomaly.visualization import GrlDiagnosticsVisualizer
+            grl_diag_dir = os.path.join(exp_dir, 'visualization', 'grl_diagnostics')
+            GrlDiagnosticsVisualizer(
+                history=history, output_dir=grl_diag_dir, exp_dir=exp_dir, config=config,
+            ).generate_all()
+            plt.close('all')
+        except Exception as _grl_e:
+            print(f"  - [grl_diagnostics] skipped due to error: {_grl_e}")
+
     pt = timing.get('pure_train_time', timing.get('train_time', 0))
     tpe = timing.get('train_per_epoch', 0)
     be = timing.get('best_epoch', '?')
