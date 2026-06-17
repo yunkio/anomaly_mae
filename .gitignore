@@ -65,12 +65,11 @@ references/
 ResearchProposal/
 comparison/results/
 docs/report_images/
-# paper workspaces (2026-06-13): paper/ · paper_gpt/ · paper_legacy/ 등 모든 논문 워크스페이스는
-# 로컬 전용 scratch 로 git 추적에서 제외. (정책 변경: 이전엔 paper/ 를 Phase 게이트마다 commit 했으나
-# 사용자 지시로 전체 ignore. 과거 작업물은 git history 에 그대로 보존됨.)
-paper/
-paper_gpt/
-paper_legacy/
+# paper workspaces (2026-06-13, glob 확장 2026-06-18): paper / paper_gpt / paper_legacy /
+# paper-gpt / paper_feedback / paper_feedback_gpt 등 'paper' 로 시작하는 모든 최상위 논문
+# 워크스페이스는 로컬 전용 scratch 로 git 추적에서 전부 제외. (정책 변경: 이전엔 paper/ 를
+# Phase 게이트마다 commit 했으나 사용자 지시로 전체 ignore. 과거 작업물은 git history 에 보존됨.)
+/paper*/
 .claude/
 CLAUDE.md
 .poe/
