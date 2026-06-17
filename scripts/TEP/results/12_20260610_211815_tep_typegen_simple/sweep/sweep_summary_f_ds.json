@@ -1,0 +1,92 @@
+[
+  {
+    "fold": "f_ds",
+    "model": "pca_error",
+    "labeled_pct": 0,
+    "kept_faulty_runs": 60,
+    "seen_pak_auc_f1": 0.7469804610317022,
+    "unseen_pak_auc_f1": 0.9510744107736048,
+    "full_pak_auc_f1": 0.9241368362501067
+  },
+  {
+    "fold": "f_ds",
+    "model": "sensor_range",
+    "labeled_pct": 0,
+    "kept_faulty_runs": 60,
+    "seen_pak_auc_f1": 0.009045562152859628,
+    "unseen_pak_auc_f1": 0.5816642594691234,
+    "full_pak_auc_f1": 0.47132453874682834
+  },
+  {
+    "fold": "f_ds",
+    "model": "pca_error",
+    "labeled_pct": 20,
+    "kept_faulty_runs": 48,
+    "seen_pak_auc_f1": 0.748055076919247,
+    "unseen_pak_auc_f1": 0.9514073186418958,
+    "full_pak_auc_f1": 0.9240333285874223
+  },
+  {
+    "fold": "f_ds",
+    "model": "sensor_range",
+    "labeled_pct": 20,
+    "kept_faulty_runs": 48,
+    "seen_pak_auc_f1": 0.009045562152859628,
+    "unseen_pak_auc_f1": 0.5816642594691234,
+    "full_pak_auc_f1": 0.47132453874682834
+  },
+  {
+    "fold": "f_ds",
+    "model": "pca_error",
+    "labeled_pct": 50,
+    "kept_faulty_runs": 30,
+    "seen_pak_auc_f1": 0.7566040256027364,
+    "unseen_pak_auc_f1": 0.9525629831506451,
+    "full_pak_auc_f1": 0.923761045740071
+  },
+  {
+    "fold": "f_ds",
+    "model": "sensor_range",
+    "labeled_pct": 50,
+    "kept_faulty_runs": 30,
+    "seen_pak_auc_f1": 0.009473225114295665,
+    "unseen_pak_auc_f1": 0.5827252630729338,
+    "full_pak_auc_f1": 0.4722776916067309
+  },
+  {
+    "fold": "f_ds",
+    "model": "pca_error",
+    "labeled_pct": 80,
+    "kept_faulty_runs": 12,
+    "seen_pak_auc_f1": 0.8356281190733991,
+    "unseen_pak_auc_f1": 0.9559242725612696,
+    "full_pak_auc_f1": 0.9258070834063443
+  },
+  {
+    "fold": "f_ds",
+    "model": "sensor_range",
+    "labeled_pct": 80,
+    "kept_faulty_runs": 12,
+    "seen_pak_auc_f1": 0.02083913615357611,
+    "unseen_pak_auc_f1": 0.5873610633676855,
+    "full_pak_auc_f1": 0.4770101461717108
+  },
+  {
+    "fold": "f_ds",
+    "model": "pca_error",
+    "labeled_pct": 100,
+    "kept_faulty_runs": 0,
+    "seen_pak_auc_f1": 0.9986354268728236,
+    "unseen_pak_auc_f1": 0.9952069423377533,
+    "full_pak_auc_f1": 0.9344508872801549
+  },
+  {
+    "fold": "f_ds",
+    "model": "sensor_range",
+    "labeled_pct": 100,
+    "kept_faulty_runs": 0,
+    "seen_pak_auc_f1": 0.9983969261013802,
+    "unseen_pak_auc_f1": 0.8687444946268797,
+    "full_pak_auc_f1": 0.8071605497345632
+  }
+]

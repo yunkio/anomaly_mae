@@ -1,0 +1,83 @@
+{
+  "model_name": "sensor_range",
+  "experiment": "tep_typegen_f_unk",
+  "timestamp": "2026-06-10T21:59:30.836118",
+  "timing": {
+    "train_time": 0.321305513381958,
+    "inference_time": 0.04545235633850098
+  },
+  "normalize_mode": "minmax_noclip",
+  "model_params": {
+    "sensor_range": "(0, 1)",
+    "count_sensors": "False"
+  },
+  "train_npz": "train_f_unk.npz",
+  "eval_time": 198.69482898712158,
+  "boundary_policy": "pointwise (no temporal mixing)",
+  "partitions": {
+    "full": {
+      "n_points": 422400,
+      "n_regions": 400,
+      "faults": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    "exclhard_": {
+      "n_points": 96000,
+      "n_regions": 60,
+      "faults": [
+        3,
+        9,
+        15
+      ]
+    },
+    "seen_": {
+      "n_points": 134400,
+      "n_regions": 100,
+      "faults": [
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    "unseen_": {
+      "n_points": 268800,
+      "n_regions": 240,
+      "faults": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7,
+        8,
+        10,
+        11,
+        12,
+        13,
+        14
+      ]
+    }
+  }
+}

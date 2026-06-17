@@ -1,0 +1,38 @@
+[
+  {
+    "fold": "f_step",
+    "model": "pca_error",
+    "labeled_pct": 80,
+    "kept_faulty_runs": 12,
+    "seen_pak_auc_f1": 0.9748044052995805,
+    "unseen_pak_auc_f1": 0.9389718749929328,
+    "full_pak_auc_f1": 0.9228804959559276
+  },
+  {
+    "fold": "f_step",
+    "model": "sensor_range",
+    "labeled_pct": 80,
+    "kept_faulty_runs": 12,
+    "seen_pak_auc_f1": 0.3035118462916791,
+    "unseen_pak_auc_f1": 0.6266056985893593,
+    "full_pak_auc_f1": 0.4684654513735862
+  },
+  {
+    "fold": "f_step",
+    "model": "pca_error",
+    "labeled_pct": 100,
+    "kept_faulty_runs": 0,
+    "seen_pak_auc_f1": 0.9996765301816258,
+    "unseen_pak_auc_f1": 0.9937317267006865,
+    "full_pak_auc_f1": 0.9344508872801549
+  },
+  {
+    "fold": "f_step",
+    "model": "sensor_range",
+    "labeled_pct": 100,
+    "kept_faulty_runs": 0,
+    "seen_pak_auc_f1": 0.9461267082953959,
+    "unseen_pak_auc_f1": 0.8497483158828629,
+    "full_pak_auc_f1": 0.8071605497345632
+  }
+]

@@ -1,0 +1,83 @@
+{
+  "model_name": "nn_distance",
+  "experiment": "tep_typegen_f_ds",
+  "timestamp": "2026-06-11T00:55:31.527476",
+  "timing": {
+    "train_time": 0.5387187004089355,
+    "inference_time": 1795.6865928173065
+  },
+  "normalize_mode": "minmax_noclip",
+  "n_runs": 1,
+  "model_params": {
+    "distance": "euclidean"
+  },
+  "train_npz": "train_f_ds.npz",
+  "eval_time": 549.3142812252045,
+  "boundary_policy": "pointwise (no temporal mixing)",
+  "partitions": {
+    "full": {
+      "n_points": 422400,
+      "n_regions": 400,
+      "faults": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    "exclhard_": {
+      "n_points": 96000,
+      "n_regions": 60,
+      "faults": [
+        3,
+        9,
+        15
+      ]
+    },
+    "seen_": {
+      "n_points": 76800,
+      "n_regions": 40,
+      "faults": [
+        13,
+        14
+      ]
+    },
+    "unseen_": {
+      "n_points": 326400,
+      "n_regions": 300,
+      "faults": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7,
+        8,
+        10,
+        11,
+        12,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    }
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "model_name": "random",
+  "experiment": "tep_typegen_f_step",
+  "timestamp": "2026-06-11T01:17:00.557171",
+  "timing": {
+    "train_time": 0.3147118091583252,
+    "inference_time": 0.010228395462036133
+  },
+  "normalize_mode": "minmax_noclip",
+  "n_runs": 5,
+  "model_params": {
+    "seed": "None"
+  },
+  "train_npz": "train_f_step.npz",
+  "eval_time": 4129.750347614288,
+  "boundary_policy": "pointwise (no temporal mixing)",
+  "partitions": {
+    "full": {
+      "n_points": 422400,
+      "n_regions": 400,
+      "faults": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    "exclhard_": {
+      "n_points": 96000,
+      "n_regions": 60,
+      "faults": [
+        3,
+        9,
+        15
+      ]
+    },
+    "seen_": {
+      "n_points": 153600,
+      "n_regions": 120,
+      "faults": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    "unseen_": {
+      "n_points": 249600,
+      "n_regions": 220,
+      "faults": [
+        8,
+        10,
+        11,
+        12,
+        13,
+        14,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    }
+  }
+}

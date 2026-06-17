@@ -1,0 +1,83 @@
+{
+  "model_name": "random",
+  "experiment": "tep_typegen_f_ds",
+  "timestamp": "2026-06-11T01:45:40.575669",
+  "timing": {
+    "train_time": 0.4926261901855469,
+    "inference_time": 0.006534099578857422
+  },
+  "normalize_mode": "minmax_noclip",
+  "n_runs": 5,
+  "model_params": {
+    "seed": "None"
+  },
+  "train_npz": "train_f_ds.npz",
+  "eval_time": 2939.772680282593,
+  "boundary_policy": "pointwise (no temporal mixing)",
+  "partitions": {
+    "full": {
+      "n_points": 422400,
+      "n_regions": 400,
+      "faults": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    "exclhard_": {
+      "n_points": 96000,
+      "n_regions": 60,
+      "faults": [
+        3,
+        9,
+        15
+      ]
+    },
+    "seen_": {
+      "n_points": 76800,
+      "n_regions": 40,
+      "faults": [
+        13,
+        14
+      ]
+    },
+    "unseen_": {
+      "n_points": 326400,
+      "n_regions": 300,
+      "faults": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7,
+        8,
+        10,
+        11,
+        12,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    }
+  }
+}

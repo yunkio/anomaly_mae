@@ -1,0 +1,83 @@
+{
+  "model_name": "l2_norm",
+  "experiment": "tep_typegen_f_step",
+  "timestamp": "2026-06-10T23:46:18.321284",
+  "timing": {
+    "train_time": 0.3523697853088379,
+    "inference_time": 0.03282022476196289
+  },
+  "normalize_mode": "minmax_noclip",
+  "n_runs": 1,
+  "model_params": {
+    "ord": "2"
+  },
+  "train_npz": "train_f_step.npz",
+  "eval_time": 370.32601523399353,
+  "boundary_policy": "pointwise (no temporal mixing)",
+  "partitions": {
+    "full": {
+      "n_points": 422400,
+      "n_regions": 400,
+      "faults": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    "exclhard_": {
+      "n_points": 96000,
+      "n_regions": 60,
+      "faults": [
+        3,
+        9,
+        15
+      ]
+    },
+    "seen_": {
+      "n_points": 153600,
+      "n_regions": 120,
+      "faults": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    "unseen_": {
+      "n_points": 249600,
+      "n_regions": 220,
+      "faults": [
+        8,
+        10,
+        11,
+        12,
+        13,
+        14,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    }
+  }
+}

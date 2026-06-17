@@ -1,0 +1,83 @@
+{
+  "model_name": "pca_error",
+  "experiment": "tep_typegen_f_rand",
+  "timestamp": "2026-06-10T21:34:59.518338",
+  "timing": {
+    "train_time": 0.48905515670776367,
+    "inference_time": 3.1207306385040283
+  },
+  "normalize_mode": "minmax_noclip",
+  "model_params": {
+    "pca_dim": "auto",
+    "svd_solver": "full"
+  },
+  "train_npz": "train_f_rand.npz",
+  "eval_time": 339.4503905773163,
+  "boundary_policy": "per-run smoothing",
+  "partitions": {
+    "full": {
+      "n_points": 422400,
+      "n_regions": 400,
+      "faults": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    "exclhard_": {
+      "n_points": 96000,
+      "n_regions": 60,
+      "faults": [
+        3,
+        9,
+        15
+      ]
+    },
+    "seen_": {
+      "n_points": 115200,
+      "n_regions": 80,
+      "faults": [
+        8,
+        10,
+        11,
+        12
+      ]
+    },
+    "unseen_": {
+      "n_points": 288000,
+      "n_regions": 260,
+      "faults": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7,
+        13,
+        14,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    }
+  }
+}

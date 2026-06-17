@@ -1,0 +1,84 @@
+{
+  "model_name": "sensor_range",
+  "experiment": "tep_sweep_f_ds_l20",
+  "timestamp": "2026-06-11T00:59:37.801491",
+  "timing": {
+    "train_time": 0.4333460330963135,
+    "inference_time": 0.06062650680541992
+  },
+  "normalize_mode": "minmax_noclip",
+  "n_runs": 1,
+  "model_params": {
+    "sensor_range": "(0, 1)",
+    "count_sensors": "False"
+  },
+  "train_npz": "<in-memory>",
+  "eval_time": 275.18733501434326,
+  "boundary_policy": "pointwise (no temporal mixing)",
+  "partitions": {
+    "full": {
+      "n_points": 422400,
+      "n_regions": 400,
+      "faults": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    "exclhard_": {
+      "n_points": 96000,
+      "n_regions": 60,
+      "faults": [
+        3,
+        9,
+        15
+      ]
+    },
+    "seen_": {
+      "n_points": 76800,
+      "n_regions": 40,
+      "faults": [
+        13,
+        14
+      ]
+    },
+    "unseen_": {
+      "n_points": 326400,
+      "n_regions": 300,
+      "faults": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7,
+        8,
+        10,
+        11,
+        12,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    }
+  }
+}
