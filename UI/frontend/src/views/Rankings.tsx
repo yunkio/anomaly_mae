@@ -21,6 +21,7 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Card, fmt } from "../components/common";
 import MetricPicker from "../components/MetricPicker";
+import PerformanceBasis from "../components/PerformanceBasis";
 import PerDatasetRankTable from "../components/PerDatasetRankTable";
 import GifViewer from "../components/gif/GifViewer";
 import LineRace from "../components/LineRace";
@@ -78,6 +79,11 @@ export default function Rankings() {
   const togglePin = useStore((s) => s.togglePinModel);
   const isModelPinned = useStore((s) => s.isModelPinned);
   const modelIndex = useStore((s) => s.modelIndex);
+  // PERF_BASIS_SPEC: the chosen (epoch × threshold) basis re-resolves + re-ranks every
+  // aggregate/per-dataset value. Read at the top of the body (NOT inside an AsyncPanel
+  // render-prop) and thread into BOTH the universe + the active-set aggregate queries.
+  const epochBasis = useStore((s) => s.epochBasis);
+  const thresholdBasis = useStore((s) => s.thresholdBasis);
   const catalog = useGlobalMetricsCatalog();
 
   // FB-3 race over the pinned MODELS — needs a dataset (the shared scope). raceLeaves =
@@ -95,7 +101,7 @@ export default function Rankings() {
   // the full column universe (for the FB-2/FB-R4c-04 selector) — discovered from the
   // UNFILTERED aggregate so the selector never hides a column that exists (F5-analog). The
   // metric drives the universe (a metric only present on some leaves still lists its cols).
-  const fullAggQ = useRankingsAggregate({ metric });
+  const fullAggQ = useRankingsAggregate({ metric, epoch_basis: epochBasis, threshold_basis: thresholdBasis });
   const universe = useMemo(() => fullAggQ.data?.selectable_columns ?? [], [fullAggQ.data]);
   const defaultCols = useMemo(() => fullAggQ.data?.default_columns ?? [], [fullAggQ.data]);
   const columnMeta = useMemo(() => fullAggQ.data?.column_meta ?? {}, [fullAggQ.data]);
@@ -124,6 +130,8 @@ export default function Rankings() {
   const aggQ = useRankingsAggregate({
     metric,
     datasets: activeSet.length ? activeSet.join(",") : undefined,
+    epoch_basis: epochBasis,
+    threshold_basis: thresholdBasis,
   });
 
   // FB-3: the primary pinned animation is the interactive client <LineRace> (per-epoch,
@@ -180,6 +188,7 @@ export default function Rankings() {
             direction-aware). Changing it re-ranks the aggregate + per-dataset tables. */}
         <MetricPicker catalog={catalog.data ?? []} value={metric} onChange={setMetric} loading={catalog.isLoading} />
         <span className="grow" style={{ flex: 1 }} />
+        <PerformanceBasis />
       </div>
 
       {/* FB-2 / FB-R4c-03 / FB-R4c-04 — fully-configurable dataset-set selection. The

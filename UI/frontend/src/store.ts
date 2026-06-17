@@ -37,6 +37,12 @@ export function catColor(index: number): string {
 
 type Theme = "light" | "dark";
 
+/** Performance basis (PERF_BASIS_SPEC) — which epoch snapshot + which threshold the
+ * perf TABLES (rankings / leaderboard / compare matrix) resolve their values under.
+ * Default (best, optimal) = current behaviour, byte-identical. */
+export type EpochBasis = "best" | "last" | "300" | "350" | "400" | "450";
+export type ThresholdBasis = "optimal" | "anomaly_ratio";
+
 interface AppState {
   theme: Theme;
   liveRefresh: boolean;
@@ -46,6 +52,9 @@ interface AppState {
   scopeDatasetKey: string | null;
   scopeVariant: string | null;
   metricPick: string[];
+  /** perf basis (default best/optimal = current). persisted to tsmae.perfBasis. */
+  epochBasis: EpochBasis;
+  thresholdBasis: ThresholdBasis;
   setTheme: (t: Theme) => void;
   toggleTheme: () => void;
   setLiveRefresh: (v: boolean) => void;
@@ -57,6 +66,8 @@ interface AppState {
   modelIndex: (expId: string) => number;
   setScope: (datasetKey: string | null, variant: string | null) => void;
   setMetricPick: (keys: string[]) => void;
+  setEpochBasis: (b: EpochBasis) => void;
+  setThresholdBasis: (b: ThresholdBasis) => void;
   hydrate: () => Promise<void>;
 }
 
@@ -87,6 +98,8 @@ export const useStore = create<AppState>((set, getState) => ({
   scopeDatasetKey: null,
   scopeVariant: null,
   metricPick: [],
+  epochBasis: "best",
+  thresholdBasis: "optimal",
 
   setTheme: (theme) => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -127,6 +140,15 @@ export const useStore = create<AppState>((set, getState) => ({
   },
   setMetricPick: (metricPick) => set({ metricPick }),
 
+  setEpochBasis: (epochBasis) => {
+    void idbSet("tsmae.perfBasis", { epochBasis, thresholdBasis: getState().thresholdBasis });
+    set({ epochBasis });
+  },
+  setThresholdBasis: (thresholdBasis) => {
+    void idbSet("tsmae.perfBasis", { epochBasis: getState().epochBasis, thresholdBasis });
+    set({ thresholdBasis });
+  },
+
   hydrate: async () => {
     const theme = ((await idbGet("tsmae.theme")) as Theme) || "light";
     const pins = migratePins(await idbGet("tsmae.pins"));
@@ -137,7 +159,18 @@ export const useStore = create<AppState>((set, getState) => ({
         datasetKey: null,
         variant: null,
       };
+    const perfBasis =
+      ((await idbGet("tsmae.perfBasis")) as
+        | { epochBasis: EpochBasis; thresholdBasis: ThresholdBasis }
+        | undefined) || { epochBasis: "best", thresholdBasis: "optimal" };
     document.documentElement.setAttribute("data-theme", theme);
-    set({ theme, pins, scopeDatasetKey: scope.datasetKey ?? null, scopeVariant: scope.variant ?? null });
+    set({
+      theme,
+      pins,
+      scopeDatasetKey: scope.datasetKey ?? null,
+      scopeVariant: scope.variant ?? null,
+      epochBasis: perfBasis.epochBasis ?? "best",
+      thresholdBasis: perfBasis.thresholdBasis ?? "optimal",
+    });
   },
 }));

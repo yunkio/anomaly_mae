@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..dataaccess.repository import Repository
+from . import perf_basis
 
 
 def leaf_id(exp_id: str, dataset_key: str, variant: Optional[str]) -> str:
@@ -48,6 +49,8 @@ def compare_matrix(
     metrics: list[str],
     *,
     score_variant: str = "metrics",
+    epoch_basis: str = "best",
+    threshold_basis: str = "optimal",
 ) -> dict[str, Any]:
     """Best-epoch metric matrix across N leaves × M metrics (≥1 metric per call)."""
     resolved = _resolve_each(repo, leaves)
@@ -59,14 +62,15 @@ def compare_matrix(
     errors: list[str] = []
     for echo, exp, ds, leaf in resolved:
         cells: dict[str, Any] = {}
-        block: dict[str, Any] = {}
-        if leaf is not None and leaf.state == "complete":
+        complete = leaf is not None and leaf.state == "complete"
+        if complete:
             b = repo.load_bundle(exp, ds, leaf, want={"metadata"})
-            if b.metadata:
-                block = b.metadata.score_variants.get(score_variant, {}) or {}
             errors.extend(b.errors)
         for k in metrics:
-            val = block.get(k)
+            val = (perf_basis.resolve_value(
+                repo, exp, ds, leaf, k,
+                epoch_basis=epoch_basis, threshold_basis=threshold_basis,
+                score_variant=score_variant) if complete else None)
             cells[k] = {
                 "value": val,                                  # null => "—", never 0
                 "direction": meta[k]["direction"],

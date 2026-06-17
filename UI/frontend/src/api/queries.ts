@@ -84,6 +84,8 @@ export const useLeaderboard = (p: {
   group_by?: string;
   swat?: string;
   state?: string;
+  epoch_basis?: string;
+  threshold_basis?: string;
 }) =>
   useQuery({
     queryKey: ["leaderboard", p],
@@ -101,6 +103,8 @@ export const useRankingsAggregate = (p: {
   source?: string;
   search?: string;
   state?: string;
+  epoch_basis?: string;
+  threshold_basis?: string;
 }) =>
   useQuery({
     queryKey: ["rankings-aggregate", p],
@@ -290,10 +294,22 @@ export const useGifStories = () =>
 export const usePanels = () =>
   useQuery({ queryKey: ["panels"], queryFn: api.panels, staleTime: FIVE_MIN });
 
-export const useCompareMatrix = (leaves: LeafSel[], metrics: string[], scoreVariant?: string) =>
+export const useCompareMatrix = (
+  leaves: LeafSel[],
+  metrics: string[],
+  scoreVariant?: string,
+  basis?: { epoch_basis?: string; threshold_basis?: string }
+) =>
   useQuery({
-    queryKey: ["compare-matrix", leaves, metrics, scoreVariant ?? "_"],
-    queryFn: () => api.compareMatrix(leaves, metrics, scoreVariant),
+    queryKey: [
+      "compare-matrix",
+      leaves,
+      metrics,
+      scoreVariant ?? "_",
+      basis?.epoch_basis ?? "best",
+      basis?.threshold_basis ?? "optimal",
+    ],
+    queryFn: () => api.compareMatrix(leaves, metrics, scoreVariant, basis),
     enabled: leaves.length > 0 && metrics.length > 0,
   });
 

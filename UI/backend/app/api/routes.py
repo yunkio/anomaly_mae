@@ -209,7 +209,9 @@ def get_stats(exp_id: str, dataset_key: str,
 def leaderboard(metric: str = "pak_auc_f1", score_variant: str = "metrics",
                 scope: str = "all", group_by: str = "dataset",
                 swat: str = "full", source: str = "all", sort: str = "auto",
-                search: str = "", state: Optional[str] = None):
+                search: str = "", state: Optional[str] = None,
+                epoch_basis: str = Query("best"),
+                threshold_basis: str = Query("optimal")):
     # RV2-03: ``/leaderboard`` only models ONE SWaT variant per call (full | excl22).
     # ``swat=both`` previously matched no filter branch and SILENTLY dropped every SWaT
     # row. Reject it with a 422 that points the caller to the both-columns aggregate,
@@ -224,7 +226,7 @@ def leaderboard(metric: str = "pak_auc_f1", score_variant: str = "metrics",
     return leaderboard_svc(
         get_repository(), metric=metric, score_variant=score_variant, scope=scope,
         group_by=group_by, swat=swat, source=source, sort=sort, search=search,
-        state=state)
+        state=state, epoch_basis=epoch_basis, threshold_basis=threshold_basis)
 
 
 @router.get("/rankings/aggregate")
@@ -232,7 +234,9 @@ def rankings_aggregate(metric: str = "pak_auc_f1", score_variant: str = "metrics
                        datasets: Optional[str] = None, swat: str = "excl22",
                        source: str = "all", search: str = "",
                        state: Optional[str] = None,
-                       min_coverage: int = _AGG_AUTO_MIN_COVERAGE):
+                       min_coverage: int = _AGG_AUTO_MIN_COVERAGE,
+                       epoch_basis: str = Query("best"),
+                       threshold_basis: str = Query("optimal")):
     """FB-12/FB-13/FB-R4c: per-dataset rankings + a cross-dataset average-rank aggregate.
 
     ADDITIVE endpoint — the existing ``/leaderboard`` shape is UNCHANGED (Overview +
@@ -250,7 +254,8 @@ def rankings_aggregate(metric: str = "pak_auc_f1", score_variant: str = "metrics
     return rankings_aggregate_svc(
         get_repository(), metric=metric, score_variant=score_variant,
         datasets=datasets, swat=swat, source=source, search=search, state=state,
-        min_coverage=min_coverage)
+        min_coverage=min_coverage,
+        epoch_basis=epoch_basis, threshold_basis=threshold_basis)
 
 
 # ── anomaly types ────────────────────────────────────────────────────────────
@@ -396,8 +401,11 @@ def compare_matrix(body: dict = Body(...)):
     metrics = body.get("metrics", [])
     if not leaves or not metrics:
         raise HTTPException(400, "body.leaves[] and body.metrics[] are required")
-    return cmp_svc.compare_matrix(get_repository(), leaves, metrics,
-                                  score_variant=body.get("score_variant", "metrics"))
+    return cmp_svc.compare_matrix(
+        get_repository(), leaves, metrics,
+        score_variant=body.get("score_variant", "metrics"),
+        epoch_basis=body.get("epoch_basis", "best"),
+        threshold_basis=body.get("threshold_basis", "optimal"))
 
 
 @router.post("/compare/series")
@@ -677,6 +685,8 @@ def export_matrix_csv(body: dict = Body(...)):
     if not leaves or not metrics:
         raise HTTPException(400, "body.leaves[] and body.metrics[] are required")
     res = cmp_svc.compare_matrix(get_repository(), leaves, metrics,
-                                 score_variant=body.get("score_variant", "metrics"))
+                                 score_variant=body.get("score_variant", "metrics"),
+                                 epoch_basis=body.get("epoch_basis", "best"),
+                                 threshold_basis=body.get("threshold_basis", "optimal"))
     return PlainTextResponse(export_svc.matrix_to_csv(res["rows"], metrics),
                              media_type="text/csv")

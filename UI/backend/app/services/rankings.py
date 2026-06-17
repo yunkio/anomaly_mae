@@ -20,6 +20,7 @@ from typing import Any, Optional
 _AUTO_MIN_COVERAGE = -1
 
 from ..dataaccess.repository import Repository
+from . import perf_basis
 
 
 def _matches(text_fields: list[Optional[str]], needle: str) -> bool:
@@ -39,6 +40,8 @@ def leaderboard(
     sort: str = "auto",
     search: str = "",
     state: Optional[str] = None,
+    epoch_basis: str = "best",
+    threshold_basis: str = "optimal",
 ) -> dict[str, Any]:
     meta = repo.registry.resolve(metric, namespace="epoch_metrics")
     rankable = meta.direction in ("up", "down")
@@ -90,8 +93,10 @@ def leaderboard(
                 errors.extend(b.errors)
                 if not b.metadata:
                     continue
-                block = b.metadata.score_variants.get(score_variant, {}) or {}
-                val = block.get(metric)
+                val = perf_basis.resolve_value(
+                    repo, e, d, leaf, metric,
+                    epoch_basis=epoch_basis, threshold_basis=threshold_basis,
+                    score_variant=score_variant)
                 if val is None:
                     continue
                 rows.append({
@@ -174,6 +179,8 @@ def rankings_aggregate(
     search: str = "",
     state: Optional[str] = None,
     min_coverage: int = _AUTO_MIN_COVERAGE,
+    epoch_basis: str = "best",
+    threshold_basis: str = "optimal",
 ) -> dict[str, Any]:
     """Per-dataset rankings + a cross-dataset AVERAGE-RANK aggregate (FB-12/FB-13/FB-R4c).
 
@@ -272,9 +279,11 @@ def rankings_aggregate(
                 if not b.metadata:
                     continue
                 # R2-03: read EACH leaf's OWN score_variant block — the excl22 leaf's
-                # plain ``metrics`` IS the excl22 eval.
-                block = b.metadata.score_variants.get(score_variant, {}) or {}
-                val = block.get(metric)
+                # plain ``metrics`` IS the excl22 eval. Basis-resolved (epoch × threshold).
+                val = perf_basis.resolve_value(
+                    repo, e, d, leaf, metric,
+                    epoch_basis=epoch_basis, threshold_basis=threshold_basis,
+                    score_variant=score_variant)
                 if is_swat_family:
                     col_key = f"{d.dataset_key} · {variant}"
                 else:
@@ -295,13 +304,15 @@ def rankings_aggregate(
                     fb = repo.load_bundle(e, d, full_leaf, want={"metadata"})
                     errors.extend(fb.errors)
                     if fb.metadata:
-                        excl_block = (fb.metadata.score_variants
-                                      .get("metrics_excl_region22", {}) or {})
-                        excl_val = excl_block.get(metric)
+                        excl_val = perf_basis.resolve_value(
+                            repo, e, d, full_leaf, metric,
+                            epoch_basis=epoch_basis, threshold_basis=threshold_basis,
+                            score_variant="metrics_excl_region22")
                         if excl_val is None:
-                            excl_val = (fb.metadata.score_variants
-                                        .get(score_variant, {}) or {}).get(
-                                            f"excl22_{metric}")
+                            excl_val = perf_basis.resolve_value(
+                                repo, e, d, full_leaf, f"excl22_{metric}",
+                                epoch_basis=epoch_basis, threshold_basis=threshold_basis,
+                                score_variant=score_variant)
                         _emit_granular(f"{d.dataset_key} · excl22", e, excl_val)
 
     # ── build the canonical "(avg)" columns from the per-group per-experiment values ──
@@ -369,13 +380,26 @@ def rankings_aggregate(
         if rankable:
             entries = sorted(entries, key=lambda r: (r["value"] is None, r["value"]),
                              reverse=not lower_wins)
+        # Competition ranking ("1-2-2-4"): experiments tied on the metric value (within a
+        # tiny float tolerance) share the SAME rank = the best position among them; the next
+        # distinct value resumes at position+1. Fixes the 2026-06-11 bug where 13 PSM-tied
+        # runs (identical 0.8332867…) got distinct ranks 3..15 from sort order alone.
+        prev_val = None
+        cur_rank = 0
         for i, r in enumerate(entries):
             r2 = dict(r)
-            r2["rank"] = (i + 1) if rankable else None
-            per_dataset.setdefault(col_key, []).append(r2)
+            v = r["value"]
             if rankable:
-                rank_lookup.setdefault(r["exp_id"], {})[col_key] = i + 1
-            value_lookup.setdefault(r["exp_id"], {})[col_key] = r["value"]
+                tied = (cur_rank > 0 and v is not None and prev_val is not None
+                        and abs(v - prev_val) <= 1e-9)
+                cur_rank = cur_rank if tied else (i + 1)
+                r2["rank"] = cur_rank
+                rank_lookup.setdefault(r["exp_id"], {})[col_key] = cur_rank
+                prev_val = v
+            else:
+                r2["rank"] = None
+            per_dataset.setdefault(col_key, []).append(r2)
+            value_lookup.setdefault(r["exp_id"], {})[col_key] = v
 
     dataset_cols = sorted(per_dataset.keys())
     total_cols = len(dataset_cols)

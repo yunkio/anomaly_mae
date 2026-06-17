@@ -26,7 +26,9 @@ import { Link } from "react-router-dom";
 import { useRankingsAggregate, useGlobalMetricsCatalog } from "../api/queries";
 import AsyncPanel from "./AsyncPanel";
 import MetricPicker from "./MetricPicker";
+import PerformanceBasis from "./PerformanceBasis";
 import DatasetSetSelector from "./DatasetSetSelector";
+import { useStore } from "../store";
 import { fmt } from "./common";
 
 interface Props {
@@ -43,8 +45,12 @@ export default function OverviewTopModels({ metric: metric0 = "pak_auc_f1", topN
   // the selectable columns + default set; the main query re-ranks over the active set.
   const [metric, setMetric] = useState(metric0);
   const [selDatasets, setSelDatasets] = useState<string[] | null>(null);
+  // PERF_BASIS_SPEC: thread the global (epoch × threshold) basis into both aggregate
+  // queries so the Overview top-models table re-ranks consistently with Rankings.
+  const epochBasis = useStore((s) => s.epochBasis);
+  const thresholdBasis = useStore((s) => s.thresholdBasis);
   const catalog = useGlobalMetricsCatalog();
-  const universeQ = useRankingsAggregate({ metric, swat: "both" });
+  const universeQ = useRankingsAggregate({ metric, swat: "both", epoch_basis: epochBasis, threshold_basis: thresholdBasis });
   const universe = useMemo(() => universeQ.data?.selectable_columns ?? [], [universeQ.data]);
   const defaultCols = useMemo(() => universeQ.data?.default_columns ?? [], [universeQ.data]);
   const columnMeta = useMemo(() => universeQ.data?.column_meta ?? {}, [universeQ.data]);
@@ -53,12 +59,16 @@ export default function OverviewTopModels({ metric: metric0 = "pak_auc_f1", topN
     metric,
     swat: "both",
     datasets: activeSet.length ? activeSet.join(",") : undefined,
+    epoch_basis: epochBasis,
+    threshold_basis: thresholdBasis,
   });
 
   return (
     <div className="col" style={{ gap: 12 }}>
       <div className="toolbar" style={{ marginBottom: 0 }}>
         <MetricPicker catalog={catalog.data ?? []} value={metric} onChange={setMetric} loading={catalog.isLoading} />
+        <span className="grow" style={{ flex: 1 }} />
+        <PerformanceBasis />
       </div>
       <DatasetSetSelector
         universe={universe}

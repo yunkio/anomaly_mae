@@ -146,6 +146,8 @@ export const api = {
     filter?: string;
     search?: string;
     state?: string;
+    epoch_basis?: string;
+    threshold_basis?: string;
   }) => jget<Leaderboard>("/leaderboard", p),
   /** FB-12/FB-13: per-dataset rank tables + cross-dataset average-rank aggregate.
    * `datasets` is a comma-list of dataset COLUMN keys (FB-2); `swat=both` shows full
@@ -158,9 +160,22 @@ export const api = {
     source?: string;
     search?: string;
     state?: string;
+    epoch_basis?: string;
+    threshold_basis?: string;
   }) => jget<RankingsAggregate>("/rankings/aggregate", p),
-  compareMatrix: (leaves: LeafSel[], metrics: string[], score_variant?: string) =>
-    jpost<CompareMatrix>("/compare/matrix", { leaves, metrics, score_variant }),
+  compareMatrix: (
+    leaves: LeafSel[],
+    metrics: string[],
+    score_variant?: string,
+    p?: { epoch_basis?: string; threshold_basis?: string }
+  ) =>
+    jpost<CompareMatrix>("/compare/matrix", {
+      leaves,
+      metrics,
+      score_variant,
+      epoch_basis: p?.epoch_basis,
+      threshold_basis: p?.threshold_basis,
+    }),
   compareSeries: (leaves: LeafSel[], key: string, variant?: string | null) =>
     jpost<CompareSeries>("/compare/series", { leaves, key, variant }),
 

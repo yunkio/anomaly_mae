@@ -13,6 +13,7 @@ import { useCompareMatrix, useCompareSeries, useGlobalMetricsCatalog } from "../
 import { Card, fmt } from "../components/common";
 import AsyncPanel from "../components/AsyncPanel";
 import MetricPicker from "../components/MetricPicker";
+import PerformanceBasis from "../components/PerformanceBasis";
 import LineRace from "../components/LineRace";
 import GifViewer from "../components/gif/GifViewer";
 import CompareControls from "../components/CompareControls";
@@ -37,10 +38,17 @@ export default function CompareWorkbench() {
   const [overlayKey, setOverlayKey] = useState("pak_auc_f1");
   const [sharedScale, setSharedScale] = useState(true);
   const catalog = useGlobalMetricsCatalog();
+  // PERF_BASIS_SPEC: the global (epoch × threshold) basis re-resolves the matrix cells.
+  // Read at the top of the body and thread into the compare-matrix query.
+  const epochBasis = useStore((s) => s.epochBasis);
+  const thresholdBasis = useStore((s) => s.thresholdBasis);
 
   const leaves = sel.leaves;
   const ready = leaves.length >= 1 && !!sel.scope.datasetKey;
-  const matrixQ = useCompareMatrix(ready ? leaves : [], metrics);
+  const matrixQ = useCompareMatrix(ready ? leaves : [], metrics, undefined, {
+    epoch_basis: epochBasis,
+    threshold_basis: thresholdBasis,
+  });
   const seriesQ = useCompareSeries(ready ? leaves : [], overlayKey);
 
   // F-02: hooks computed from query.data at the TOP LEVEL with a null-guard — never
@@ -107,6 +115,8 @@ export default function CompareWorkbench() {
                   </span>
                 ))}
               </div>
+              <span className="grow" style={{ flex: 1 }} />
+              <PerformanceBasis />
             </div>
             <AsyncPanel query={matrixQ} isEmpty={(d) => !d.rows?.length} height={200}>
               {(d) => (

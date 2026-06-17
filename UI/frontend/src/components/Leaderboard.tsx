@@ -13,6 +13,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useLeaderboard } from "../api/queries";
 import { dsUrl } from "../api/client";
 import AsyncPanel from "./AsyncPanel";
+import PerformanceBasis from "./PerformanceBasis";
 import { StateChip, fmt, DirectionBadge } from "./common";
 import { useStore } from "../store";
 import type { LeaderboardRow } from "../api/types";
@@ -30,7 +31,11 @@ interface Props {
 export default function Leaderboard({ metric = "pak_auc_f1", scope, groupBy, compact, swat = "full" }: Props) {
   const nav = useNavigate();
   const [search, setSearch] = useState("");
-  const q = useLeaderboard({ metric, scope, group_by: groupBy, swat });
+  // PERF_BASIS_SPEC: read the global (epoch × threshold) basis at the TOP of the body
+  // (never inside the AsyncPanel render-prop) and pass it into the leaderboard query.
+  const epochBasis = useStore((s) => s.epochBasis);
+  const thresholdBasis = useStore((s) => s.thresholdBasis);
+  const q = useLeaderboard({ metric, scope, group_by: groupBy, swat, epoch_basis: epochBasis, threshold_basis: thresholdBasis });
   const togglePin = useStore((s) => s.togglePinModel);
   const isModelPinned = useStore((s) => s.isModelPinned);
   useStore((s) => s.pins); // re-render on pin changes
@@ -86,6 +91,7 @@ export default function Leaderboard({ metric = "pak_auc_f1", scope, groupBy, com
               <span className="subtle" style={{ fontSize: "var(--fs-small)" }} title="SWaT eval variant for this table (both-columns view is in Rankings)">
                 SWaT: {swat}
               </span>
+              <PerformanceBasis />
               <span className="grow" style={{ flex: 1 }} />
               <input
                 className="input"

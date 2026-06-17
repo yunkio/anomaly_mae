@@ -22,7 +22,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 PORT="${TSMAE_PORT:-8000}"
-HOST="${TSMAE_HOST:-127.0.0.1}"
+# Bind 0.0.0.0 by default (2026-06-11): on WSL2 a service bound to 127.0.0.1 *inside*
+# WSL is not always reachable from the Windows browser (localhost-forwarding quirk →
+# "running but ERR_CONNECTION_REFUSED"). 0.0.0.0 is reliably reached via Windows
+# localhost and stays NAT-isolated to the host. Override with TSMAE_HOST=127.0.0.1.
+HOST="${TSMAE_HOST:-0.0.0.0}"
 OPEN_BROWSER=1
 FORCE_SETUP=0
 BASE_PY="/home/ykio/anaconda3/bin/python3"   # NON-dc_vis base python (격리 venv 용)
