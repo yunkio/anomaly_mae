@@ -228,6 +228,31 @@ class Config:
     #   At inference, disc component is excluded from scoring (w_disc=0).
     fm_loss_weight: float = 1.0  # FM:disc training weight ratio (1.0 = equal)
 
+    # ── fm_balance_mode (2026-06-17): replace FM's adaptive-λ COMPUTATION with a
+    #    multi-task loss balancer applied to the OD↔FM pair ONLY (reconstruction is
+    #    NOT in the balanced pair — it stays in total_loss at fixed weight 1, exactly
+    #    as exp271). This is the value-based analogue of the legacy FM adaptive λ,
+    #    which is already an OD↔FM balancer (‖∇_student OD‖/‖∇_student FM‖; teacher
+    #    recon has zero gradient on the student decoder, so it cancels — see line 218).
+    #    DEFAULT 'none' is byte-identical to exp271. GRL is NOT touched here — it keeps
+    #    loss_balance_mode (271='adaptive_lambda_legacy'). Requires fm_adaptive_lambda=True
+    #    + use_feature_matching=True (FM excluded from loss.py total, added in trainer).
+    #    NOTE: mse_norm_dann is intentionally NOT offered for FM — its defining Ganin
+    #    adversarial ramp has no meaning for two cooperative MSE distillation losses.
+    fm_balance_mode: str = 'none'
+    #   ∈ {none, relobralo, famo, uwso}
+    #   - none: legacy — FM λ = (‖∇_student(OD)‖/‖∇_student FM‖).clamp(0,10), prev-epoch lag
+    #   - relobralo: OD↔FM loss-ratio softmax (reuses relobralo_* params; ratio-based, scale-agnostic)
+    #   - famo: OD↔FM log-loss simplex (reuses famo_* params; reweights BOTH OD and FM)
+    #   - uwso: OD↔FM tempered-softmax inverse-loss (fm_uwso_* params; MSE↔MSE re-tuned)
+    # fm_uwso params — re-tuned from the GRL uwso defaults for MSE↔MSE. Because OD and FM
+    #   are both tiny MSE-like losses (~1e-3), the raw 1/L (~1e3) saturates the softmax, so
+    #   _fm_uwso normalizes 1/L by its MEAN before the temperature → T is SCALE-FREE (acts on
+    #   the loss ratio only). ONE shared MSE floor for both terms; rel clamped to [0,10].
+    fm_uwso_temperature: float = 1.0   # scale-free temp on mean-normalized 1/L (lower = sharper)
+    fm_uwso_loss_floor: float = 1e-4   # shared 1/L floor for BOTH OD and FM (both MSE-like)
+    fm_uwso_ema_beta: float = 0.9      # EMA new-fraction for loss smoothing (matches GRL uwso)
+
     # --- SCAD (Supervised Contrastive Anomaly Discrimination) parameters ---
     use_scad: bool = False  # Enable SCAD loss for direct anomaly discrimination
     # - False: SCAD disabled (default, GRL or no anomaly-aware loss used)

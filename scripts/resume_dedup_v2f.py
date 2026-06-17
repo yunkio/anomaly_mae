@@ -13,10 +13,16 @@ Context: new ablations appended to the queue (configs/queue_dedup_renumbered_v6.
   - 324 = grl_first_layer          (271 + grl_attach_layer=first: GRL on student decoder layer-1)
   - 325 = dec_dmodel_half          (271 + decoder_half_dim=True: MAE-style decoder width = d_model//2)
   - 326 = hscadC_w10_hidden        (271 + SCAD Form C on final student_hidden: scad_apply_space=hidden_final)
-All 316-326 have NO existing dir -> fresh runs. They re-import the current
+  - 327 = fm_relobralo             (271 + fm_balance_mode=relobralo: OD↔FM balancer on FM weight, GRL untouched)
+  - 328 = fm_famo                  (271 + fm_balance_mode=famo: FAMO log-loss simplex on OD↔FM, GRL untouched)
+  - 329 = fm_uwso                  (271 + fm_balance_mode=uwso: UW-SO scale-free inverse-loss on OD↔FM, GRL untouched)
+All 316-329 have NO existing dir -> fresh runs. They re-import the current
 mae_anomaly code (subprocess per experiment), so loss_balance_mode, the
 freeze_encoder_only resume fix, SCAD Form C, grl_attach_layer,
-decoder_half_dim, and scad_apply_space (H-SCAD-C) are all active.
+decoder_half_dim, scad_apply_space (H-SCAD-C), and fm_balance_mode (the
+OD↔FM loss balancer for FM, applied INSTEAD of GRL — GRL keeps its 271
+adaptive_lambda_legacy) are all active. fm_balance_mode default 'none' is
+byte-identical to exp271, so 324/325/326 are unaffected.
 
 ⚠️ DO NOT launch this while the v2e queue (311-315) is still running — it would
 double-book the GPU. Launch only AFTER v2e prints "=== RESUME DEDUP-v2e DONE ===".

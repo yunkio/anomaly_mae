@@ -112,6 +112,23 @@ class Trainer:
             if getattr(config, 'use_scad', False):
                 raise ValueError(f"loss_balance_mode={_lbm!r}와 use_scad=True는 동시 사용 불가합니다.")
 
+        # 11b. fm_balance_mode (2026-06-17) — applies a loss balancer to the OD↔FM pair
+        #      (recon NOT in the pair) in place of the legacy grad-norm-ratio FM λ.
+        #      default 'none' = byte-identical to exp271. GRL untouched (keeps loss_balance_mode).
+        #      mse_norm_dann intentionally excluded (Ganin adversarial ramp meaningless for MSE↔MSE).
+        _VALID_FBM = {'none', 'relobralo', 'famo', 'uwso'}
+        _fbm = getattr(config, 'fm_balance_mode', 'none')
+        if _fbm not in _VALID_FBM:
+            raise ValueError(f"fm_balance_mode must be one of {_VALID_FBM}, got {_fbm!r}")
+        if _fbm != 'none':
+            if not getattr(config, 'fm_adaptive_lambda', False):
+                raise ValueError(f"fm_balance_mode={_fbm!r}는 fm_adaptive_lambda=True를 필요로 합니다 "
+                                 f"(FM이 loss.py total에서 제외되고 trainer가 balancer로 더함).")
+            if not getattr(config, 'use_feature_matching', False):
+                raise ValueError(f"fm_balance_mode={_fbm!r}는 use_feature_matching=True를 필요로 합니다.")
+            if getattr(config, 'use_scad', False):
+                raise ValueError(f"fm_balance_mode={_fbm!r}와 use_scad=True는 동시 사용 불가합니다.")
+
         # 10. seq_length / patch_size / num_patches 일관성 (defense-in-depth;
         #    make_config()에서도 검증되나 Trainer가 직접 호출되는 경로 보호)
         if config.seq_length % config.patch_size != 0:
@@ -221,6 +238,22 @@ class Trainer:
         self._uwso_ema_mse = None          # uwso EMA losses (when uwso_ema_beta<1.0)
         self._uwso_ema_bce = None
         self._famo = None                  # famo lazy dict(w, opt, min, prev)
+
+        # fm_balance_mode state (2026-06-17) — SEPARATE from the GRL loss_balance_mode
+        # state above (independent RNG offset) so the two balancers never collide.
+        # Only read when _fbm != 'none'; default 'none' leaves the legacy FM λ path intact.
+        self._fbm = getattr(config, 'fm_balance_mode', 'none')
+        self._fm_rlb_lam = [1.0, 1.0]      # relobralo EMA weights [OD, FM]
+        self._fm_rlb_l = [1.0, 1.0]        # relobralo prev losses [OD, FM]
+        self._fm_rlb_l0 = [1.0, 1.0]       # relobralo onset losses
+        self._fm_rlb_l0_captured = False
+        self._fm_rlb_steps_done = 0
+        self._fm_rlb_last_epoch = -1
+        self._fm_rlb_rng = random.Random(getattr(config, 'random_seed', 0) + 778)
+        self._fm_uwso_ema_od = None        # uwso EMA losses (when fm_uwso_ema_beta<1.0)
+        self._fm_uwso_ema_fm = None
+        self._fm_famo_state = None         # famo lazy dict(w, opt, min, prev) for OD↔FM
+                                           # (named _state to avoid colliding with the _fm_famo method)
 
         # WDGRL critic (separate optimizer, alternating training)
         self.wdgrl_critic = None
@@ -521,6 +554,124 @@ class Trainer:
         weighted = (D.log() * z / c).sum()
         return weighted, float(z[1].item())
 
+    # ===== fm_balance_mode helpers (2026-06-17) — OD↔FM balancers (recon excluded). =====
+    # Analogue of the GRL _lbm_* helpers, but the balanced pair is [OD, FM]: the anchor
+    # task is the output-discrepancy loss VALUE (normal_loss+anomaly_loss), NOT recon+OD,
+    # so teacher reconstruction stays in total_loss at fixed weight 1 and never enters the
+    # balance (matching the legacy FM λ, which is already OD↔FM since recon has zero
+    # gradient on the student decoder). All weights from DETACHED magnitudes; gradient
+    # flows only through the OD/FM loss tensors. SEPARATE state from the GRL balancer.
+    def _fm_balance_apply(self, mode, loss, od_tensor, fm_tensor, epoch, recon_tensor):
+        # relobralo/uwso anchor OD at weight 1 (keep `loss`, add rel*FM). famo reweights
+        # BOTH OD and FM, so it rebuilds the loss explicitly from `recon_tensor` (the
+        # teacher reconstruction term) + the FAMO log-combination of [OD, FM] — this keeps
+        # recon at weight 1 WITHOUT relying on the upstream ordering invariant loss==recon+OD.
+        if mode == 'relobralo':
+            return self._fm_relobralo(loss, od_tensor, fm_tensor, epoch)
+        elif mode == 'uwso':
+            return self._fm_uwso(loss, od_tensor, fm_tensor)
+        elif mode == 'famo':
+            return self._fm_famo(recon_tensor, od_tensor, fm_tensor)
+        raise ValueError(f"unknown fm_balance_mode in _fm_balance_apply: {mode!r}")
+
+    def _fm_relobralo(self, loss, od_tensor, fm_tensor, epoch):
+        # Bischof & Kraus 2110.09813 on the [OD, FM] pair. OD anchored at weight 1; FM gets
+        # the relative weight lam_fm/lam_od. Ratio-based → scale-agnostic (apt for two MSE
+        # terms; this is ReLoBRaLo's native PINN use-case of same-type residuals). Reuses
+        # relobralo_* params. recon is untouched (loss already = recon + OD; we add rel*FM).
+        cfg = self.config
+        T = cfg.relobralo_T; alpha = cfg.relobralo_alpha; rho_p = cfg.relobralo_rho; eps = cfg.relobralo_eps
+        update_now = (epoch != self._fm_rlb_last_epoch) if getattr(cfg, 'relobralo_update_freq', 'epoch') == 'epoch' else True
+        with torch.no_grad():
+            l_od = float(od_tensor.detach().float()); l_fm = float(fm_tensor.detach().float())
+            if update_now:
+                if not self._fm_rlb_l0_captured:
+                    self._fm_rlb_l0 = [max(l_od, eps), max(l_fm, eps)]; self._fm_rlb_l0_captured = True
+
+                def _sm2(ratios):
+                    mx = max(ratios); e = [math.exp(r - mx) for r in ratios]; Z = sum(e)
+                    return [2.0 * ei / Z for ei in e]  # *m=2 rescale (mean 1)
+                cur = [max(l_od, eps), max(l_fm, eps)]
+                prev = [max(self._fm_rlb_l[0], eps), max(self._fm_rlb_l[1], eps)]
+                onset = [max(self._fm_rlb_l0[0], eps), max(self._fm_rlb_l0[1], eps)]
+                lamb_hat = _sm2([cur[0] / (T * prev[0]), cur[1] / (T * prev[1])])
+                lamb0_hat = _sm2([cur[0] / (T * onset[0]), cur[1] / (T * onset[1])])
+                if self._fm_rlb_steps_done == 0:      # onset epoch: freeze weights=1, capture l0
+                    a = 1.0
+                elif self._fm_rlb_steps_done == 1:    # 2nd: fresh ratio
+                    a = 0.0
+                else:
+                    a = alpha
+                rho_t = 1.0 if self._fm_rlb_rng.random() < rho_p else 0.0
+                self._fm_rlb_lam = [rho_t * a * self._fm_rlb_lam[i] + (1.0 - rho_t) * a * lamb0_hat[i]
+                                    + (1.0 - a) * lamb_hat[i] for i in range(2)]
+                self._fm_rlb_l = [l_od, l_fm]
+                self._fm_rlb_last_epoch = epoch
+                self._fm_rlb_steps_done += 1
+        rel = min(10.0, max(0.0, self._fm_rlb_lam[1] / max(self._fm_rlb_lam[0], eps)))
+        loss = loss + rel * fm_tensor
+        return loss, float(rel)
+
+    def _fm_uwso(self, loss, od_tensor, fm_tensor):
+        # Kirchdorfer et al. 2408.07985 (UW-SO) on [OD, FM]: weight ∝ 1/L, tempered-softmax.
+        # MSE↔MSE re-tuning: OD and FM are both tiny MSE losses (~1e-3) → raw 1/L (~1e3)
+        # saturates the softmax and rel blows up when the OD/FM ordering flips. Fix: normalize
+        # the inverse-losses by their MEAN before the temperature, so the softmax argument is
+        # SCALE-FREE (a_o-a_f = (2/T)·(Lf-Lo)/(Lf+Lo) ∈ (-2/T, 2/T), bounded → no saturation,
+        # depends only on the loss RATIO). ONE shared MSE floor for both terms; OD anchored,
+        # FM gets w_fm/w_od clamped to [0,10] (same bound as the legacy FM λ). recon untouched.
+        cfg = self.config
+        T = getattr(cfg, 'fm_uwso_temperature', 1.0)
+        floor = getattr(cfg, 'fm_uwso_loss_floor', 1e-4)
+        beta = getattr(cfg, 'fm_uwso_ema_beta', 0.9)
+        with torch.no_grad():
+            Lo = max(float(od_tensor.detach().float()), floor)
+            Lf = max(float(fm_tensor.detach().float()), floor)
+            if beta < 1.0:
+                if self._fm_uwso_ema_od is None:
+                    self._fm_uwso_ema_od, self._fm_uwso_ema_fm = Lo, Lf
+                else:
+                    self._fm_uwso_ema_od = beta * Lo + (1.0 - beta) * self._fm_uwso_ema_od
+                    self._fm_uwso_ema_fm = beta * Lf + (1.0 - beta) * self._fm_uwso_ema_fm
+                Lo, Lf = self._fm_uwso_ema_od, self._fm_uwso_ema_fm
+            inv_o = 1.0 / Lo; inv_f = 1.0 / Lf
+            mean_inv = 0.5 * (inv_o + inv_f)           # scale-free normalization
+            a_o = inv_o / (T * mean_inv); a_f = inv_f / (T * mean_inv)
+            mx = max(a_o, a_f); e_o = math.exp(a_o - mx); e_f = math.exp(a_f - mx); Z = e_o + e_f
+            w_o = e_o / Z; w_f = e_f / Z
+        rel = min(10.0, max(0.0, w_f / max(w_o, 1e-12)))
+        loss = loss + rel * fm_tensor
+        return loss, float(rel)
+
+    def _fm_famo(self, recon_tensor, od_tensor, fm_tensor):
+        # Liu et al. NeurIPS 2023 (FAMO) on [OD, FM]: log-loss simplex that reweights BOTH
+        # OD and FM. recon is NOT a task → final loss = recon_tensor (weight 1) + the FAMO
+        # log-combination of [OD, FM]. Building from recon_tensor explicitly (rather than
+        # loss - od_tensor) makes recon-isolation independent of upstream loss ordering and
+        # avoids add-then-subtract roundoff. Streaming/next-batch approx of post-step re-forward.
+        cfg = self.config
+        if self._fm_famo_state is None:
+            dev = recon_tensor.device
+            w = torch.zeros(2, device=dev, requires_grad=True)
+            opt = torch.optim.Adam([w], lr=cfg.famo_w_lr, weight_decay=cfg.famo_gamma)
+            self._fm_famo_state = {'w': w, 'opt': opt, 'min': torch.zeros(2, device=dev), 'prev': None}
+        f = self._fm_famo_state
+        with torch.no_grad():
+            curr = torch.stack([od_tensor.detach().float(), fm_tensor.detach().float()])
+        if f['prev'] is not None:
+            delta = (f['prev'] - f['min'] + 1e-8).log() - (curr - f['min'] + 1e-8).log()
+            with torch.enable_grad():
+                z_w = torch.softmax(f['w'], -1)
+                d = torch.autograd.grad(z_w, f['w'], grad_outputs=delta.detach())[0]
+            f['opt'].zero_grad(); f['w'].grad = d; f['opt'].step()
+        f['prev'] = curr
+        z = torch.softmax(f['w'], -1).detach()                 # detached weight (safe for model backward)
+        D = torch.stack([od_tensor, fm_tensor]) - f['min'] + 1e-8
+        c = (z / D.detach()).sum().detach()
+        weighted = (D.log() * z / c).sum()
+        loss = recon_tensor + weighted                         # recon (weight 1) + FAMO-reweighted(OD, FM)
+        return loss, float(z[1].item())
+
     def _lbm_state_dict(self):
         """Serialize loss_balance_mode runtime state for checkpoint resume.
         Plain dict (CPU tensors); legacy/fixed modes carry only inert defaults."""
@@ -531,6 +682,13 @@ class Trainer:
             'rlb_l0_captured': self._rlb_l0_captured, 'rlb_steps_done': self._rlb_steps_done,
             'rlb_last_epoch': self._rlb_last_epoch, 'rlb_rng': self._rlb_rng.getstate(),
             'uwso_ema_mse': self._uwso_ema_mse, 'uwso_ema_bce': self._uwso_ema_bce,
+            # fm_balance_mode (2026-06-17): OD↔FM balancer state (separate from GRL above)
+            'fbm': self._fbm,
+            'fm_rlb_lam': list(self._fm_rlb_lam), 'fm_rlb_l': list(self._fm_rlb_l),
+            'fm_rlb_l0': list(self._fm_rlb_l0), 'fm_rlb_l0_captured': self._fm_rlb_l0_captured,
+            'fm_rlb_steps_done': self._fm_rlb_steps_done, 'fm_rlb_last_epoch': self._fm_rlb_last_epoch,
+            'fm_rlb_rng': self._fm_rlb_rng.getstate(),
+            'fm_uwso_ema_od': self._fm_uwso_ema_od, 'fm_uwso_ema_fm': self._fm_uwso_ema_fm,
         }
         if self._famo is not None:
             st['famo'] = {
@@ -538,6 +696,13 @@ class Trainer:
                 'opt': self._famo['opt'].state_dict(),
                 'min': self._famo['min'].detach().cpu(),
                 'prev': None if self._famo['prev'] is None else self._famo['prev'].detach().cpu(),
+            }
+        if self._fm_famo_state is not None:
+            st['fm_famo'] = {
+                'w': self._fm_famo_state['w'].detach().cpu(),
+                'opt': self._fm_famo_state['opt'].state_dict(),
+                'min': self._fm_famo_state['min'].detach().cpu(),
+                'prev': None if self._fm_famo_state['prev'] is None else self._fm_famo_state['prev'].detach().cpu(),
             }
         return st
 
@@ -566,6 +731,27 @@ class Trainer:
             opt.load_state_dict(_f['opt'])
             self._famo = {'w': w, 'opt': opt, 'min': _f['min'].to(dev),
                           'prev': None if _f['prev'] is None else _f['prev'].to(dev)}
+        # fm_balance_mode (2026-06-17): restore OD↔FM balancer state (back-compat: absent → defaults)
+        self._fm_rlb_lam = list(st.get('fm_rlb_lam', [1.0, 1.0]))
+        self._fm_rlb_l = list(st.get('fm_rlb_l', [1.0, 1.0]))
+        self._fm_rlb_l0 = list(st.get('fm_rlb_l0', [1.0, 1.0]))
+        self._fm_rlb_l0_captured = st.get('fm_rlb_l0_captured', False)
+        self._fm_rlb_steps_done = st.get('fm_rlb_steps_done', 0)
+        self._fm_rlb_last_epoch = st.get('fm_rlb_last_epoch', -1)
+        if st.get('fm_rlb_rng') is not None:
+            try:
+                self._fm_rlb_rng.setstate(st['fm_rlb_rng'])
+            except (TypeError, ValueError):
+                pass
+        self._fm_uwso_ema_od = st.get('fm_uwso_ema_od'); self._fm_uwso_ema_fm = st.get('fm_uwso_ema_fm')
+        _ff = st.get('fm_famo')
+        if _ff is not None:
+            dev = next(self.model.parameters()).device
+            w = _ff['w'].to(dev).detach().requires_grad_(True)
+            opt = torch.optim.Adam([w], lr=self.config.famo_w_lr, weight_decay=self.config.famo_gamma)
+            opt.load_state_dict(_ff['opt'])
+            self._fm_famo_state = {'w': w, 'opt': opt, 'min': _ff['min'].to(dev),
+                                   'prev': None if _ff['prev'] is None else _ff['prev'].to(dev)}
 
     def _extract_patches(self, original, student_output, mask, point_labels):
         """Extract patch-level data for discriminator training.
@@ -872,18 +1058,31 @@ class Trainer:
             if getattr(self.config, 'fm_adaptive_lambda', False) and not teacher_only and 'fm_loss' in loss_tensors:
                 _fm_loss_tensor = loss_tensors['fm_loss']
                 if _fm_loss_tensor.item() > 1e-8:
-                    _last_w_fm = list(self.model.student_decoder.parameters())[-1]
-                    with autocast('cuda', enabled=False):
-                        _main_g_fm = torch.autograd.grad(loss.float(), _last_w_fm, retain_graph=True, allow_unused=True)[0]
-                        _fm_g = torch.autograd.grad(_fm_loss_tensor.float(), _last_w_fm, retain_graph=True, allow_unused=True)[0]
-                    if _main_g_fm is not None and _fm_g is not None:
-                        _fm_lambda = (_main_g_fm.norm() / (_fm_g.norm() + 1e-4)).clamp(0.0, 10.0).detach()
+                    if self._fbm == 'none':
+                        # ===== LEGACY (byte-identical to pre-2026-06-17): do NOT modify these lines =====
+                        _last_w_fm = list(self.model.student_decoder.parameters())[-1]
+                        with autocast('cuda', enabled=False):
+                            _main_g_fm = torch.autograd.grad(loss.float(), _last_w_fm, retain_graph=True, allow_unused=True)[0]
+                            _fm_g = torch.autograd.grad(_fm_loss_tensor.float(), _last_w_fm, retain_graph=True, allow_unused=True)[0]
+                        if _main_g_fm is not None and _fm_g is not None:
+                            _fm_lambda = (_main_g_fm.norm() / (_fm_g.norm() + 1e-4)).clamp(0.0, 10.0).detach()
+                        else:
+                            _fm_lambda = torch.tensor(1.0, device=loss.device)
+                        _fm_w = getattr(self.config, 'fm_loss_weight', 1.0)
+                        # Use prev-epoch lambda for stability (batch value logged for monitoring)
+                        loss = loss + self._prev_epoch_fm_lambda * _fm_w * _fm_loss_tensor
+                        loss_dict['fm_adaptive_lambda'] = _fm_lambda.item()
+                        # ===== END LEGACY =====
                     else:
-                        _fm_lambda = torch.tensor(1.0, device=loss.device)
-                    _fm_w = getattr(self.config, 'fm_loss_weight', 1.0)
-                    # Use prev-epoch lambda for stability (batch value logged for monitoring)
-                    loss = loss + self._prev_epoch_fm_lambda * _fm_w * _fm_loss_tensor
-                    loss_dict['fm_adaptive_lambda'] = _fm_lambda.item()
+                        # OD↔FM loss balancer (relobralo/famo/uwso) — anchor task = OD VALUE
+                        # (normal_loss + anomaly_loss); recon stays in `loss` at weight 1
+                        # (NOT balanced). The returned eff weight is logged via the existing
+                        # fm_adaptive_lambda key (schema unchanged).
+                        _od_tensor = loss_tensors['normal_loss'] + loss_tensors['anomaly_loss']
+                        loss, _fm_eff = self._fm_balance_apply(
+                            self._fbm, loss, _od_tensor, _fm_loss_tensor, epoch,
+                            loss_tensors['reconstruction_loss'])
+                        loss_dict['fm_adaptive_lambda'] = _fm_eff
                 else:
                     loss_dict['fm_adaptive_lambda'] = 0.0
             elif getattr(self.config, 'fm_adaptive_lambda', False):

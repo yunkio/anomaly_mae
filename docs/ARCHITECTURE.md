@@ -613,6 +613,33 @@ FM_loss = 1 - cosine_similarity(teacher_hidden, student_hidden)  # masked normal
 
 Can be combined with or replace output discrepancy (`use_output_discrepancy=False` disables OD, FM-only training).
 
+#### FM ↔ OD Loss Balancing (`fm_balance_mode`, 2026-06-17)
+
+When `fm_adaptive_lambda=True`, FM is excluded from `total_loss` in `loss.py` and re-added by
+the trainer with an adaptive weight. By default that weight is the legacy grad-norm ratio
+`λ = (‖∇_student OD‖ / ‖∇_student FM‖).clamp(0,10)` — which is already an **OD↔FM** balancer
+(teacher reconstruction has zero gradient on the student decoder, so it cancels). `fm_balance_mode`
+replaces *how* that FM weight is computed with a value-based multi-task balancer on the **OD↔FM pair
+only** (reconstruction stays in `total_loss` at fixed weight 1, never in the balanced pair):
+
+```
+total = recon (w=1)  +  OD (anchor)  +  w·FM      # w from the chosen balancer
+```
+
+enum `fm_balance_mode` (default `'none'` = byte-identical to exp271; **GRL is NOT affected** — it keeps
+its own `loss_balance_mode`):
+- `none` — legacy grad-norm-ratio FM λ (prev-epoch lag).
+- `relobralo` — ReLoBRaLo loss-ratio softmax (Bischof & Kraus 2110.09813); reuses `relobralo_*`. OD anchored, FM relative weight, clamped [0,10].
+- `famo` — FAMO log-loss simplex (Liu et al. NeurIPS 2023, 2306.03792); reweights BOTH OD and FM via `recon + logcomb([OD,FM])` (recon rebuilt from `loss_tensors['reconstruction_loss']`, ordering-independent).
+- `uwso` — UW-SO inverse-loss tempered softmax (Kirchdorfer 2408.07985), **MSE↔MSE scale-free variant**: 1/L normalized by its mean before temperature (raw 1/L≈1e3 for MSE≈1e-3 saturates the softmax), `fm_uwso_temperature/loss_floor/ema_beta`, rel clamped [0,10].
+
+`mse_norm_dann` is intentionally NOT offered for FM (its Ganin adversarial ramp is meaningless for two
+cooperative MSE losses). Requires `fm_adaptive_lambda=True` + `use_feature_matching=True`, mutually
+exclusive with `use_scad`. Balancer runtime state (relobralo EMA + independent RNG, uwso EMA, famo
+optimizer) round-trips through the checkpoint `lbm_state` (back-compat with old checkpoints).
+Implementation: `trainer.py` `_fm_balance_apply` / `_fm_relobralo` / `_fm_uwso` / `_fm_famo`. Experiments
+exp327 (relobralo) / exp328 (famo) / exp329 (uwso).
+
 ### Evaluation Metric
 
 **Baseline** (use_discrepancy_loss=True):

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-06-17: FM↔OD loss balancer (`fm_balance_mode`) + exp327–329
+
+271의 FM **adaptive weight 계산 방식**을, 기존 grad-norm ratio 대신 multi-task loss balancer로 교체하는 옵션 추가. balance 대상은 **OD↔FM 쌍만**(reconstruction은 `total_loss`에 weight 1로 고정, balance 비관여). GRL은 **건드리지 않음**(자체 `loss_balance_mode` 유지, 271=`adaptive_lambda_legacy`). default `'none'`은 exp271과 **byte-identical**.
+
+**왜 OD↔FM인가**: legacy FM λ(`‖∇_student OD‖/‖∇_student FM‖`)도 이미 OD↔FM 밸런서 — teacher reconstruction은 student decoder weight에 gradient가 0이라 상쇄됨(`config.py` line ~218 주석 "FM-OD gradient balancing"). 신규 4개 방법은 grad-norm이 아니라 **loss 값 기반**이라, balancer에 `recon+OD`가 아니라 **OD만** anchor로 넘겨 동일 의미를 값 기반으로 재현.
+
+**`fm_balance_mode: str = 'none'`** (∈ none/relobralo/famo/uwso):
+- `relobralo` — ReLoBRaLo loss-ratio softmax(Bischof&Kraus 2110.09813), `relobralo_*` 재사용. OD anchor, FM 상대가중, [0,10] clamp.
+- `famo` — FAMO log-loss simplex(Liu NeurIPS2023 2306.03792), OD·FM 동시 재가중. `loss = recon + logcomb([OD,FM])` (recon은 `loss_tensors['reconstruction_loss']`로 명시 재구성 → loss 순서 불변식 의존 제거).
+- `uwso` — UW-SO inverse-loss tempered softmax(Kirchdorfer 2408.07985)의 **MSE↔MSE scale-free 변형**: OD·FM 모두 작은 MSE(~1e-3)라 raw 1/L(~1e3)이 softmax를 saturate → 1/L를 평균으로 정규화해 temperature를 scale-free(손실 비율 의존)로. `fm_uwso_temperature=1.0`/`loss_floor=1e-4`/`ema_beta=0.9`, rel [0,10] clamp.
+- `mse_norm_dann`은 **의도적 제외** — Ganin adversarial ramp가 협력적 MSE↔MSE에 무의미(원전 검토).
+
+**파일**: `config.py`(`fm_balance_mode` + `fm_uwso_*`), `trainer.py`(validation·독립 RNG 상태·`_fm_balance_apply`+`_fm_relobralo`/`_fm_uwso`/`_fm_famo`·FM 블록 분기·`_lbm_state_dict`/`_load` resume 확장). **`loss.py` 무수정**(OD 텐서·FM 제외 로직 기존 활용). 요구: `fm_adaptive_lambda=True`+`use_feature_matching=True`, `use_scad` 배타.
+
+**실험 327–329**(271 base, GRL=legacy 유지): **327** `fm_relobralo` · **328** `fm_famo` · **329** `fm_uwso`. 큐 44→47, v2f가 326 뒤 자동 실행.
+
+**검증(GPU 미사용)**: ① `loss.py` sha256 **byte-identical** + 'none' 경로 legacy FM 계산 **content-identical**(들여쓰기만) → 진행 중 큐(exp324-326, 전부 default 'none') 무영향. ② 3 balancer CPU functional — finite·rel∈[0,10]·**recon grad==1.0(weight 1 불변)**·student-grad 흐름. ③ resume round-trip(famo w bit-exact·legacy ckpt back-compat). ④ 자체 발견·수정 2건: uwso saturation(1/L 평균정규화) + 메서드/상태 이름충돌(`_fm_famo`→상태 `_fm_famo_state`). ⑤ **적대적 다중 에이전트 검증(6 agent)** → SHIP, byte_identity_safe=True, must-fix 0; famo recon-isolation을 ordering-independent로 하드닝(should-fix 반영).
+
 ## 2026-06-15: H-SCAD-C (hidden-space repulsion) + transfer 진단 + scad_c 집계 버그 수정 + exp326
 
 **H-SCAD-C** (`scad_apply_space='hidden_final'`): SCAD Form C one-sided repulsion 수식은 그대로, 측정·적용 위치를 projection `z=scad_head(student_hidden)` → **final student_hidden 직접**(`h=L2norm(LayerNorm(student_hidden))`, **parameter-free LN, 0 new params**, projection head 미생성). score path(student_hidden→student_output_projection→output discrepancy)와 정합 → projection-only absorption 위험↓. 6개 `scad_c_*` metric + 시각화 전부 공유(동일 모듈, `scad_form=='C'` 가드). `config.py: scad_apply_space='projection'`(default) `| 'hidden_final'`; `model.py` forward 분기 + `__init__`에서 projection일 때만 scad_head build(hidden은 0 param).
