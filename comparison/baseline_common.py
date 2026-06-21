@@ -626,9 +626,35 @@ def _zero_metrics() -> dict:
     results = dict(_zero_metric_set())          # MAE single-source zero template
     results['aff_f1'] = 0.0
     results['r_f1']   = 0.0
+    results['train_loss'] = None                # per-epoch mean train loss (filled by _attach_train_loss)
     for key in _MAE_ONLY_KEYS:
         results[key] = None
     return results
+
+
+def _attach_train_loss(metrics: dict, model, ep) -> None:
+    """Record the epoch's mean training loss into ``metrics['train_loss']``.
+
+    Every DL / SOTA / weak-SOTA wrapper appends its epoch-mean loss to
+    ``self.train_loss_history`` BEFORE invoking ``epoch_callback``, and the
+    generic in-loop trainers append to ``model.train_loss_history`` in the same
+    step — so ``train_loss_history[ep-1]`` is exactly this epoch's loss. ``npsr``
+    stores a ``(point, seq)`` tuple → summed. Anything missing / out of range →
+    ``None`` so the key is ALWAYS present and epoch_metrics.json keys stay
+    consistent across normal, degenerate, and non-DL epochs. (2026-06-22)
+    """
+    val = None
+    hist = getattr(model, 'train_loss_history', None)
+    if hist:
+        idx = (ep - 1) if isinstance(ep, int) and ep >= 1 else len(hist) - 1
+        if 0 <= idx < len(hist):
+            v = hist[idx]
+            if isinstance(v, (tuple, list)):
+                nums = [float(x) for x in v if isinstance(x, (int, float))]
+                val = float(sum(nums)) if nums else None
+            elif isinstance(v, (int, float)):
+                val = float(v)
+    metrics['train_loss'] = val
 
 
 # ============================================================
@@ -686,6 +712,218 @@ def save_metadata(output_dir: Path, model_name: str, experiment_name: str,
         metadata.update(extra)
     with open(output_dir / 'metadata.json', 'w') as f:
         json.dump(metadata, f, indent=2)
+
+
+# ============================================================
+# Detailed run-parameter metadata (fact-only, fail-safe)
+# ============================================================
+# These helpers augment the driver-written metadata.json with the parameters
+# ACTUALLY used for a model's train+inference, captured from the live model
+# object (after every override, e.g. the WaDi batch-size divisor) plus the
+# resolved run context. Everything is read directly from in-memory state or
+# on-disk artifacts — no inference, no guessing. The whole path is fail-safe:
+# metadata is a side artifact and a failure here must never abort/alter a run.
+
+_GIT_SHA = None
+_GIT_SHA_DONE = False
+
+
+def _git_commit_sha():
+    """Best-effort current git HEAD sha of the repo (cached). None on failure."""
+    global _GIT_SHA, _GIT_SHA_DONE
+    if _GIT_SHA_DONE:
+        return _GIT_SHA
+    _GIT_SHA_DONE = True
+    try:
+        import subprocess
+        here = Path(__file__).resolve().parent
+        out = subprocess.run(
+            ['git', '-C', str(here), 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            _GIT_SHA = out.stdout.strip() or None
+    except Exception:
+        _GIT_SHA = None
+    return _GIT_SHA
+
+
+def _json_safe_scalar(v):
+    """Return a JSON-serializable view of a SCALAR (or short list/tuple of
+    scalars), else None. Read-only; converts torch.device/dtype to str. Never
+    touches tensors / arrays / modules — used to snapshot HP attributes safely."""
+    import numbers
+    if v is None or isinstance(v, (bool, str)):
+        return v
+    if isinstance(v, numbers.Integral):
+        return int(v)
+    if isinstance(v, numbers.Real):
+        return float(v)
+    tn = type(v).__name__
+    if tn in ('device', 'dtype'):
+        return str(v)
+    if isinstance(v, (list, tuple)):
+        out = []
+        for x in v:
+            sx = _json_safe_scalar(x)
+            if sx is None and x is not None:
+                return None  # contains a non-scalar -> skip the whole collection
+            out.append(sx)
+        return out
+    return None
+
+
+def introspect_model_attributes(model) -> dict:
+    """READ-ONLY snapshot of a model wrapper's scalar instance attributes
+    (hyperparameters stored as ``self.X``). Skips private (``_``-prefixed) names
+    and any non-scalar value (tensors / arrays / nn.Module / callables). Never
+    calls a model method — purely reads ``__dict__``."""
+    snapshot = {}
+    try:
+        d = vars(model)
+    except TypeError:
+        return snapshot
+    for k, v in d.items():
+        if k.startswith('_'):
+            continue
+        sv = _json_safe_scalar(v)
+        if sv is not None or v is None:
+            snapshot[k] = sv
+    return snapshot
+
+
+def _capture_environment() -> dict:
+    """Fact-only environment snapshot for reproducibility. All fields best-effort."""
+    env = {'git_commit': _git_commit_sha(), 'python_executable': sys.executable}
+    try:
+        import platform
+        env['hostname'] = platform.node()
+        env['python_version'] = platform.python_version()
+    except Exception:
+        pass
+    env['conda_env'] = os.environ.get('CONDA_DEFAULT_ENV')
+    try:
+        import torch
+        env['torch_version'] = torch.__version__
+        env['cuda_version'] = torch.version.cuda
+        env['cuda_available'] = bool(torch.cuda.is_available())
+        if torch.cuda.is_available():
+            env['gpu_name'] = torch.cuda.get_device_name(0)
+    except Exception:
+        pass
+    return env
+
+
+def augment_run_metadata(
+    output_dir,
+    model,
+    *,
+    model_name: str,
+    experiment_name: str,
+    raw_experiment: str,
+    model_preset: str,
+    normalize_mode: str,
+    n_features: int,
+    train_shape=None,
+    test_shape=None,
+    epoch_overrides: dict = None,
+    wadi_batch_divisor=None,
+    eval_interval=None,
+    train_stride=None,
+):
+    """Merge a detailed, FACT-ONLY ``parameters`` + ``environment`` block into
+    the driver-written ``metadata.json``.
+
+    The effective hyperparameters are read off the LIVE trained model object, so
+    every override (notably the per-dataset WaDi batch-size divisor and any
+    epoch override/cap) is reflected exactly. ``configured_preset_hp`` is the
+    authoritative flat HP dict that ``create_model`` started from for this
+    (preset, model). Nothing here is inferred.
+
+    FULLY FAIL-SAFE: adds keys only (never drops the existing model_name /
+    experiment / timestamp / timing fields), and any error is caught + logged so
+    a metadata problem can never abort or alter an experiment run.
+    """
+    meta_path = Path(output_dir) / 'metadata.json'
+    try:
+        meta = {}
+        if meta_path.exists():
+            try:
+                with open(meta_path) as f:
+                    meta = json.load(f)
+            except Exception:
+                meta = {}
+
+        # Authoritative configured HP baseline (the exact dict create_model uses
+        # for this preset/model before per-run overrides). Flat — no guessing.
+        try:
+            preset_fn = MODEL_PRESETS.get(model_preset, _get_default_model_params)
+            preset_hp = dict((preset_fn() or {}).get(model_name, {}) or {})
+        except Exception:
+            preset_hp = {}
+
+        # Effective values read off the trained object (reflect ALL overrides).
+        effective = {
+            'batch_size': _json_safe_scalar(getattr(model, 'batch_size', None)),
+            'epochs': _json_safe_scalar(getattr(model, 'epochs', None)),
+            'train_stride': _json_safe_scalar(getattr(model, 'train_stride', None)),
+            'seq_len': _json_safe_scalar(getattr(model, 'seq_len', None)),
+            'lr': _json_safe_scalar(getattr(model, 'lr', None)),
+        }
+        dev = getattr(model, 'device', None)
+        effective['device'] = str(dev) if dev is not None else None
+
+        # Actual epochs completed (ground truth from the per-epoch log).
+        epochs_run = None
+        emp = Path(output_dir) / 'epoch_metrics.json'
+        if emp.exists():
+            try:
+                with open(emp) as f:
+                    epochs_run = len(json.load(f).get('epochs', []) or [])
+            except Exception:
+                epochs_run = None
+
+        # Reconstruct the batch-size override as fact (divisor + final value).
+        batch_override = {}
+        if wadi_batch_divisor:
+            batch_override = {
+                'kind': 'wadi_batch_divisor',
+                'divisor': int(wadi_batch_divisor),
+                'batch_size_preset': preset_hp.get('batch_size'),
+                'batch_size_final': effective.get('batch_size'),
+            }
+        catch_wadi_cap = bool(model_name == 'catch' and 'wadi' in str(raw_experiment).lower())
+
+        meta['parameters'] = {
+            'model_preset': model_preset,
+            'configured_preset_hp': preset_hp,
+            'effective': effective,
+            'all_model_attributes': introspect_model_attributes(model),
+            'epoch_overrides': dict(epoch_overrides or {}),
+            'batch_size_override': batch_override,
+            'catch_wadi_epoch_cap_applies': catch_wadi_cap,
+            'epochs_run': epochs_run,
+            'normalize_mode': normalize_mode,
+            'n_features': n_features,
+            'train_shape': list(train_shape) if train_shape is not None else None,
+            'test_shape': list(test_shape) if test_shape is not None else None,
+            'eval_interval': eval_interval,
+            'train_stride_config': train_stride,
+            'raw_experiment': raw_experiment,
+        }
+        meta['environment'] = _capture_environment()
+        meta['metadata_schema_version'] = 2
+
+        tmp = meta_path.with_suffix('.json.tmp')
+        with open(tmp, 'w') as f:
+            json.dump(meta, f, indent=2)
+        os.replace(tmp, meta_path)
+    except Exception as e:
+        print(
+            f"  [METADATA] augment_run_metadata failed for {model_name} "
+            f"(non-fatal): {e}",
+            flush=True,
+        )
 
 
 # ============================================================
@@ -777,6 +1015,7 @@ def run_simple_baseline(
         m['_inference_time'] = run_infer
         m['_eval_time'] = time.time() - eval_start
         m['epoch'] = 1
+        m['train_loss'] = None          # non-DL baseline: no training loss
 
         # SWaT excl22
         if excl_region is not None:
@@ -1012,6 +1251,7 @@ def run_dl_baseline_with_epoch_eval(
     epoch_metrics_list = []
     model.train_loss_history = []
     best_pak_f1 = 0.0
+    best_saved = False  # True once model/ holds the BEST-epoch model (2026-06-15)
     train_start = time.time()
 
     # ---- Training loop ----
@@ -1052,6 +1292,7 @@ def run_dl_baseline_with_epoch_eval(
                 ep_metrics = compute_all_metrics(scores, test_y, anomaly_regions)
                 ep_metrics['_eval_time'] = time.time() - eval_start
                 ep_metrics['epoch'] = ep
+                _attach_train_loss(ep_metrics, model, ep)
 
                 if excl_region is not None:
                     excl = compute_all_metrics_with_excl(scores, test_y, anomaly_regions, excl_region)
@@ -1066,6 +1307,16 @@ def run_dl_baseline_with_epoch_eval(
                 if pak_f1 > best_pak_f1:
                     best_pak_f1 = pak_f1
                     best_marker = " ★"
+                    # Persist the BEST-epoch model (by pak_auc_f1) to model/ so
+                    # model.pt matches the reported best metric, not the last
+                    # epoch. Overwrites on each new best; the end-of-train save
+                    # is skipped when best_saved is True. (2026-06-15)
+                    if hasattr(model, 'save'):
+                        try:
+                            model.save(output_dir / "model")
+                            best_saved = True
+                        except Exception as _bs_e:
+                            print(f"  [WARN] best-epoch model save failed: {_bs_e}")
                 print(f"  [Epoch {ep:>2}] PRC={prc:.4f} PAK_F1={pak_f1:.4f} "
                       f"(eval={ep_metrics.get('_eval_time', 0):.1f}s){best_marker}")
             except Exception as e:
@@ -1101,6 +1352,7 @@ def run_dl_baseline_with_epoch_eval(
         final_scores = _predict_gated(model, test_X, test_segments)
         final_metrics = compute_all_metrics(final_scores, test_y, anomaly_regions)
         final_metrics['epoch'] = model.epochs
+        _attach_train_loss(final_metrics, model, model.epochs)
         epoch_metrics_list = [final_metrics]
 
     final_metrics['_inference_time'] = 0  # already timed above
@@ -1111,7 +1363,10 @@ def run_dl_baseline_with_epoch_eval(
     save_metadata(output_dir, model_name, experiment_name, train_time,
                   final_metrics.get('_inference_time', 0))
 
-    if hasattr(model, 'save'):
+    # model/ already holds the BEST-epoch model if any eval epoch improved
+    # (saved in-loop). Fall back to a last-epoch save only when no best was
+    # captured (e.g., eval never ran). (2026-06-15)
+    if hasattr(model, 'save') and not best_saved:
         try:
             model.save(output_dir / "model")
         except Exception as e:
@@ -1238,10 +1493,11 @@ def run_sota_baseline_with_epoch_eval(
     # ---- Epoch eval state ----
     epoch_metrics_list = []
     best_pak_f1 = 0.0
+    best_saved = False  # True once model/ holds the BEST-epoch model (2026-06-15)
 
     def epoch_callback(model_instance, ep):
         """Called by model.fit() after each epoch. Synchronous eval."""
-        nonlocal best_pak_f1
+        nonlocal best_pak_f1, best_saved
 
         # Should we evaluate this epoch?
         should_eval = (ep % eval_interval == 0) or (ep == model_instance.epochs)
@@ -1257,6 +1513,7 @@ def run_sota_baseline_with_epoch_eval(
             ep_metrics = compute_all_metrics(scores, test_y, anomaly_regions)
             ep_metrics['_eval_time'] = time.time() - eval_start
             ep_metrics['epoch'] = ep
+            _attach_train_loss(ep_metrics, model_instance, ep)
 
             if excl_region is not None:
                 excl = compute_all_metrics_with_excl(scores, test_y, anomaly_regions, excl_region)
@@ -1271,6 +1528,15 @@ def run_sota_baseline_with_epoch_eval(
             if pak_f1 > best_pak_f1:
                 best_pak_f1 = pak_f1
                 best_marker = " ★"
+                # Persist the BEST-epoch model (by pak_auc_f1) to model/ so
+                # model.pt matches the reported best metric, not the last
+                # epoch. (2026-06-15)
+                if hasattr(model_instance, 'save'):
+                    try:
+                        model_instance.save(output_dir / "model")
+                        best_saved = True
+                    except Exception as _bs_e:
+                        print(f"  [WARN] best-epoch model save failed: {_bs_e}")
             print(f"\n  [Epoch {ep:>2}] PRC={prc:.4f} PAK_F1={pak_f1:.4f} "
                   f"(eval={ep_metrics.get('_eval_time', 0):.1f}s){best_marker}")
         except Exception as e:
@@ -1315,6 +1581,7 @@ def run_sota_baseline_with_epoch_eval(
         final_scores = _predict_gated(model, test_X, test_segments)
         final_metrics = compute_all_metrics(final_scores, test_y, anomaly_regions)
         final_metrics['epoch'] = getattr(model, 'epochs', 1)
+        _attach_train_loss(final_metrics, model, getattr(model, 'epochs', 1))
         if excl_region is not None:
             excl = compute_all_metrics_with_excl(final_scores, test_y, anomaly_regions, excl_region)
             final_metrics.update(excl)
@@ -1328,7 +1595,10 @@ def run_sota_baseline_with_epoch_eval(
     save_metadata(output_dir, model_name, experiment_name, train_time,
                   final_metrics.get('_inference_time', 0))
 
-    if hasattr(model, 'save'):
+    # model/ already holds the BEST-epoch model if any eval epoch improved
+    # (saved in-callback). Fall back to a last-epoch save only when no best
+    # was captured (e.g., eval never ran). (2026-06-15)
+    if hasattr(model, 'save') and not best_saved:
         try:
             model.save(output_dir / "model")
         except Exception as e:
@@ -1408,6 +1678,7 @@ def run_weak_sota_baseline_with_epoch_eval(
     # eval-side state that lives outside the wrapper.
     epoch_metrics_list: list = []
     best_pak_f1 = 0.0
+    best_saved = False  # True once model/ holds the BEST-epoch model (2026-06-15)
     resume_start_epoch = 0
     metrics_file = output_dir / 'epoch_metrics.json'
     last_ckpt = ckpt_dir / 'last.pt'
@@ -1470,7 +1741,7 @@ def run_weak_sota_baseline_with_epoch_eval(
 
     def epoch_callback(model_instance, ep):
         """Called by model.fit() after each epoch. Synchronous eval (same as SOTA path)."""
-        nonlocal best_pak_f1
+        nonlocal best_pak_f1, best_saved
         should_eval = (ep % eval_interval == 0) or (ep == model_instance.epochs)
         if not should_eval:
             return
@@ -1480,6 +1751,7 @@ def run_weak_sota_baseline_with_epoch_eval(
             ep_metrics = compute_all_metrics(scores, test_y, anomaly_regions)
             ep_metrics['_eval_time'] = time.time() - eval_start
             ep_metrics['epoch'] = ep
+            _attach_train_loss(ep_metrics, model_instance, ep)
             if excl_region is not None:
                 excl = compute_all_metrics_with_excl(scores, test_y, anomaly_regions, excl_region)
                 ep_metrics.update(excl)
@@ -1505,6 +1777,15 @@ def run_weak_sota_baseline_with_epoch_eval(
                         shutil.copy2(last_ckpt, ckpt_dir / 'best.pt')
                     except Exception as cp_e:
                         print(f"  [WARN] best.pt copy failed: {cp_e}")
+                # Also persist the best-epoch model to model/ so model.pt (not
+                # only checkpoints/best.pt) matches the reported best metric —
+                # uniform with every other run_* path. (2026-06-15)
+                if hasattr(model_instance, 'save'):
+                    try:
+                        model_instance.save(output_dir / "model")
+                        best_saved = True
+                    except Exception as _bs_e:
+                        print(f"  [WARN] best-epoch model save failed: {_bs_e}")
             print(f"\n  [Epoch {ep:>2}] PRC={prc:.4f} PAK_F1={pak_f1:.4f} "
                   f"(eval={ep_metrics.get('_eval_time', 0):.1f}s){best_marker}")
         except Exception as e:
@@ -1545,6 +1826,7 @@ def run_weak_sota_baseline_with_epoch_eval(
         final_scores = _predict_gated(model, test_X, test_segments)
         final_metrics = compute_all_metrics(final_scores, test_y, anomaly_regions)
         final_metrics['epoch'] = getattr(model, 'epochs', 1)
+        _attach_train_loss(final_metrics, model, getattr(model, 'epochs', 1))
         if excl_region is not None:
             excl = compute_all_metrics_with_excl(final_scores, test_y, anomaly_regions, excl_region)
             final_metrics.update(excl)
@@ -1557,7 +1839,10 @@ def run_weak_sota_baseline_with_epoch_eval(
     save_metadata(output_dir, model_name, experiment_name, train_time,
                   final_metrics.get('_inference_time', 0))
 
-    if hasattr(model, 'save'):
+    # model/ already holds the BEST-epoch model if any eval epoch improved
+    # (saved in-callback, alongside checkpoints/best.pt). Fall back to a
+    # last-epoch save only when no best was captured. (2026-06-15)
+    if hasattr(model, 'save') and not best_saved:
         try:
             model.save(output_dir / "model")
         except Exception as e:
@@ -1650,6 +1935,7 @@ def run_segment_aware_dl_baseline(
     metrics['_inference_time'] = inference_time
     metrics['_eval_time'] = time.time() - eval_start
     metrics['epoch'] = model.epochs
+    _attach_train_loss(metrics, model, model.epochs)
 
     if excl_region is not None:
         excl = compute_all_metrics_with_excl(scores, test_y, anomaly_regions, excl_region)

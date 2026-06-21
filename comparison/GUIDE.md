@@ -72,7 +72,7 @@ comparison/
 ├── epoch_metrics.json       # 매 epoch 메트릭 (MAE 동일 형식)
 ├── epoch_metrics.json.bak   # [optional] 후처리 스크립트 (add_teacher_only.py 등)가 원본 백업 후 생성
 ├── scores.npz               # key: anomaly_score (1D float32)
-├── metadata.json            # 모델 정보, 실행 시간
+├── metadata.json            # 모델 정보 + 실행 시간 + 실제 사용 파라미터(아래 참조)
 ├── visualization/
 │   ├── epoch_metrics/       # [DL only] epoch별 성능 추이
 │   │   ├── epoch_dashboard.png
@@ -87,6 +87,21 @@ comparison/
 ```
 
 > `.bak` 파일은 `comparison/scripts/add_teacher_only.py` / `calc_teacher_only.py` 등 후처리 스크립트가 `epoch_metrics.json`을 갱신할 때 원본을 보존하기 위해 만든 것. 큐 실행 자체는 생성하지 않음.
+
+#### metadata.json — 실행 파라미터 (fact-only)
+
+기본 필드: `model_name`, `experiment`, `timestamp`, `timing`.
+
+**`run_baseline.py`는 매 모델 실행 후** `baseline_common.augment_run_metadata()`로 **실제 사용된 학습·추론 파라미터**를 자동 기록한다 (`metadata_schema_version: 2`). 살아있는 model 객체 + resolved 컨텍스트에서 직접 읽으므로 모든 override(특히 per-dataset batch 변경)가 정확히 반영된다. 추측 없음.
+
+- `parameters.configured_preset_hp` — `create_model`이 사용한 preset HP 전체 (authoritative).
+- `parameters.effective` — 학습된 객체에서 읽은 `batch_size`(post-divisor)/`epochs`(post-override)/`lr`/`seq_len`/`train_stride`/`device`.
+- `parameters.batch_size_override` — WaDi 등 memory-pressure divisor 적용 시 `{divisor, batch_size_preset, batch_size_final}`.
+- `parameters.all_model_attributes` — model 객체의 scalar 속성 전수(introspection, 비스칼라 제외).
+- `parameters.epoch_overrides` / `epochs_run` / `normalize_mode` / `n_features` / `train_shape` / `test_shape` / `eval_interval`.
+- `environment` — `git_commit`, python/torch/cuda 버전, GPU, conda env (재현성).
+
+**과거 실험(8/9/10) backfill**: `comparison/backfill_metadata.py`가 이미 완료된 run에 `backfill_parameters`(별도 키, schema 1)를 추가한다. live 객체가 없으므로 **artifact·코드규칙·git에서 확인되는 사실만** 기록하고 각 값에 `provenance`를 붙인다 — `epochs_run`(epoch_metrics), `normalize_mode`(self-norm 규칙), WaDi catch/dcdetector `batch_size_override`(divisor 규칙 + 저장 timestamp로 git era 고정), `configured_preset_hp_reference`(현재 preset; 8/9는 reference-only, 10은 run-time exact). 미기록 HP는 날조하지 않고 note로 명시. (`--apply` 없이 dry-run 가능)
 
 ## 2. 핵심 원칙
 
@@ -407,6 +422,7 @@ python comparison/run_baseline.py --experiment psm --model all --normalize-mode 
   "epochs": [
     {
       "epoch": 1,
+      "train_loss": 0.0421,
       "roc_auc": 0.82, "prc_auc": 0.66, "f1_t": 0.70,
       "pak_auc_f1": 0.66, "pak_auc_prc_auc": 0.65,
       "pa_0_f1": 0.96, "pa_50_f1": 0.82, "pa_100_f1": 0.27,
@@ -416,6 +432,10 @@ python comparison/run_baseline.py --experiment psm --model all --normalize-mode 
   ]
 }
 ```
+
+> **`train_loss`** (2026-06-22 추가): 해당 epoch의 **평균 train loss**. 모든 DL/SOTA wrapper가 epoch마다 `self.train_loss_history`에 적재하는 값을 `_attach_train_loss()`가 epoch 엔트리에 기록한다 (`baseline_common.py`). 의미: 모델별 loss 함수가 달라 (MSE / ELBO / BCE+DTW / l1+l2 등) **스케일이 제각각** → 모델 내 epoch 추이 진단용이며 **모델 간 비교 불가**. `npsr`는 `(point, seq)` 합산, `dagmm`은 `L1+L2`. 비-DL baseline(random/pca_error 등)·loss 미노출 시 `null`.
+>
+> **과거 실험 backfill (`backfill_train_loss.py`, 2026-06-22)**: forward 코드는 2026-06-22 이후 실행분만 기록하지만, 과거 실험은 같은 per-epoch loss를 **stdout에만** 출력했었다. 이 스크립트가 캡처된 큐 로그(`temp/baseline_experiment_run/*.log`)에서 값을 복구해 기존 `epoch_metrics.json`에 동일 형태로 주입한다. **8번/10번 전 모델 backfill 완료** (8번 627 DL run + 10번 456 DL run, 비-DL은 `null`). 8번의 SMD/MSL/SMAP는 06-13+ 후속 run(`chain_10_11_12_resumed_0613.log`·`watcher_10_11.log`)이 8번 디렉토리에 써넣은 것이라 해당 로그에서 복구. 귀속은 각 job의 `[tag] Experiment: …` 라인 + log mtime(latest-wins)으로 정확 매핑(추측 없음). 로그값은 출력 정밀도(소수 6자리)라 live capture(float64) 대비 반올림. **유일 예외**: 8번 SMAP/{P-1,G-7}/dcdetector 2개는 원본 `epoch_metrics.json`이 공백 손상(기존 문제) → 주입 불가.
 
 ### scores.npz
 

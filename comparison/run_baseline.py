@@ -59,6 +59,7 @@ from comparison.baseline_common import (
     filter_models,
     load_data_from_config,
     generate_excl22_directory,
+    augment_run_metadata,
 )
 from comparison.visualization import (
     plot_baseline_epoch_metrics,
@@ -377,6 +378,24 @@ def main():
             print(f"\n[SKIP] {model_name} not available (import failed)", flush=True)
             continue
 
+        # 8번-parity epoch cap (mirror of the _WADI_BATCH_DIVISORS memory-pressure
+        # handling below). The 8번 baseline ran catch×WaDi at sota_epochs=5 (set via
+        # the queue config) — catch is extreme-slow on WaDi's ~130 features even at
+        # batch÷8. Pin catch×WaDi to 5 epochs here so any run (incl. the contaminated
+        # 10번) reproduces 8번's applied params regardless of the queue's sota_epochs
+        # value. Per-iteration copy avoids leaking the cap to other models under
+        # --model all; non-catch / non-WaDi entries are untouched.
+        _epoch_overrides = dict(epoch_overrides)
+        if model_name == 'catch' and 'wadi' in args.experiment.lower() \
+                and _epoch_overrides.get('sota_epochs') != 5:
+            print(
+                f"[CONFIG] {model_name} × {args.experiment}: "
+                f"sota_epochs {_epoch_overrides.get('sota_epochs')} → 5 "
+                f"(8번 parity: catch×WaDi epoch cap)",
+                flush=True,
+            )
+            _epoch_overrides['sota_epochs'] = 5
+
         try:
             # Model creation is split out: TypeError here = preset/wrapper signature
             # mismatch, which used to silently skip the model. Now it surfaces as
@@ -386,7 +405,7 @@ def main():
             try:
                 model = create_model(
                     model_name, n_features, config['model_preset'],
-                    epoch_overrides, config.get('train_stride'), args.nn_subsample,
+                    _epoch_overrides, config.get('train_stride'), args.nn_subsample,
                 )
             except TypeError as type_e:
                 print(
@@ -542,6 +561,35 @@ def main():
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+            # ---- Detailed run-parameter metadata (fact-only, fail-safe) ----
+            # Augment the driver-written metadata.json with the actually-used
+            # hyperparameters captured from the live model object (reflecting the
+            # WaDi batch divisor + any epoch override) plus the resolved run
+            # context. Wrapped fail-safe: it adds keys only and can never abort
+            # or alter the experiment (the inner function is also self-guarded).
+            try:
+                augment_run_metadata(
+                    output_dir, model,
+                    model_name=model_name,
+                    experiment_name=experiment_name,
+                    raw_experiment=args.experiment,
+                    model_preset=config['model_preset'],
+                    normalize_mode=effective_norm,
+                    n_features=n_features,
+                    train_shape=getattr(train_X, 'shape', None),
+                    test_shape=getattr(test_X, 'shape', None),
+                    epoch_overrides=_epoch_overrides,
+                    wadi_batch_divisor=(
+                        divisor if (divisor and 'wadi' in args.experiment.lower())
+                        else None
+                    ),
+                    eval_interval=args.eval_interval,
+                    train_stride=config.get('train_stride'),
+                )
+            except Exception as _meta_e:
+                print(f"  [METADATA] augment wrapper error (non-fatal): {_meta_e}",
+                      flush=True)
 
             # ---- Visualization ----
             try:

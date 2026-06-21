@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-06-22: baseline epoch_metrics.json — per-epoch `train_loss` 기록
+
+각 baseline의 `epoch_metrics.json` 각 epoch 엔트리에 **평균 train loss(`train_loss`)**를 기록하도록 추가. 기존엔 모든 DL/SOTA wrapper가 epoch마다 loss를 계산해 `self.train_loss_history`에 적재하고 **stdout으로만 출력**했을 뿐, 결과 JSON엔 저장되지 않아 실행 후 소실됐다(8·10번 등 과거 전 실험 0/전체).
+
+**Fix** — `comparison/baseline_common.py`에 `_attach_train_loss(metrics, model, ep)` 헬퍼 추가: wrapper들이 `epoch_callback` **호출 직전** 적재하는 `train_loss_history[ep-1]`을 epoch 엔트리에 기록. 호출 지점 = 4개 학습 함수의 eval 산출부 + fallback 분기: `run_dl_baseline_with_epoch_eval`(generic mlp/transformer/mlpmixer), `run_sota_baseline_with_epoch_eval`(14 SOTA), `run_weak_sota_baseline_with_epoch_eval`(deepmil/treemil/wetas/nrdetector), `run_segment_aware_dl_baseline`. `npsr`의 `(point, seq)` 튜플은 합산, loss 미노출/범위초과는 `None`. 비-DL(`run_simple_baseline`: random/pca_error 등)은 `train_loss=None`으로 키 일관성 유지. `_zero_metrics()`에도 `train_loss` 키 추가(degenerate epoch 스키마 일치). 기존 `run_dl_baseline`의 train_loss 주입 경로(이미 존재)와 정합.
+
+**의미/주의**: 모델별 loss 함수가 다르므로(MSE / ELBO / BCE+DTW / l1+l2 …) **스케일 비교 불가** → 모델 내 epoch 추이 진단용. **2026-06-22 이후 실행분에만 존재**(과거 실험엔 backfill 불가 — 당시 stdout 로그에만 잔존).
+
+**무영향/안전**: 순수 additive(새 키 1개), 학습/스코어/best-epoch(`pak_auc_f1`) 선정 numeric 불변. py_compile OK + 헬퍼 단위테스트(scalar/npsr튜플/누락/범위초과/nan) 통과. 원본 `comparison/.trash/260622/baseline_common.py.bak` 백업.
+
+**과거 실험 backfill** — `comparison/backfill_train_loss.py`(신규)로 8번·10번의 기존 `epoch_metrics.json`에 동일 형태로 `train_loss` 주입(과거엔 stdout에만 출력돼 소실됐던 값을 캡처 로그에서 복구). 결과: **8번 627 DL run(12,175/12,360 엔트리 non-null) + 10번 456 DL run(10,470/10,655) 전수 채움**, 비-DL은 `null`. 핵심: **8번의 SMD/MSL/SMAP는 06-13+ 후속 run(`chain_10_11_12_resumed_0613.log`·`watcher_10_11.log`)이 8번 출력 디렉토리에 써넣은 것** — 해당 로그에서 복구(SMD 셀당 정확히 1회 기록=재실행 없음 확인). 귀속 정확성: 큐 job별 `[tag] Experiment: <DS>/<VAR>` 라인으로 결과경로 직접 매핑(태그는 `smd_1-2` 단축형이라 토큰 추측 불가→Experiment 라인 사용), baseline 17모델 필터로 exp9 분리, 로그 mtime 시간순 latest-wins. 포맷 7종(generic `Loss:`/`Epoch N: loss=`/memto 2-phase/`rec_loss`/dagmm `L1+L2`/npsr `M_pt+M_seq`/wetas) 커버. 값 검증: dagmm(0.051674+0.177649=0.2293)·npsr(0.074485+0.218612=0.2931)·anomaly_transformer(rec_loss 0.0426)·tranad-SMD(watcher 로그 0.055134) raw와 소수점까지 일치. 멱등(재실행 동일)·atomic write. 사전 전체 스냅샷 `comparison/.trash/260622/epoch_metrics_pre_trainloss_*.tgz`(1,455 files). **미복구 2건**: 8번 SMAP/{P-1,G-7}/dcdetector는 원본 epoch_metrics.json 공백 손상(기존 문제)이라 주입 불가.
+
+## 2026-06-22: baseline metadata.json — 실제 사용 파라미터 자동 기록 + 8/9/10 fact-only backfill
+
+각 baseline 모델의 `metadata.json`에 **학습·추론에 실제 사용된 모든 파라미터**를 기록하도록 추가. 핵심 요구: **추측 없이 fact만**, 특히 **per-dataset batch_size 변경(WaDi catch÷8/dcdetector÷2 등)까지 정확히 반영**.
+
+**Forward(자동 수집)** — `comparison/baseline_common.py`에 `augment_run_metadata()` + 헬퍼(`introspect_model_attributes`/`_json_safe_scalar`/`_capture_environment`/`_git_commit_sha`) 추가. `comparison/run_baseline.py`는 매 모델 dispatch 직후(모든 분기 공통 지점, `torch.cuda.empty_cache()`와 viz 사이) 이를 1회 호출. **살아있는 model 객체에서 직접** `batch_size`(post-divisor)/`epochs`(post-override)/`lr` 등을 읽으므로 모든 override가 정확. 기록 키: `parameters.{configured_preset_hp, effective, all_model_attributes, batch_size_override, epoch_overrides, epochs_run, normalize_mode, n_features, train/test_shape, eval_interval}` + `environment.{git_commit, torch/cuda/python, gpu, conda_env}` (`metadata_schema_version: 2`).
+
+**Backfill(과거 8/9/10)** — `comparison/backfill_metadata.py`(신규). live 객체가 없는 과거 run에는 **artifact·코드규칙·git에서 확인되는 사실만** `backfill_parameters`(별도 키, schema 1)로 기록하고 값마다 `provenance` 부착: `epochs_run`(epoch_metrics.json), `normalize_mode`(self-norm 규칙), WaDi catch/dcdetector `batch_size_override`(divisor 규칙 + **저장 timestamp로 git era 고정** — catch는 commit b7fc99e[2026-06-13]에서 ÷4→÷8 변경되어 8번=batch 32 / 10번=batch 16). 미기록 HP는 **날조 없이** note 명시. 적용 결과: 8번 814(810 ok + 손상 metadata 2 복구 + 손상 epoch_metrics 2) / 9번 185 / 10번 633. WaDi batch override = 8번 4셀 + 10번 4셀.
+
+**무영향/안전(엄격)**: ① run_baseline.py 변경은 **metadata 키 추가만** — 실험 numeric 출력 불변. ② augment 함수 + 호출부 **이중 try/except** 가드 → metadata 실패가 run을 중단/변경 불가(outer try의 sys.exit(3) 경로 차단). ③ atomic write(tmp+os.replace). ④ 실행 중인 10번(chain 87747)은 구코드 subprocess 무영향, **신규 subprocess부터** 자동 적용. ⑤ backfill은 완료(scores.npz)·미-augmented(schema<2) dir만 처리, live worker dir은 metadata.json 부재로 자연 제외. **부수 발견**: 8번 SMD/machine-1-2/mlpmixer·SMD/machine-3-3/npsr의 metadata.json 및 SMAP/{P-1,G-7}/dcdetector의 epoch_metrics.json이 공백으로 손상(기존 문제) — 전자는 backfill로 복구, 후자는 epochs_run=unavailable 표기.
+
+**검증**: 오프라인(mock model + 실제 metadata 복사본)으로 기존필드 보존·batch override·비스칼라 제외·atomic write assertion 통과. dry-run→디스크 검증(8번 catch×WaDi=32/div4, 10번=16/div8, dcdetector=64/div2). py_compile 3파일 OK. 독립 다중 에이전트 adversarial 검증.
+
 ## 2026-06-17: GRL effect diagnostics (`grl_diagnostics/`) + 6 new GRL scalars
 
 SCAD-C가 `scad_diagnostics/`로 효과를 검증하듯, **GRL(gradient-reversal adversarial classifier)의 효과 검증** 진단을 추가. GRL은 적대적 minimax라 "성공"이 직관 반대(classifier가 나빠짐=balanced_acc→0.5가 목표)인데, 그 0.5가 **starvation/class-collapse와 구분 불가** → 진단의 핵심은 **진짜 invariance vs 죽은 게임 구분**. (이 세션 분석에서 발견한 #1 실패모드 = adaptive-λ starvation `effective_weight→0`.)
