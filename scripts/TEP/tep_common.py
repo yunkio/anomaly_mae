@@ -11,7 +11,9 @@ import os
 import sys
 
 # ---- paths -----------------------------------------------------------------
-REPO_ROOT = '/home/ykio/notebooks/claude'
+# Derive repo root from this file's location (scripts/TEP/tep_common.py -> repo root)
+# so the build works on any machine, not a single hardcoded checkout path.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WORKSPACE = os.path.join(REPO_ROOT, 'scripts', 'TEP')
 DATA_DIR = os.path.join(WORKSPACE, 'data')
 RESULTS_BASE = os.path.join(WORKSPACE, 'results')
