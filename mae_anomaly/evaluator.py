@@ -635,7 +635,7 @@ def _apply_pa_k_segment_adjustment(
 
 
 def _compute_threshold_dependent(
-    s: np.ndarray, y: np.ndarray, pred: np.ndarray,
+    s: np.ndarray, y: np.ndarray, pred: np.ndarray, *, skip_rf1: bool = False,
 ) -> Dict[str, float]:
     """Affiliation P/R/F1 + Range-based F1 at a given binarization (pred).
 
@@ -669,11 +669,21 @@ def _compute_threshold_dependent(
     except Exception as e:
         print(f"  [Aff warn] {type(e).__name__}: {e}")
 
-    try:
-        rf1 = _rf1_grader_cls().metric_RF1(y, s, preds=pred)
-        out['r_based_f1'] = float(rf1)
-    except Exception as e:
-        print(f"  [RF1 warn] {type(e).__name__}: {e}")
+    # (2026-06-23 ROOT-CAUSE FIX) R-based F1 (TSB_AD metric_RF1) is a pure-Python
+    # O(n_anomaly_points) loop (basic_metrics.py `w`: `for i in range(...): if i in p`)
+    # that costs ~82s/call on TEP-scale tests (422K points / 320K anomaly / 400 regions)
+    # — empirically the SINGLE dominant eval cost (cProfile: 82.3s of 104s), paid
+    # per-epoch ×N (the training eval-bound), per final sweep, and per fault. It is an
+    # auxiliary diagnostic (headline metric is pak_auc_f1), so skip it ONLY on
+    # MAE_SKIP_VUS runs (TEP). All non-TEP datasets (base) compute it exactly as before —
+    # BOTH per-epoch and final eval — so base behaviour is 100% unchanged. (skip_rf1 is a
+    # caller-side override, default False; the main pipeline does not pass it.)
+    if not (skip_rf1 or os.environ.get('MAE_SKIP_VUS') == '1'):
+        try:
+            rf1 = _rf1_grader_cls().metric_RF1(y, s, preds=pred)
+            out['r_based_f1'] = float(rf1)
+        except Exception as e:
+            print(f"  [RF1 warn] {type(e).__name__}: {e}")
 
     return out
 
@@ -744,7 +754,8 @@ def compute_extra_metrics(
         except Exception as e:
             print(f"  [VUS warn] {type(e).__name__}: {e}")
 
-    # Aff + R-F1 at given threshold (always computed — cheap)
+    # Aff (cheap, always) + R-F1 (gated by MAE_SKIP_VUS env inside the fn — TEP only;
+    # base computes it exactly as before, both per-epoch and final).
     out.update(_compute_threshold_dependent(s, y, pred))
     return out
 
@@ -978,7 +989,10 @@ def compute_full_metric_set(
     # eval_mask is all-True so base_*==point_* (no change); for excl22 this stops region-22
     # (84% of SWaT anomalies) leaking back in and making excl22 byte-identical to full.
     results.update(compute_extra_metrics(
-        base_scores, base_labels, threshold, sliding_window, skip_vus=lite
+        # VUS skipped when lite (per-epoch) OR MAE_SKIP_VUS=1 env (e.g. TEP final eval —
+        # env propagates to spawned bg/pool workers; VUS ~40s/call is the eval-tail bottleneck).
+        base_scores, base_labels, threshold, sliding_window,
+        skip_vus=(lite or os.environ.get('MAE_SKIP_VUS') == '1')
     ))
 
     # ---- Anomaly-ratio threshold variants (mask-aware: same masked span as core metrics) ----

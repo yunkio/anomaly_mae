@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-06-23: TEP eval-bound 완화 — VUS/RF1 skip + eval_interval override + best-epoch 재계산 제거 + EXPERIMENT_INFO.md (base 100% 불변)
+
+TEP-scale 테스트(422K points / 320K anomaly / 400 regions)에서 **wall-clock이 학습이 아니라 평가에 지배**되는 eval-bound 문제를 root-cause로 해소. cProfile 결과 final eval 104s 중 **R-based F1(`metric_RF1`)이 82.3s** — TSB_AD의 순수 Python `O(n_anomaly_points)` 루프 — 가 단일 최대 비용이며, per-epoch ×N + final + per-fault로 반복 지불됨. VUS(~40s/call)도 eval-tail 병목.
+
+**핵심 가드: 모든 신규 동작은 `MAE_SKIP_VUS=1` env에서만 켜짐. base/non-TEP 데이터셋은 byte-identical(VUS·RF1 모두 종전대로 per-epoch+final 계산, npz@best misalignment finalize도 유지).** env는 TEP run에서만(`run_base_experiment`가 `TEP_typegen` key 감지 시) 설정되고 spawn된 bg eval/viz·pool worker에 상속됨.
+
+**추가/변경**:
+- `mae_anomaly/config.py`: `eval_interval: int = -1` 필드. `>0`이면 N epoch 간격으로만 eval(+ 마지막 epoch 항상) → 평가 횟수 절감. `-1`(default) = auto(official이면 1, 아니면 `EVAL_INTERVAL=5`).
+- `mae_anomaly/evaluator.py`: `_compute_threshold_dependent(..., skip_rf1=False)` + `MAE_SKIP_VUS` 게이트로 RF1 skip. `compute_full_metric_set`의 VUS도 `lite OR MAE_SKIP_VUS`로 skip. **RF1/VUS는 보조 진단**(headline=`pak_auc_f1`)이라 TEP에서만 off.
+- `scripts/run_base_experiments.py`:
+  - `_read_best_epoch_metric_set` — VUS-off final eval은 재계산 대신 `epoch_metrics.json[best]`를 읽음(per-epoch eval이 이미 계산+저장 → best epoch을 SELECT한 바로 그 값; `pak_auc_f1`이 old 재계산과 5dp 일치 검증). adaptive + teacher 키 복원.
+  - `_score_type_metrics_parallel` — per-epoch에 저장 안 되는 disc/student_recon만 `ProcessPoolExecutor`(spawn, `MAE_SKIP_VUS` 상속)로 병렬 계산, pool 실패 시 serial fallback.
+  - bg-worker final eval을 `MAE_SKIP_VUS`로 분기: VUS-off → 무재계산 read 경로 / 그 외 → **기존 full final eval + npz@best finalize 그대로**.
+  - post-training VUS sweep(`_run_vus_sweep_on_saved_npz`, epoch_NNN npz × 30)도 VUS-off일 때 skip(산출물=대시보드 VUS 행뿐인데 VUS off면 공백). 대시보드는 `epoch_metrics.json`에서 직접 렌더(VUS 행 공백).
+  - `_write_tep_experiment_info` — TEP run마다 조건/데이터셋 구성/**라벨링**/설정을 담은 `EXPERIMENT_INFO.md` 자동 생성(self-documenting; best-effort, run에 예외 전파 안 함).
+- `docs/TEP_MAE.md`: 모든 실행 예시에 `eval_interval=2` 추가 + eval-bound 설명 노트.
+
+**무영향/안전**: 모든 변경이 `if config.official`/`MAE_SKIP_VUS=='1'` 가드 뒤 → official=False·non-TEP는 numeric/경로 불변. best-epoch 선정 기준(`pak_auc_f1`) 불변.
+
 ## 2026-06-22: TEP type-disjoint generalization — MAE 실험 (조건=데이터/라벨 체제) + noisy-label·LOFO 추가실험
 
 TEP type-gen 실험을 기존 MAE 파이프라인(`official=True`)으로 돌리기 위한 loader/조건 구현. **조건은 model flag가 아니라 데이터/라벨 체제로 정의** (A=contaminated+라벨, B=contaminated+`blind_train_labels=True`, B0=clean ffonly). 라벨0이면 GRL이 `loss.py:310-323`(`_pos_count==0`)에서 자동 skip → `use_grl=False` 같은 flag 불필요(자동 inert).

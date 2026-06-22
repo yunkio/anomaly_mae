@@ -777,6 +777,82 @@ def _evaluate_all_parallel(evaluator, executor, also_excl22: bool = False, offic
     return metrics, disc_metrics, teacher_recon_metrics
 
 
+def _read_best_epoch_metric_set(exp_dir, best_epoch):
+    """(2026-06-23) Read the best epoch's already-computed metric set from
+    epoch_metrics.json — the per-epoch eval computed it (it SELECTED best_epoch), so the
+    final bg-worker reads it instead of recomputing identical numbers. Returns
+    (adaptive_metrics, teacher_recon_metrics): adaptive = plain keys, teacher = the
+    'teacher_'-prefixed keys with the prefix stripped. (None, None) if unavailable."""
+    import json as _json
+    try:
+        with open(os.path.join(exp_dir, 'epoch_metrics.json')) as _f:
+            em = _json.load(_f)
+        rows = em.get('epochs') if isinstance(em, dict) else em
+        row = next((r for r in rows if isinstance(r, dict) and r.get('epoch') == best_epoch), None)
+        if row is None:
+            return None, None
+        adaptive, teacher = {}, {}
+        for k, v in row.items():
+            if k.startswith('_'):
+                continue
+            if k.startswith('teacher_'):
+                teacher[k[len('teacher_'):]] = v
+            else:
+                adaptive[k] = v
+        return adaptive, teacher
+    except Exception as _e:  # noqa: BLE001
+        print(f"  [epoch_metrics read warn] {type(_e).__name__}: {_e}", flush=True)
+        return None, None
+
+
+def _score_type_metrics_parallel(evaluator, score_types, exp_name):
+    """(2026-06-23) Compute per-score-type metric sets (disc / student_recon — the ones
+    NOT persisted per-epoch) in parallel. Mirrors evaluate_by_score_type (same
+    mean-aggregation + compute_full_metric_set) but dispatches the GIL-bound PA%K sweeps
+    to a ProcessPool (threads don't help — pure-Python threshold loop). bg-worker is
+    non-daemon + spawn, so a child pool is safe and inherits MAE_SKIP_VUS. Falls back to
+    serial on any pool error."""
+    from mae_anomaly.evaluator import (
+        compute_full_metric_set as _cfms, _aggregate_with_map as _agg_map, _zero_metric_set,
+    )
+    cached = evaluator._get_cached_scores()
+    if not (evaluator.can_compute_point_level_pa_k
+            and hasattr(evaluator.test_dataset, 'anomaly_regions')):
+        return [_zero_metric_set() for _ in score_types]
+    pt_labels = np.array(evaluator.test_dataset.point_labels)
+    total_len = len(pt_labels)
+    regions = evaluator.test_dataset.anomaly_regions
+    mask = np.ones(total_len, dtype=bool)
+    ft, fwp, cov, covd = evaluator._get_aggregation_map()
+    kmap = {'disc': 'patch_disc', 'teacher_recon': 'patch_recon', 'student_recon': 'patch_student_recon'}
+    def _pts(st):
+        ps = cached[kmap[st]]
+        return np.nan_to_num(
+            _agg_map(ps.ravel(), ft, fwp, cov, covd, total_len, method='mean'), nan=0.0
+        ).astype(np.float32)
+    arrays = [_pts(st) for st in score_types]
+    try:
+        from concurrent.futures import ProcessPoolExecutor
+        import multiprocessing as _mp
+        try:
+            nw = len(os.sched_getaffinity(0))
+        except Exception:
+            nw = os.cpu_count() or 4
+        with ProcessPoolExecutor(max_workers=max(1, min(len(score_types), nw)),
+                                 mp_context=_mp.get_context('spawn')) as pool:
+            futs = [pool.submit(_cfms, a, pt_labels, regions, mask, 200, 100, lite=False)
+                    for a in arrays]
+            out = []
+            for st, f in zip(score_types, futs):
+                out.append(f.result())
+                print(f"  [{exp_name}] eval: {st} done", flush=True)
+            return out
+    except Exception as _e:  # noqa: BLE001
+        print(f"  [{exp_name}] WARN parallel score-type failed "
+              f"({type(_e).__name__}: {_e}) → serial fallback", flush=True)
+        return [_cfms(a, pt_labels, regions, mask, 200, 100, lite=False) for a in arrays]
+
+
 def compute_epoch_test_eval(eval_data, config, test_loader, test_dataset=None,
                             dataset_key=None, executor=None, *, epoch=None):
     """CPU phase: point-level evaluation from precomputed patch scores.
@@ -1923,58 +1999,67 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
     # experiment_metadata metrics match the gated per-epoch metrics that selected
     # the best epoch. timing['best_epoch'] is the 1-indexed best epoch.
     evaluator.set_eval_context(epoch=timing.get('best_epoch'))
-    # 2026-05-28: lite=False for final bg-worker eval — populates VUS in primary
-    # metrics dict (per-epoch eval still uses lite=True for speed).
-    # Previously Evaluator.evaluate() hardcoded lite=True → final metrics had VUS=0.
-    metrics = evaluator.evaluate(lite=False)
-    eval_time = time.time() - eval_start
+    # (2026-06-23) GATE the final-eval path by MAE_SKIP_VUS so BASE / non-TEP datasets are
+    # 100% unchanged. Only VUS-off runs (TEP) take the no-recompute read path; every other
+    # dataset keeps the ORIGINAL full final eval verbatim (which legitimately computes VUS
+    # — not redundant there — plus the npz@best misalignment finalize).
+    if os.environ.get('MAE_SKIP_VUS') == '1':
+        # --- TEP / VUS-off: NO REDUNDANT RECOMPUTE ---
+        # The per-epoch eval already computed + saved the best epoch's full metric set to
+        # epoch_metrics.json (it literally SELECTED best_epoch); with VUS off the final
+        # eval adds nothing, so READ adaptive + teacher from epoch_metrics[best] (verified:
+        # epoch_metrics[best].pak_auc_f1 == old recompute to 5 dp). Only disc/student
+        # score-type diagnostics aren't persisted per-epoch → compute just those, parallel.
+        metrics, teacher_recon_metrics = _read_best_epoch_metric_set(exp_dir, timing.get('best_epoch'))
+        evaluator._get_cached_scores()  # cheap (~100ms): populate cache for per-fault/detailed/viz
+        if metrics is None:
+            print(f"  [{exp_name}] WARN epoch_metrics@best unavailable → computing primary metrics", flush=True)
+            metrics = evaluator.evaluate(lite=False)
+            teacher_recon_metrics = evaluator.evaluate_by_score_type('teacher_recon', lite=False)
+        disc_metrics, student_recon_metrics = _score_type_metrics_parallel(
+            evaluator, ['disc', 'student_recon'], exp_name)
+        eval_time = time.time() - eval_start
+    else:
+        # --- base / non-TEP (VUS-on final report): ORIGINAL full final eval, UNCHANGED ---
+        # 2026-05-28: lite=False for final bg-worker eval — populates VUS in primary
+        # metrics dict (per-epoch eval still uses lite=True for speed).
+        metrics = evaluator.evaluate(lite=False)
+        eval_time = time.time() - eval_start
 
-    # Per-score-type metrics (also lite=False for VUS in final)
-    disc_metrics = evaluator.evaluate_by_score_type('disc', lite=False)
-    teacher_recon_metrics = evaluator.evaluate_by_score_type('teacher_recon', lite=False)
-    student_recon_metrics = evaluator.evaluate_by_score_type('student_recon', lite=False)
+        # Per-score-type metrics (also lite=False for VUS in final)
+        disc_metrics = evaluator.evaluate_by_score_type('disc', lite=False)
+        teacher_recon_metrics = evaluator.evaluate_by_score_type('teacher_recon', lite=False)
+        student_recon_metrics = evaluator.evaluate_by_score_type('student_recon', lite=False)
 
-    # === 2026-06-08 ROOT-CAUSE FIX: finalize metadata computed at the WRONG epoch ===
-    # The evaluate() calls above re-forward best_checkpoint.pt, whose weights can be
-    # MISALIGNED from the selected best epoch. Cause: the per-epoch eval pipeline is
-    # async and far slower than training (e.g. train ~0.1 s/ep vs eval ~3 s on small
-    # datasets), so by the time the best eval result is processed and best_checkpoint
-    # is saved, the model has advanced to a much later epoch — the checkpoint stores
-    # those later weights yet is *labeled* with the best epoch. Re-forwarding them
-    # yields metadata at the wrong epoch (observed: simple cells diverged from
-    # epoch_metrics@best by up to ~0.05 pak_auc_f1, while timing.best_epoch and the
-    # per-epoch npz stayed correct). The SAVED per-epoch npz@best_epoch is the
-    # authoritative best-epoch snapshot — it drove the best-epoch SELECTION — so the
-    # metadata metrics MUST be recomputed from it. This mirrors the excl22 finalize
-    # block below, which already reads npz@best (and was therefore always correct).
-    # No-op if the npz is missing (falls back to the re-forward result).
-    try:
-        from mae_anomaly.evaluator import compute_full_metric_set as _cfms_best
-        _best_npz_path = os.path.join(
-            exp_dir, 'epoch_scores', f"epoch_{int(timing.get('best_epoch', 0)):03d}_scores.npz")
-        if os.path.exists(_best_npz_path):
-            _best_nd = np.load(_best_npz_path)
-            _best_lbl = _best_nd['point_labels'].astype(np.int8)
-            _best_ml = min(len(_best_lbl), len(test_point_labels))
-            # [official] Finalize the primary metrics from the causal score (the
-            # same one that selected the best epoch). official=False reads
-            # 'adaptive_score' exactly as before.
-            _primary_key = ('official_score' if getattr(config, 'official', False)
-                            and 'official_score' in _best_nd.files else 'adaptive_score')
-            for _best_skey, _best_mdict in ((_primary_key, metrics),
-                                            ('discrepancy_error', disc_metrics),
-                                            ('teacher_recon_error', teacher_recon_metrics)):
-                if _best_skey in _best_nd.files and _best_mdict is not None:
-                    _best_rec = _cfms_best(
-                        _best_nd[_best_skey][:_best_ml], _best_lbl[:_best_ml],
-                        test_anomaly_regions, eval_mask=None,
-                        n_thresholds=200, sliding_window=100, lite=False)
-                    for _bk, _bv in _best_rec.items():
-                        if not _bk.startswith('_') and isinstance(_bv, (int, float)):
-                            _best_mdict[_bk] = float(_bv)
-    except Exception as _best_e:
-        print(f"  [{exp_name}] WARN npz@best metadata recompute skipped: "
-              f"{type(_best_e).__name__}: {_best_e}", flush=True)
+        # === 2026-06-08 ROOT-CAUSE FIX: finalize metadata computed at the WRONG epoch ===
+        # The evaluate() calls above re-forward best_checkpoint.pt, whose weights can be
+        # MISALIGNED from the selected best epoch. The SAVED per-epoch npz@best_epoch is
+        # the authoritative best-epoch snapshot — it drove the best-epoch SELECTION — so
+        # the metadata metrics MUST be recomputed from it. No-op if the npz is missing.
+        try:
+            from mae_anomaly.evaluator import compute_full_metric_set as _cfms_best
+            _best_npz_path = os.path.join(
+                exp_dir, 'epoch_scores', f"epoch_{int(timing.get('best_epoch', 0)):03d}_scores.npz")
+            if os.path.exists(_best_npz_path):
+                _best_nd = np.load(_best_npz_path)
+                _best_lbl = _best_nd['point_labels'].astype(np.int8)
+                _best_ml = min(len(_best_lbl), len(test_point_labels))
+                _primary_key = ('official_score' if getattr(config, 'official', False)
+                                and 'official_score' in _best_nd.files else 'adaptive_score')
+                for _best_skey, _best_mdict in ((_primary_key, metrics),
+                                                ('discrepancy_error', disc_metrics),
+                                                ('teacher_recon_error', teacher_recon_metrics)):
+                    if _best_skey in _best_nd.files and _best_mdict is not None:
+                        _best_rec = _cfms_best(
+                            _best_nd[_best_skey][:_best_ml], _best_lbl[:_best_ml],
+                            test_anomaly_regions, eval_mask=None,
+                            n_thresholds=200, sliding_window=100, lite=False)
+                        for _bk, _bv in _best_rec.items():
+                            if not _bk.startswith('_') and isinstance(_bv, (int, float)):
+                                _best_mdict[_bk] = float(_bv)
+        except Exception as _best_e:
+            print(f"  [{exp_name}] WARN npz@best metadata recompute skipped: "
+                  f"{type(_best_e).__name__}: {_best_e}", flush=True)
 
     print(f"  [{exp_name}] {progress_info} Eval done ({eval_time:.0f}s): "
           f"PRC={metrics.get('prc_auc',0):.4f} "
@@ -2360,13 +2445,25 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
                 _excl_for_vus = None
 
         _vus_workers = int(os.environ.get('TSMAE_VUS_WORKERS', 2))
-        vus_results = _run_vus_sweep_on_saved_npz(
-            exp_dir,
-            test_anomaly_regions,
-            max_workers=_vus_workers,
-            log_prefix=f"[{exp_name}] ",
-            excl_region=_excl_for_vus,
-        )
+        if os.environ.get('MAE_SKIP_VUS') == '1':
+            # (2026-06-23) VUS off (e.g. TEP) → this post-training VUS sweep over ALL
+            # saved epoch_NNN_scores.npz has NO useful output (its only product is the
+            # epoch_dashboard's VUS row, which is empty when VUS is off). It is NOT gated
+            # by MAE_SKIP_VUS internally, so it was running VUS × 30 npz and hanging the
+            # bg-worker for ~40 min on TEP-scale tests (and the dashboard render below was
+            # blocked behind it). Skip the sweep entirely; the finally block still renders
+            # the epoch dashboard directly from epoch_metrics.json (VUS row left empty).
+            print(f"  [{exp_name}] VUS sweep SKIPPED (MAE_SKIP_VUS=1) — "
+                  f"dashboard renders from epoch_metrics (empty VUS row)", flush=True)
+            vus_results = {}
+        else:
+            vus_results = _run_vus_sweep_on_saved_npz(
+                exp_dir,
+                test_anomaly_regions,
+                max_workers=_vus_workers,
+                log_prefix=f"[{exp_name}] ",
+                excl_region=_excl_for_vus,
+            )
         if vus_results:
             # Load epoch_metrics.json (written by main process pre-spawn) and
             # merge the sweep results in.
@@ -2447,6 +2544,83 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
 # =============================================================================
 # Main Experiment Runner
 # =============================================================================
+
+def _write_tep_experiment_info(exp_dir, key, config, data_info):
+    """[TEP] Write a human-readable EXPERIMENT_INFO.md into the run dir documenting the
+    condition, dataset composition, and (carefully) the LABELING, so each TEP run is
+    self-documenting. Best-effort — never raises into the run."""
+    try:
+        di = data_info or {}
+        gv = lambda k, d='?': getattr(config, k, d)
+        blind = bool(getattr(config, 'blind_train_labels', False))
+        uf = float(di.get('unlabeled_frac', 0.0) or 0.0)
+        proto = di.get('protocol', '')
+        fold = di.get('fold', '')
+        is_ffonly = 'ffonly' in str(key)
+        tl = int(di.get('train_len', 0)); te = int(di.get('test_len', 0))
+        tar = float(di.get('train_attack_ratio', 0)); tear = float(di.get('test_attack_ratio', 0))
+        tr = float(di.get('train_ratio', 0)); n_runs = tl // 960 if tl else 0
+        seen = di.get('seen_fault_set', []); ho_set = di.get('heldout_fault_set')
+        nfaulty = di.get('n_faulty_runs'); nunlab = di.get('n_unlabeled_runs')
+        if proto == 'lofo':
+            ho = di.get('held_out_family'); cont = di.get('contaminate_heldout', False)
+            cond = (f"LOFO (3 family seen / held-out={ho}, "
+                    f"{'held-out 무라벨 오염' if cont else 'held-out 제외'})"
+                    + (" + label-blind(B)" if blind else " — seen 3 family 라벨(A류)"))
+        elif is_ffonly:
+            cond = "B0 — clean fault-free reference (정상 FF만 학습)"
+        elif uf > 0:
+            cond = f"noisy-label (부분 라벨; seen 오염 중 {nunlab}/{nfaulty} run 무라벨, unlabeled_frac={uf})"
+        elif blind:
+            cond = "B — label-blind (오염 train, 라벨 전부 차단)"
+        else:
+            cond = "A — LASAD/ours (오염 train, seen-family 라벨 사용)"
+        if is_ffonly:
+            lab = "train에 faulty run 없음 → 전부 **정상(0)**."
+        elif blind:
+            lab = ("**blind_train_labels=True** → train point label 전부 **0** (faulty도 무라벨 오염으로만 존재). "
+                   "라벨 0이라 GRL/force_mask/anomaly_loss 자동 inert.")
+        elif uf > 0:
+            lab = (f"seen-family faulty run 중 per-fault 뒤쪽 **{nunlab}/{nfaulty} run을 무라벨(0)**, "
+                   "나머지는 onset(sample 161)+ 구간을 **anomaly(1)**로 라벨.")
+        else:
+            lab = ("seen-family faulty run의 **onset(sample 161)+ 구간 = anomaly(1)**, "
+                   "앞 160 + FF run = 정상(0).")
+        seen_s = (', '.join(map(str, seen)) if seen else '없음(clean)')
+        _ei_raw = int(getattr(config, 'eval_interval', -1) or -1); ei = _ei_raw if _ei_raw > 0 else 1
+        md = (
+            f"# TEP 실험 정보 — {key}\n\n"
+            f"> 자동 생성(`run_base_experiments.py`). 데이터셋 구성·**라벨링**·설정 기록.\n\n"
+            f"## 조건\n**{cond}**\n\n"
+            f"## 데이터셋 구성\n"
+            f"- protocol: {proto or ('ffonly(B0)' if is_ffonly else f'1-seen fold ({fold})')}\n"
+            f"- **train**: {tl:,} samples ({n_runs} runs × 960)"
+            f"{'' if is_ffonly else f' = FF(정상) + faulty {nfaulty} runs'}\n"
+            f"  - seen faults: {seen_s}" + (f" / held-out: {ho_set}" if ho_set else "") + "\n"
+            f"  - train **labeled-anomaly ratio**: {tar:.4f}\n"
+            f"- **test** (공유 frozen test_stream): {te:,} samples = 440 runs (faulty 400 + FF 40), "
+            f"anomaly {tear:.4f}, regions {di.get('n_anomaly_regions_total','?')}\n"
+            f"- train_ratio: {tr:.4f} · fault onset: sample {di.get('fault_onset_sample',161)} "
+            f"(faulty run = 앞 160 정상 / 뒤 800 이상)\n"
+            f"- **IDV 3·9·15 = excluded-hard** (headline 집계 제외)\n\n"
+            f"## 라벨링 (주의)\n{lab}\n- test는 조건 무관 **항상 실제 라벨**로 평가.\n\n"
+            f"## 설정\n"
+            f"- official=True (CANON_271), normalize={gv('normalize_mode')}/{gv('minmax_range')}\n"
+            f"- num_epochs={gv('num_epochs')}, teacher_only_warmup_epochs={gv('teacher_only_warmup_epochs')}, "
+            f"batch_size={gv('batch_size')}, seed={gv('random_seed')}\n"
+            f"- use_grl={gv('use_grl')} / force_mask_anomaly={gv('force_mask_anomaly')} "
+            f"(라벨 0이면 자동 inert) / use_output_discrepancy={gv('use_output_discrepancy')}\n"
+            f"- weight 미저장(official_keep_checkpoints={gv('official_keep_checkpoints')}), eval interval={ei} (epoch)\n"
+            f"- **headline metric = pak_auc_f1** (PA%K F1-AUC). D(recon-only) = teacher_pak_auc_f1.\n\n"
+            f"## 데이터 출처\n`scripts/TEP/data/*.npz` (frozen; `scripts/TEP/build_tep_data.py`, Rieth 2017 TEP). "
+            f"`manifest.json` 참조.\n"
+        )
+        with open(os.path.join(exp_dir, 'EXPERIMENT_INFO.md'), 'w') as f:
+            f.write(md)
+        print("  [TEP] EXPERIMENT_INFO.md written")
+    except Exception as e:
+        print(f"  [TEP] EXPERIMENT_INFO.md skipped: {e}")
+
 
 def run_base_experiment(dataset_def, config_preset, results_base, progress_info="",
                         save_weights=False):
@@ -2556,7 +2730,10 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
     # [official] Per-experiment LOCAL eval interval (1 = every epoch). The module
     # global EVAL_INTERVAL stays 5 and is NEVER mutated, so a non-official
     # experiment later in the same queue process is unaffected.
-    eval_interval = 1 if getattr(config, 'official', False) else EVAL_INTERVAL
+    # config.eval_interval override (>0) wins → eval only every N epochs (+ final epoch),
+    # eval-bound 완화용. -1(default) → auto: 1 official / EVAL_INTERVAL else.
+    _ei_ovr = int(getattr(config, 'eval_interval', -1) or -1)
+    eval_interval = _ei_ovr if _ei_ovr > 0 else (1 if getattr(config, 'official', False) else EVAL_INTERVAL)
 
     # [official] Force the LOCAL train stride to 1 (no offset). The TRAIN datasets
     # below (2537/2552) read this local `train_stride`, NOT config.sliding_window_stride,
@@ -2583,6 +2760,11 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
         exp_dir_excl22 = None
     os.makedirs(exp_dir, exist_ok=True)
     print(f"  Experiment dir: {exp_dir}")
+    if str(key).startswith('TEP_typegen'):
+        _write_tep_experiment_info(exp_dir, key, config, data_info)
+        # [TEP] VUS off — final/bg eval skips VUS (~40s/call, eval-tail 병목; 분석에 미사용).
+        # env는 spawn된 bg eval+viz / pool worker에 상속됨. per-epoch eval은 이미 lite로 skip.
+        os.environ['MAE_SKIP_VUS'] = '1'
 
     # Create datasets
     print("Creating datasets...")

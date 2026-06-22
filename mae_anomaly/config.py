@@ -349,6 +349,8 @@ class Config:
     # Training parameters
     batch_size: int = 256  # Batch size for training
     num_epochs: int = 50
+    eval_interval: int = -1  # Per-epoch eval frequency override. -1 = auto (1 if official else EVAL_INTERVAL=5).
+    # >0 → eval only every N epochs (+ always the final epoch). e.g. 2 = every 2 epochs (eval-bound 완화).
     learning_rate: float = 1e-3  # Default learning rate (halved from 2e-3 for training stability)
     weight_decay: float = 1e-3
     warmup_epochs: int = 10

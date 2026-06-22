@@ -136,6 +136,9 @@ B0(ffonly)·B(blind)는 labeled anomaly=0 → patch ratio=0이지만 `run_base_e
 > 전제: `conda activate dc_vis`. **GPU 필요** (학습 경로는 cuda 고정). minmax는 CANON_271 기본이라 override 불필요.
 > warmup은 `teacher_only_warmup_epochs`를 생략하면 official 분기가 자동으로 `num_epochs//2`로 설정
 > (`run_base_experiments.py:2512`) → ep30→15, ep10→5.
+> **`eval_interval=2` (2026-06-22)**: 모든 TEP run은 eval을 **2 epoch 간격**으로(+ 마지막 epoch 항상 평가). official 기본(매 epoch)은
+> eval(~110s)≫학습(~36s)이라 **eval-bound로 wall-clock이 평가에 지배**됨 → 2 epoch 간격으로 평가 횟수 절반. `config.eval_interval` 필드(Config),
+> `run_base_experiments.py`에서 override>0이면 우선. best-epoch는 평가된 epoch 중 선택(해상도 약간 거침).
 
 ### Phase 1 — 파일럿: B0 clean-ref, **epoch 30** (loss 추이 + baseline 파악)
 ```bash
@@ -145,7 +148,7 @@ python scripts/run_base_experiments.py \
   --set A \
   --dataset TEP_typegen_ffonly \
   --output-base results/experiments/271_${TS}_30_42 \
-  --config-override official=True num_epochs=30 official_keep_checkpoints=False random_seed=42
+  --config-override official=True num_epochs=30 eval_interval=2 official_keep_checkpoints=False random_seed=42
 ```
 - `official=True` → CANON_271 base + official bundle(stride=1, epoch_offset off, eval 매 epoch).
 - **flag 토글 없음** — ffonly엔 이상 라벨이 없어 GRL/force_mask가 자동 inert(데이터-체제, full config 그대로).
@@ -163,7 +166,7 @@ TS=$(date +%Y%m%d_%H%M%S)
 python scripts/run_base_experiments.py --set A \
   --dataset TEP_typegen_fstep TEP_typegen_frand TEP_typegen_fds TEP_typegen_funk \
   --output-base results/experiments/271_${TS}_10_42_A \
-  --config-override official=True num_epochs=10 official_keep_checkpoints=False random_seed=42
+  --config-override official=True num_epochs=10 eval_interval=2 official_keep_checkpoints=False random_seed=42
 ```
 
 **B — label-blind control × 4 fold** (`blind_train_labels=True`만 추가, 다른 flag 없음)
@@ -171,7 +174,7 @@ python scripts/run_base_experiments.py --set A \
 python scripts/run_base_experiments.py --set A \
   --dataset TEP_typegen_fstep TEP_typegen_frand TEP_typegen_fds TEP_typegen_funk \
   --output-base results/experiments/271_${TS}_10_42_B \
-  --config-override official=True num_epochs=10 blind_train_labels=True official_keep_checkpoints=False random_seed=42
+  --config-override official=True num_epochs=10 eval_interval=2 blind_train_labels=True official_keep_checkpoints=False random_seed=42
 ```
 
 **B0 — clean ref × 1 (matrix용, epoch 10)** (ffonly 데이터, flag 없음)
@@ -179,7 +182,7 @@ python scripts/run_base_experiments.py --set A \
 python scripts/run_base_experiments.py --set A \
   --dataset TEP_typegen_ffonly \
   --output-base results/experiments/271_${TS}_10_42_B0 \
-  --config-override official=True num_epochs=10 official_keep_checkpoints=False random_seed=42
+  --config-override official=True num_epochs=10 eval_interval=2 official_keep_checkpoints=False random_seed=42
 ```
 
 **D — recon-only (실행 없음)**
@@ -201,12 +204,12 @@ A(0%)→u25(25%)→u50(50%)→B(100%) 무라벨 곡선. **A와 동일 config**, 
 python scripts/run_base_experiments.py --set A \
   --dataset TEP_typegen_fstep_u25 TEP_typegen_frand_u25 TEP_typegen_fds_u25 TEP_typegen_funk_u25 \
   --output-base results/experiments/271_${TS}_10_42_u25 \
-  --config-override official=True num_epochs=10 official_keep_checkpoints=False random_seed=42
+  --config-override official=True num_epochs=10 eval_interval=2 official_keep_checkpoints=False random_seed=42
 # u50 (50% 무라벨) × 4 fold
 python scripts/run_base_experiments.py --set A \
   --dataset TEP_typegen_fstep_u50 TEP_typegen_frand_u50 TEP_typegen_fds_u50 TEP_typegen_funk_u50 \
   --output-base results/experiments/271_${TS}_10_42_u50 \
-  --config-override official=True num_epochs=10 official_keep_checkpoints=False random_seed=42
+  --config-override official=True num_epochs=10 eval_interval=2 official_keep_checkpoints=False random_seed=42
 ```
 
 ### B. LOFO (leave-one-family-out), epoch 10
@@ -218,12 +221,12 @@ dataset 키만 LOFO. 조건은 메인과 동일하게 LOFO-A(=as-is) / LOFO-B(=`
 python scripts/run_base_experiments.py --set A \
   --dataset TEP_typegen_lofo_step TEP_typegen_lofo_rand TEP_typegen_lofo_ds TEP_typegen_lofo_unk \
   --output-base results/experiments/271_${TS}_10_42_lofoA \
-  --config-override official=True num_epochs=10 official_keep_checkpoints=False random_seed=42
+  --config-override official=True num_epochs=10 eval_interval=2 official_keep_checkpoints=False random_seed=42
 # LOFO-B (3 seen family UNLABELED) — 동일 dataset + blind_train_labels=True
 python scripts/run_base_experiments.py --set A \
   --dataset TEP_typegen_lofo_step TEP_typegen_lofo_rand TEP_typegen_lofo_ds TEP_typegen_lofo_unk \
   --output-base results/experiments/271_${TS}_10_42_lofoB \
-  --config-override official=True num_epochs=10 blind_train_labels=True official_keep_checkpoints=False random_seed=42
+  --config-override official=True num_epochs=10 eval_interval=2 blind_train_labels=True official_keep_checkpoints=False random_seed=42
 # (변형) held-out 무라벨 오염: --dataset 을 TEP_typegen_lofo_<ho>_cont 로 교체
 ```
 판정: held-out family의 per-mode pak_auc_f1(unseen 타깃) — **Δ_unseen(LOFO) = LOFO-A(held-out) − LOFO-B(held-out)**.
