@@ -3355,8 +3355,16 @@ Margin:    {margin:+.6f}
         _safe_plot('roc_curve', self.plot_roc_curve)
         _safe_plot('prc_curve', self.plot_prc_curve)
         _safe_plot('confusion_matrix', self.plot_confusion_matrix)
-        _safe_plot('anomaly_threshold', lambda: self.plot_anomaly_threshold(experiment_dir))
-        _safe_plot('anomaly_threshold_test_event', lambda: self.plot_anomaly_threshold_test_event(experiment_dir))
+        # (2026-06-23) TEP type-gen runs skip these 2 event-timeline viz. The test-event
+        # timeline's per-pred-region rendering is O(n_pred_regions); TEP's fragmented
+        # predictions (e.g. win100) blow it up to ~14 min/plot. Not needed for the TEP
+        # per-mode/per-fault analysis. Detected ONLY via the 'typegen' path marker, so NO
+        # other dataset (SWaT/WaDi/SMD/…) is affected — they keep both viz unchanged.
+        _is_tep_typegen = ('typegen' in str(experiment_dir or '')
+                           or 'typegen' in str(getattr(self, 'output_dir', '') or ''))
+        if not _is_tep_typegen:
+            _safe_plot('anomaly_threshold', lambda: self.plot_anomaly_threshold(experiment_dir))
+            _safe_plot('anomaly_threshold_test_event', lambda: self.plot_anomaly_threshold_test_event(experiment_dir))
         _safe_plot('score_contribution', lambda: self.plot_score_contribution_analysis(experiment_dir))
         _safe_plot('reconstruction_examples', self.plot_reconstruction_examples)
         _safe_plot('detection_examples', self.plot_detection_examples)

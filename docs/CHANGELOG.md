@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-06-23: official warmup score BUG FIX (force_recon_only) + TEP eval_interval/viz/bg-join 정리 + noisy-label 재정의(labeled %)
+
+**핵심 버그 수정 — `mae_anomaly/scoring.py`**: `compute_official_causal_score(..., force_recon_only=False)` 추가. teacher-only warmup(`is_prewarmup_epoch`) 동안 student discrepancy는 **아직 학습 안 된 noise**라 anomaly score에 들어가면 안 되는데(이미 `compute_adaptive_components`는 같은 게이트 적용), official causal score는 이를 그대로 섞어 **warmup 구간에서 `official_score < teacher_recon`**이 되는 문제가 있었다. `force_recon_only=True`면 score를 teacher reconstruction-only로 환원(= `teacher_recon_error`와 bit-identical). `scripts/run_base_experiments.py`의 두 호출 지점(per-epoch npz 저장 `is_prewarmup_epoch(config, ep)`, parallel eval `evaluator._force_recon_only`)에 wiring.
+
+**`scripts/run_base_experiments.py`**:
+- **eval_interval**: `TEP_typegen` 경로 전용 default = **3** (explicit `config.eval_interval` override는 항상 우선; 비-TEP은 종전대로 official=1 / else `EVAL_INTERVAL=5`).
+- **bg-worker join 무제한화**: 기존 `p.join(timeout=600)`+terminate가 느린 viz(예: win100 detailed 84만 샘플)를 렌더 도중 강제 종료해 **viz 파일이 누락**되던 것을 제거. 기본 = 무제한 대기(끝까지 완료). 진짜 hang backstop은 `MAE_BG_JOIN_TIMEOUT`(초) 명시 시에만 동작.
+- **noisy-label 재정의**: 태그 = **LABELED %**(`lab80/lab50/lab25/lab10` = 100·(1−unlabeled_frac))로 변경, u25/u50 2-point → 4-point sweep. A(100% labeled)·B(0%)는 Phase-2 main matrix라 미포함.
+
+**`mae_anomaly/datasets/loaders.py`**: noisy-label variant 등록 키 `tep_typegen_{fold}_{lab80,lab50,lab25,lab10}` (unlabeled_frac 0.20/0.50/0.75/0.90). 기존 `_u25/_u50` 대체.
+
+**`mae_anomaly/config.py`**: 중복 `eval_interval` 정의 제거 — Training-parameters 그룹의 새 `-1`(auto) 정의를 아래쪽 잔존 `eval_interval: int = 5`가 가려 default가 5로 깨져 있던 것을 단일 정의로 정리.
+
+**`mae_anomaly/visualization/best_model_visualizer.py`**: TEP type-gen run은 `anomaly_threshold` / `anomaly_threshold_test_event` 2개 event-timeline viz skip(test-event의 per-pred-region 렌더가 O(n_pred_regions) → TEP의 fragmented 예측에서 ~14min/plot 폭발). 경로의 `'typegen'` 마커로만 감지 → SWaT/WaDi/SMD 등 **타 데이터셋 무영향**.
+
 ## 2026-06-23: docs — TEP_MAE.md §5에 VUS 제외 규칙 + `MAE_SKIP_VUS` 끄는/켜는 법 명문화 (doc-only)
 
 TEP 최종 분석의 **VUS 영구 제외**(`vus_pr`/`vus_roc` 무시, headline=`pak_auc_f1`)와 그 구현(`MAE_SKIP_VUS` 환경변수)을 `docs/TEP_MAE.md §5`에 서술. `TEP_typegen*` 키는 `run_base_experiments.py:2763`이 `MAE_SKIP_VUS=1`을 **자동 set**(spawn된 bg eval/viz/pool worker에 상속), 임의 런은 `MAE_SKIP_VUS=1 python … --dataset <KEY>`로 끄고 unset/`0`으로 켠다. 코드 변경 없음. (로컬 `config.skip_vus` 방식은 폐기되고 origin `MAE_SKIP_VUS`로 일원화됨.)

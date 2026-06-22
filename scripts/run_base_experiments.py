@@ -399,13 +399,14 @@ TEP_TYPEGEN_DATASETS = [
      'train_stride': 1, 'normal50': False, 'results_subdir': f'TEP/typegen_{_f}'}
     for _f in ('ffonly', 'fstep', 'frand', 'fds', 'funk')
 ]
-# Noisy-label (partial-label) variants: u25 = 25% of seen contamination UNLABELED
-# (75% labeled), u50 = 50% unlabeled. Additional experiment between A (0% unlabeled)
-# and B (100% unlabeled). Full LASAD config — labels used on the labeled portion.
+# Noisy-label (partial-label) variants: tag = LABELED % of seen-family faulty runs
+# (lab80/lab50/lab25/lab10). Additional experiment SWEEP between A (100% labeled) and
+# B (0% labeled) — both of which are the Phase-2 main matrix, so NOT re-run here.
+# Full LASAD config — labels used on the labeled portion.
 TEP_TYPEGEN_DATASETS += [
     {'key': f'TEP_typegen_{_f}_{_t}', 'loader': f'tep_typegen_{_f}_{_t}',
      'train_stride': 1, 'normal50': False, 'results_subdir': f'TEP/typegen_{_f}_{_t}'}
-    for _f in ('fstep', 'frand', 'fds', 'funk') for _t in ('u25', 'u50')
+    for _f in ('fstep', 'frand', 'fds', 'funk') for _t in ('lab80', 'lab50', 'lab25', 'lab10')
 ]
 # LOFO (leave-one-family-out) additional protocol: 3 seen families, 1 held out as unseen.
 # _<ho> = held-out family excluded from train; _<ho>_cont = held-out also in train, unlabeled.
@@ -714,7 +715,8 @@ def _evaluate_all_parallel(evaluator, executor, also_excl22: bool = False, offic
         from mae_anomaly.scoring import compute_official_causal_score
         _R_tr, _D_tr = official_seed
         adaptive_pts = compute_official_causal_score(
-            teacher_pts, disc_pts, R_tr=_R_tr, D_tr=_D_tr).astype(np.float32)
+            teacher_pts, disc_pts, R_tr=_R_tr, D_tr=_D_tr,
+            force_recon_only=evaluator._force_recon_only).astype(np.float32)
 
     # Dispatch parallel compute_full_metric_set calls.
     # Phase 3 (2026-05-29): compute_full_metric_set requires lite as kw-only.
@@ -2733,7 +2735,12 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
     # config.eval_interval override (>0) wins → eval only every N epochs (+ final epoch),
     # eval-bound 완화용. -1(default) → auto: 1 official / EVAL_INTERVAL else.
     _ei_ovr = int(getattr(config, 'eval_interval', -1) or -1)
-    eval_interval = _ei_ovr if _ei_ovr > 0 else (1 if getattr(config, 'official', False) else EVAL_INTERVAL)
+    if _ei_ovr > 0:
+        eval_interval = _ei_ovr          # explicit user override always wins
+    elif str(key).startswith('TEP_typegen'):
+        eval_interval = 3                # (2026-06-23) TEP_typegen 경로 전용 default = 3
+    else:
+        eval_interval = 1 if getattr(config, 'official', False) else EVAL_INTERVAL  # 비-TEP 원래대로 (official=1)
 
     # [official] Force the LOCAL train stride to 1 (no offset). The TRAIN datasets
     # below (2537/2552) read this local `train_stride`, NOT config.sliding_window_stride,
@@ -3273,7 +3280,8 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
                     from mae_anomaly.scoring import compute_official_causal_score
                     save_dict['official_score'] = compute_official_causal_score(
                         teacher_recon_scores, disc_scores,
-                        R_tr=eval_data['official_R_tr'], D_tr=eval_data['official_D_tr'])
+                        R_tr=eval_data['official_R_tr'], D_tr=eval_data['official_D_tr'],
+                        force_recon_only=is_prewarmup_epoch(config, ep))
                 np.savez_compressed(
                     os.path.join(epoch_scores_dir, f'epoch_{ep:03d}_scores.npz'),
                     **save_dict,
@@ -4409,13 +4417,19 @@ def main():
     else:
         print(f"\n{'='*80}")
         print(f"Waiting for {len(_background_processes)} background processes...")
+        # (2026-06-23) 600s join+terminate 제거. 그 timeout이 느린 viz(예: win100 detailed
+        # 84만 샘플)를 렌더 도중 강제 종료해 viz 파일이 누락됐다. 기본은 **무제한 대기**로
+        # bg eval+viz worker가 항상 끝까지 완료되게 한다. 진짜 hang 방지용 backstop이 필요하면
+        # MAE_BG_JOIN_TIMEOUT(초)를 명시할 때만 그 시점에 terminate한다(미설정 시 None=무제한).
+        _bg_to = os.environ.get('MAE_BG_JOIN_TIMEOUT')
+        _bg_to = float(_bg_to) if _bg_to else None
         for name, p in _background_processes:
-            p.join(timeout=600)
+            p.join(timeout=_bg_to)
             if p.is_alive():
-                print(f"  {name}: still running (timeout)")
+                print(f"  {name}: still running after MAE_BG_JOIN_TIMEOUT={_bg_to}s — terminating", flush=True)
                 p.terminate()
             else:
-                print(f"  {name}: completed")
+                print(f"  {name}: completed", flush=True)
 
     # Summary
     total_time = time.time() - total_start

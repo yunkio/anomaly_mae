@@ -367,7 +367,8 @@ def compute_train_normal_seed(recon_tr, disc_tr, train_pt_labels):
 
 
 def compute_official_causal_score(recon_test, disc_test, *, R_tr, D_tr,
-                                  w=OFFICIAL_SCORE_W, eps=OFFICIAL_SCORE_EPS):
+                                  w=OFFICIAL_SCORE_W, eps=OFFICIAL_SCORE_EPS,
+                                  force_recon_only=False):
     """Causal/online anomaly score (no future test data, no test labels).
 
     For each test timestep t in chronological order:
@@ -388,6 +389,13 @@ def compute_official_causal_score(recon_test, disc_test, *, R_tr, D_tr,
         float32 to keep offline-recompute bit-parity.
     """
     rt = np.nan_to_num(np.asarray(recon_test, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    if force_recon_only:
+        # (2026-06-23 BUG FIX) During teacher-only warmup (is_prewarmup_epoch) the student
+        # discrepancy is untrained NOISE that must NOT enter the score — the same gate that
+        # compute_adaptive_components already applies. The causal score then reduces to
+        # teacher reconstruction only (bit-identical to teacher_recon_error). Without this,
+        # official_score mixed in the warmup disc → official metric < teacher in warmup.
+        return rt.astype(np.float32)
     dt = np.nan_to_num(np.asarray(disc_test, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
     s = (float(R_tr) + np.cumsum(rt)) / (float(D_tr) + np.cumsum(dt) + eps)
     return (rt + w * dt * s).astype(np.float32)

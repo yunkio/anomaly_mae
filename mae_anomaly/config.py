@@ -349,8 +349,8 @@ class Config:
     # Training parameters
     batch_size: int = 256  # Batch size for training
     num_epochs: int = 50
-    eval_interval: int = -1  # Per-epoch eval frequency override. -1 = auto (1 if official else EVAL_INTERVAL=5).
-    # >0 → eval only every N epochs (+ always the final epoch). e.g. 2 = every 2 epochs (eval-bound 완화).
+    eval_interval: int = -1  # Per-epoch eval frequency. -1 = auto (1 official / 5 else; TEP_typegen → 3 in run_base).
+    # >0 → eval every N epochs (+ always final epoch); explicit override always wins. (single def; dup below removed 2026-06-23)
     learning_rate: float = 1e-3  # Default learning rate (halved from 2e-3 for training stability)
     weight_decay: float = 1e-3
     warmup_epochs: int = 10
@@ -390,9 +390,8 @@ class Config:
     #   Per-K threshold sweep after PA%K segment adjustment (Kim et al., AAAI 2022 tadpak method)
     # - 'pak_auc_f1_raw': PA%K AUC of F1 with fixed threshold (raw_f1_w_pa, legacy comparison)
     # - 'prc_auc': Precision-Recall AUC (legacy default)
-    eval_interval: int = 5  # Epoch interval for lightweight test evaluation (contrib ratios)
-    # - 1: Every epoch (most detailed, slower)
-    # - 5: Every 5 epochs (default, good balance)
+    # (2026-06-23) eval_interval은 위 Training-parameters 그룹에 단일 정의(default -1=auto). 여기 있던
+    # 중복 정의(=5)가 그걸 가려 default가 5로 깨져 있던 것을 제거 — 이제 -1(auto: official=1 / else 5; TEP=3).
     use_amp: bool = True  # Mixed Precision Training (Automatic Mixed Precision)
     # - True: Use float16 for forward pass, float32 for loss/gradients (faster on Tensor Core GPUs)
     # - False: Use float32 everywhere (more stable, required for older GPUs)

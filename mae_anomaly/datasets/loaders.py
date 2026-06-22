@@ -3021,11 +3021,12 @@ del _fn  # Clean up loop variable
 for _fold in ('ffonly', 'fstep', 'frand', 'fds', 'funk'):
     DATASET_LOADERS[f'tep_typegen_{_fold}'] = (lambda fold=_fold: load_tep_typegen(fold))
 del _fold  # Clean up loop variable
-# Noisy-label / partial-label variants of the 4 contaminated folds: a fraction of the
-# seen-family faulty train runs is left UNLABELED (kept as contamination). u25 = 25%
-# unlabeled (75% labeled), u50 = 50% unlabeled. ffonly has no faulty runs → no variant.
+# Noisy-label / partial-label variants of the 4 contaminated folds. Tag = LABELED %
+# (the % of seen-family faulty runs that KEEP labels) = 100·(1−unlabeled_frac):
+# lab80/lab50/lab25/lab10. labeled 100% (= A) and 0% (= B) are the Phase-2 main matrix,
+# so they are NOT re-run here. ffonly has no faulty runs → no variant.
 for _fold in ('fstep', 'frand', 'fds', 'funk'):
-    for _uf, _tag in ((0.25, 'u25'), (0.50, 'u50')):
+    for _uf, _tag in ((0.20, 'lab80'), (0.50, 'lab50'), (0.75, 'lab25'), (0.90, 'lab10')):
         DATASET_LOADERS[f'tep_typegen_{_fold}_{_tag}'] = (
             lambda fold=_fold, uf=_uf: load_tep_typegen(fold, unlabeled_frac=uf))
 del _fold, _uf, _tag  # Clean up loop variables
