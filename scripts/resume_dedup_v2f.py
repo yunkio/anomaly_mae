@@ -38,7 +38,7 @@ PROJECT = '/home/ykio/notebooks/TSMAE'
 EXP_ROOT = os.path.join(PROJECT, 'results/experiments')
 BASE4 = ['PSM', 'SWaT_A1A2', 'WaDi_A1', 'WaDi_A2']
 SIMPLE = json.load(open(os.path.join(PROJECT, 'temp/simple_keep_keys.json')))  # 32 kept
-FIRST_TORUN = 316   # run 316 (freeze enc) + 317-320 (loss_balance_mode ablation)
+FIRST_TORUN = 336   # 330-335 done; RESUME exp336 (encoder_depth2) from SWaT ep420 ckpt, then exp337 (force_mask_all_anomaly). Per-dataset metadata skip + latest_checkpoint.pt guard resume.
 
 
 def run_base(outdir, datasets, override, set_='C'):

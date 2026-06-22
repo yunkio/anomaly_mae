@@ -757,6 +757,142 @@
    ],
    "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1 fm_balance_mode=uwso",
    "_note": "271 base (GRL=adaptive_lambda_legacy) + fm_balance_mode=uwso: FM weight를 UW-SO(Kirchdorfer 2408.07985, weight∝1/L tempered-softmax)로 산출. OD·FM 모두 작은 MSE라 1/L를 평균정규화→temperature scale-free(saturation 방지), rel clamp [0,10]. OD anchor, recon weight 1 고정."
+  },
+  {
+   "exp_num": 330,
+   "name": "exp330_warmup_es_trainloss",
+   "dir_suffix": "warmup_es_trainloss",
+   "set": "C",
+   "dataset": [
+    "PSM",
+    "SWaT_A1A2",
+    "WaDi_A1",
+    "WaDi_A2",
+    "SMD_concat",
+    "SMAP_concat",
+    "MSL_concat"
+   ],
+   "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1 use_teacher_warmup_early_stop=True teacher_warmup_early_stop_metric=train_loss",
+   "_note": "271 base + teacher warmup early-stop(metric=train_loss, peak_reversal). teacher-only warmup 동안 epoch train_loss(=teacher recon)를 5 epoch마다(min_epoch=20부터) 확인, 최저점 대비 1%(rel_threshold) 초과 악화 check가 2회 연속이면 종료하고 train_loss 최저 epoch으로 model+optimizer+scheduler rollback 후 student 시작. teacher_only_warmup_epochs=250은 상한(early-stop은 단축만). use_teacher_warmup_early_stop=True 필수(metric만으론 비활성). recon_snr 모드(292/294)와 달리 raw train_loss 최소화 기준."
+  },
+  {
+   "exp_num": 331,
+   "name": "exp331_warmup_es_trainloss_freezeenc",
+   "dir_suffix": "warmup_es_trainloss_freezeenc",
+   "set": "C",
+   "dataset": [
+    "PSM",
+    "SWaT_A1A2",
+    "WaDi_A1",
+    "WaDi_A2",
+    "SMD_concat",
+    "SMAP_concat",
+    "MSL_concat"
+   ],
+   "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1 use_teacher_warmup_early_stop=True teacher_warmup_early_stop_metric=train_loss freeze_encoder_only=True",
+   "_note": "330(warmup early-stop train_loss) + freeze_encoder_only=True. early-stop이 동적으로 warmup을 단축하면, 그 단축된 warmup_end(=teacher_warmup) 직후 첫 student epoch에서 encoder(+patchify)를 freeze. rollback으로 복원된 best-low epoch의 encoder가 동결됨. 316(고정 warmup freeze_enc)과 달리 warmup 길이가 train_loss 기준 동적. freeze_encoder_only는 freeze_teacher_after_warmup과 상호배타(271은 후자 False라 충돌 없음)."
+  },
+  {
+   "exp_num": 332,
+   "name": "exp332_fm_grl_famo",
+   "dir_suffix": "fm_grl_famo",
+   "set": "C",
+   "dataset": [
+    "PSM",
+    "SWaT_A1A2",
+    "WaDi_A1",
+    "WaDi_A2",
+    "SMD_concat",
+    "SMAP_concat",
+    "MSL_concat"
+   ],
+   "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1 loss_balance_mode=famo fm_balance_mode=famo",
+   "_note": "271 base + FM·GRL 둘 다 famo: loss_balance_mode=famo(GRL BCE ↔ (recon+OD+FM) FAMO balancer) + fm_balance_mode=famo(OD↔FM FAMO, recon weight 1 고정). 두 balancer는 독립 state(_famo / _fm_famo_state)이며 train_epoch에서 FM balance(loss에 FM 추가) → GRL balance 순차 적용(상호배타 체크 없음, trainer.py:104-130 검증 통과). 319(GRL famo only)·328(FM famo only)와 단일축 비교."
+  },
+  {
+   "exp_num": 333,
+   "name": "exp333_fm_grl_relobralo",
+   "dir_suffix": "fm_grl_relobralo",
+   "set": "C",
+   "dataset": [
+    "PSM",
+    "SWaT_A1A2",
+    "WaDi_A1",
+    "WaDi_A2",
+    "SMD_concat",
+    "SMAP_concat",
+    "MSL_concat"
+   ],
+   "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1 loss_balance_mode=relobralo fm_balance_mode=relobralo",
+   "_note": "271 base + FM·GRL 둘 다 relobralo: loss_balance_mode=relobralo(GRL BCE ↔ main loss, 손실비 softmax+Bernoulli lookback+EMA) + fm_balance_mode=relobralo(OD↔FM, recon weight 1 고정). Bischof&Kraus 2110.09813. 두 balancer 독립 state, FM balance → GRL balance 순차. 318(GRL relobralo only)·327(FM relobralo only)와 단일축 비교."
+  },
+  {
+   "exp_num": 334,
+   "name": "exp334_fm_grl_uwso",
+   "dir_suffix": "fm_grl_uwso",
+   "set": "C",
+   "dataset": [
+    "PSM",
+    "SWaT_A1A2",
+    "WaDi_A1",
+    "WaDi_A2",
+    "SMD_concat",
+    "SMAP_concat",
+    "MSL_concat"
+   ],
+   "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1 loss_balance_mode=uwso fm_balance_mode=uwso",
+   "_note": "271 base + FM·GRL 둘 다 uwso: loss_balance_mode=uwso(GRL BCE ↔ main loss, tempered-softmax over 1/L, T=4 default, Kirchdorfer 2408.07985) + fm_balance_mode=uwso(OD↔FM, 1/L 평균정규화로 scale-free, recon weight 1 고정). 두 balancer 독립 state, FM balance → GRL balance 순차 적용(상호배타 체크 없음). 320(GRL uwso only)·329(FM uwso only)와 단일축 비교. 330(famo)·331(relobralo)과 함께 dual-balancer 3종(famo/relobralo/uwso) 완성."
+  },
+  {
+   "exp_num": 335,
+   "name": "exp335_student_depth1",
+   "dir_suffix": "student_depth1",
+   "set": "C",
+   "dataset": [
+    "PSM",
+    "SWaT_A1A2",
+    "WaDi_A1",
+    "WaDi_A2",
+    "SMD_concat",
+    "SMAP_concat",
+    "MSL_concat"
+   ],
+   "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=1 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+   "_note": "271 base에서 student decoder 깊이만 2→1 (num_student_decoder_layers=1). teacher(3)↔student(1) 용량 비대칭을 키워 student가 normal recon은 따라가되 anomaly에서 더 크게 어긋나도록(discrepancy 분리도) 의도. balancer/손실 구성/그 외 hparam은 271 그대로(단일변수)."
+  },
+  {
+   "exp_num": 336,
+   "name": "exp336_encoder_depth2",
+   "dir_suffix": "encoder_depth2",
+   "set": "C",
+   "dataset": [
+    "PSM",
+    "SWaT_A1A2",
+    "WaDi_A1",
+    "WaDi_A2",
+    "SMD_concat",
+    "SMAP_concat",
+    "MSL_concat"
+   ],
+   "config_override": "num_encoder_layers=2 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+   "_note": "271 base에서 shared encoder 깊이만 4→2 (num_encoder_layers=2). decoder(td3/sd2)는 271 그대로. encoder capacity 축소가 self-distillation 표현 품질(teacher recon)과 anomaly discrepancy에 미치는 영향 측정. 332(student decoder depth1)·325(decoder 폭 절반)와 함께 capacity 축 ablation. 단일변수."
+  },
+  {
+   "exp_num": 337,
+   "name": "exp337_force_mask_all_anomaly",
+   "dir_suffix": "force_mask_all_anomaly",
+   "set": "C",
+   "dataset": [
+    "PSM",
+    "SWaT_A1A2",
+    "WaDi_A1",
+    "WaDi_A2",
+    "SMD_concat",
+    "SMAP_concat",
+    "MSL_concat"
+   ],
+   "config_override": "num_encoder_layers=4 num_teacher_decoder_layers=3 num_student_decoder_layers=2 dim_feedforward=2048 patchify_mode=linear cnn_kernel_size=3 d_model=512 nhead=8 mask_after_encoder=True num_epochs=500 teacher_only_warmup_epochs=250 epoch_offset=True anomaly_score_mode=adaptive normalize_mode=minmax minmax_range=0_1 minmax_clamp_min=-4.0 minmax_clamp_max=4.0 use_feature_matching=True fm_loss_weight=1.0 fm_distance_metric=l2 fm_adaptive_lambda=True use_grl=True grl_loss_weight=0.2 grl_target_mode=window grl_cls_lr_ratio=0.1 grl_balanced_sampling=False grl_use_focal=True use_scad=False use_output_discrepancy=True dynamic_margin_k=6 anomaly_loss_weight=2.0 lambda_disc=2.0 eval_disc_weight=-1.0 eval_fm_weight=-1.0 force_mask_anomaly=True force_mask_all_anomaly=True amp_dtype=bf16 batch_size=1024 learning_rate=0.001 sliding_window_test_stride=-1",
+   "_note": "271 base + force_mask_all_anomaly=True (단일변수). 현재 force_mask_anomaly는 고정 budget(round(num_patches*masking_ratio)≈마스킹비율)만큼만 마스킹해 budget을 초과하는 anomaly 패치는 encoder에 그대로 보임. 이 플래그는 per-sample로 K_s=min(max(budget,N_a),num_patches-1)만큼 마스킹해 모든 anomaly 패치를 가림(encoder가 anomaly 미관측). mask_after_encoder=True 유지 — _encode_visible_only가 ragged visible을 padding+src_key_padding_mask로, _insert_mask_tokens가 padding을 mask token으로 복원(2026-06-22 model.py). default-off라 271/eval/viz는 byte-identical(검증 완료). 전부-anomaly 윈도우는 cap으로 1 패치만 visible."
   }
  ]
 }
