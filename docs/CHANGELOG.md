@@ -13,6 +13,24 @@ TEP type-gen 실험을 기존 MAE 파이프라인(`official=True`)으로 돌리�
 
 **기본 계획** = Phase 1(B0 pilot ep30) + Phase 2(A/B/B0/D ep10, 9 runs, D=A에서 파생). **추가실험(별도)** = noisy-label(u25/u50) + LOFO(±cont). weight 미저장, minmax. **검증**: py_compile OK + CPU 스모크(onset 161, FF/test 무손상, blind/noisy/LOFO 라벨·shape, official 모델 forward finite). ⚠️ `scripts/TEP/data/*.npz`는 gitignore(`*.npz`) → 타 머신은 `build_tep_data.py` 재생성 필요.
 
+## 2026-06-22: anomaly_threshold_test_event.png — AR-threshold Test Event Timeline (별도 파일)
+
+**신규 메서드** `BestModelVisualizer.plot_anomaly_threshold_test_event` → `anomaly_threshold_test_event.png`. **anomaly score · recon · disc 각각**에 대해 image1-style **Test Event Timeline**(score 검정선 + threshold 점선 + ground-truth 음영) + **gt/pred/overlap 이벤트 트랙**(`broken_barh`, gt 빨강/pred 파랑/overlap 보라)을 그림 (총 6 패널 = 3 컴포넌트 × [timeline, tracks]).
+
+**Threshold = TEST anomaly ratio 기반**: `ar = mean(point_labels==1)`, 컴포넌트별 `thr = quantile(score, 1-ar)` (정확히 `ar` 비율을 양성으로 플래그). `pred = score ≥ thr`, `overlap = pred ∩ gt`.
+
+**컴포넌트 = 메트릭이 실제로 쓰는 점수 경로와 정확히 일치**:
+- **official 런**: anomaly score = `official_score`(= recon + 0.25·disc·`s_t`, causal; `s_t=(R_tr+Σrecon)/(D_tr+Σdisc)` train-normal-seeded 누적비), disc 기여 = `official_score − recon`(= 0.25·disc·`s_t`, **정확값**). recon = raw teacher recon.
+- **non-official 런**: anomaly score = `adaptive_score`, disc = `scaled_disc`(student_error, compute_adaptive_components).
+
+**중요(scale 검증)**: adaptive의 scale-match `disc×(recon.mean/disc.mean)/4`는 official의 `0.25·disc·s_t`와 **다르다**(SWaT 실측: 평균 0.53×, 점별 corr 0.85, `s_t`는 1.652 상수가 아니라 0~1.384 변동). 둘 다 0.25(=/4=w)는 같지만 "비율 맞추는 작업"(scale-match)이 TEST 평균비(전역 상수) vs train-seed 누적비(점별)로 갈림. 초기엔 official 런에도 adaptive scaled_disc를 그려 실제 점수의 disc 기여를 잘못 표현했던 것을 정정 — official 런은 이제 `official_score`/`official_score−recon`을 사용. AR-threshold는 quantile 기반이라 pred/트랙은 단조변환에 불변, plot/threshold 스케일만 정합.
+
+**색상/축**: test_event 선 색은 `anomaly_threshold.png`와 동일(anomaly score=black, recon=tab:blue, disc=tab:green). score·recon·disc는 anomaly score의 *가산 성분*(같은 단위)이라 3개 timeline의 **y축을 공통 스케일로 통일** — recon 지배·disc 작은 가산분이 직관적으로 드러남(disc 세부는 트랙으로 별도 표시).
+
+**`anomaly_threshold.png`도 official scale로 정합**: official 런에서 panel1 = `official_score`, disc panel = `official_score − recon`(= 0.25·disc·s_t), FPR도 official 기준. det_ratio/panels/FPR 모두 `score_plot`(official) 사용. non-official은 기존 adaptive 그대로. (anomaly_threshold.png의 per-panel 독립 y축 레이아웃은 det-ratio 주석 때문에 유지 — test_event만 y축 통일.)
+
+**wiring**: `generate_all`의 `_safe_plot('anomaly_threshold', …)` 직후에 `_safe_plot('anomaly_threshold_test_event', …)` 추가 → 이후 모든 런이 자동 생성. npz 기반(추론 없음). 현재 official SWaT(`271_…_30ep_42`, full + excl22) 두 파일 모두 재생성 완료.
+
 ## 2026-06-22: baseline epoch_metrics.json — per-epoch `train_loss` 기록
 
 각 baseline의 `epoch_metrics.json` 각 epoch 엔트리에 **평균 train loss(`train_loss`)**를 기록하도록 추가. 기존엔 모든 DL/SOTA wrapper가 epoch마다 loss를 계산해 `self.train_loss_history`에 적재하고 **stdout으로만 출력**했을 뿐, 결과 JSON엔 저장되지 않아 실행 후 소실됐다(8·10번 등 과거 전 실험 0/전체).

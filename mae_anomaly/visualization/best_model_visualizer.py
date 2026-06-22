@@ -3035,6 +3035,22 @@ Margin:    {margin:+.6f}
         if point_labels is not None:
             point_labels = point_labels[:m]
 
+        # [official] Use the actually-scored values: for official runs the score is
+        # official_score (causal) and its disc contribution is (official_score - recon)
+        # = 0.25·disc·s_t — matching the metric/threshold (and anomaly_threshold_test_event).
+        # Differs from the adaptive scale-match (recon.mean/disc.mean / ratio).
+        _is_official = bool(getattr(self.config, 'official', False)) and ('official_score' in scores.files)
+        if _is_official:
+            score_plot = np.asarray(scores['official_score'])[:m]
+            disc_plot = score_plot - recon
+            score_label = 'anomaly score (official causal)'
+            disc_label = 'official disc contribution (= score − recon)'
+        else:
+            score_plot = adaptive_score
+            disc_plot = scaled_disc
+            score_label = 'anomaly_score (= recon + scaled_disc)'
+            disc_label = f'scaled_disc  [recon:disc = {ratio:.0f}:1]'
+
         # 7. Build anomaly regions
         test_regions = []
         if point_labels is not None:
@@ -3054,7 +3070,7 @@ Margin:    {margin:+.6f}
         if threshold is not None:
             det_ratios = []
             for s, e in test_regions:
-                seg = adaptive_score[s:e]
+                seg = score_plot[s:e]
                 if len(seg) == 0:
                     det_ratios.append(0.0)
                 else:
@@ -3087,9 +3103,9 @@ Margin:    {margin:+.6f}
         x = np.arange(m)
 
         panels = [
-            ('anomaly_score (= recon + scaled_disc)', adaptive_score, 'black', threshold),
+            (score_label, score_plot, 'black', threshold),
             ('recon  (weight = 1)', recon, 'tab:blue', None),
-            (f'scaled_disc  [recon:disc = {ratio:.0f}:1]', scaled_disc, 'tab:green', None),
+            (disc_label, disc_plot, 'tab:green', None),
         ]
 
         for idx_ax, (ax, (label, series, color, thr)) in enumerate(zip(axes, panels)):
@@ -3168,7 +3184,7 @@ Margin:    {margin:+.6f}
             normal_mask = (point_labels == 0)
             n_normal = int(normal_mask.sum())
             if n_normal > 0:
-                n_fp = int(((adaptive_score >= threshold) & normal_mask).sum())
+                n_fp = int(((score_plot >= threshold) & normal_mask).sum())
                 fpr_normal = n_fp / n_normal
 
         prc_str = f', pak_auc_prc={pak_auc_prc:.4f}' if pak_auc_prc is not None else ''
@@ -3181,6 +3197,138 @@ Margin:    {margin:+.6f}
         plt.savefig(out_path, dpi=110, bbox_inches='tight')
         plt.close()
         print(f"  - anomaly_threshold.png")
+
+    def plot_anomaly_threshold_test_event(self, experiment_dir: str = None):
+        """Test Event Timeline view -> anomaly_threshold_test_event.png.
+
+        For the anomaly score AND each component (recon, disc) draws an image1-style
+        Test Event Timeline (score line + threshold + ground-truth shading) plus
+        gt / prediction / overlap event tracks. The threshold is set from the TEST
+        anomaly ratio: thr = quantile(score, 1 - ar), ar = mean(point_labels==1)
+        (so exactly `ar` fraction of points are flagged as positive). Anomaly score =
+        official causal score for official runs (else adaptive). npz-based, no GPU.
+        """
+        from matplotlib.lines import Line2D
+        dataset_dir = os.path.dirname(os.path.dirname(self.output_dir))
+        metrics_path = os.path.join(dataset_dir, 'epoch_metrics.json')
+        if not os.path.exists(metrics_path):
+            print(f"  [test_event] no epoch_metrics.json"); return
+        epoch_data = json.load(open(metrics_path))
+        best = max(epoch_data['epochs'], key=lambda e: e.get('pak_auc_f1', 0))
+        best_epoch = best['epoch']
+        npz_path = os.path.join(dataset_dir, 'epoch_scores', f'epoch_{best_epoch:03d}_scores.npz')
+        if not os.path.exists(npz_path):
+            cands = sorted(glob.glob(os.path.join(dataset_dir, 'epoch_scores', 'epoch_*_scores.npz')))
+            if not cands:
+                print(f"  [test_event] no epoch_scores npz"); return
+            npz_path = cands[-1]
+        scores = np.load(npz_path)
+        if 'point_labels' not in scores.files:
+            print(f"  [test_event] no point_labels in npz"); return
+        point_labels = np.asarray(scores['point_labels']).astype(int)
+        m = len(point_labels)
+        adaptive = np.asarray(scores['adaptive_score'])[:m]
+        recon = np.asarray(scores['teacher_recon_error'])[:m]
+        disc_raw = np.asarray(scores['discrepancy_error'])[:m]
+        fm = np.asarray(scores['fm_error'])[:m] if 'fm_error' in scores.files else None
+        _is_official = bool(getattr(self.config, 'official', False)) and ('official_score' in scores.files)
+
+        # Use the EXACT components of the score the metrics were actually computed on:
+        #  - official run: anomaly score = official_score (= recon + w·disc·s_t, causal,
+        #    w=0.25, s_t = (R_tr+Σrecon)/(D_tr+Σdisc) train-normal-seeded cumulative ratio).
+        #    The disc contribution is recovered exactly as (official_score − recon)
+        #    = w·disc·s_t — NOT the adaptive scale-match (recon.mean/disc.mean / ratio),
+        #    which uses TEST means + a fixed /4 and differs from the official scaling.
+        #  - non-official run: adaptive score = recon + scaled_disc (compute_adaptive_components).
+        if _is_official:
+            score = np.asarray(scores['official_score'])[:m]
+            disc_contrib = score - recon
+            series = [
+                ('anomaly score (official causal = recon + 0.25·disc·s_t)', score, 'black'),
+                ('recon  (weight = 1)', recon, 'tab:blue'),
+                ('official disc contribution (= score − recon = 0.25·disc·s_t)', disc_contrib, 'tab:green'),
+            ]
+        else:
+            from mae_anomaly.scoring import compute_adaptive_components
+            comps = compute_adaptive_components(recon, disc_raw, fm, self.config, force_recon_only=False)
+            scaled_disc = np.asarray(comps['student_error'])[:m]
+            ratio = comps.get('recon_disc_ratio', 4.0)
+            series = [
+                ('anomaly score (= recon + scaled_disc)', adaptive, 'black'),
+                ('recon  (weight = 1)', recon, 'tab:blue'),
+                (f'scaled_disc  [recon:disc = {ratio:.0f}:1]', scaled_disc, 'tab:green'),
+            ]
+
+        ar = float((point_labels == 1).mean())
+        gt_mask = (point_labels == 1)
+        x = np.arange(m)
+
+        def _mask_regions(mask):
+            regs = []; ins = False; st = 0
+            for i, v in enumerate(mask):
+                if v and not ins:
+                    st = i; ins = True
+                elif not v and ins:
+                    regs.append((st, i)); ins = False
+            if ins:
+                regs.append((st, len(mask)))
+            return regs
+        gt_regions = _mask_regions(gt_mask)
+
+        n = len(series)
+        fig, all_axes = plt.subplots(2 * n, 1, figsize=(16, 3.4 * n), sharex=True,
+                                     gridspec_kw={'height_ratios': [2.0, 0.7] * n})
+        for si, (name, s, scolor) in enumerate(series):
+            ax_t = all_axes[2 * si]; ax_k = all_axes[2 * si + 1]
+            # threshold from the TEST anomaly ratio
+            thr = float(np.quantile(s, 1.0 - ar)) if 0.0 < ar < 1.0 else float(np.max(s) + 1.0)
+            pred_mask = (s >= thr)
+            pred_regions = _mask_regions(pred_mask)
+            overlap_regions = _mask_regions(pred_mask & gt_mask)
+            for a, b in gt_regions:
+                ax_t.axvspan(a, b, color='red', alpha=0.12, zorder=1)
+            ax_t.plot(x, s, color=scolor, linewidth=0.7, zorder=3)
+            ax_t.axhline(thr, color='black', linestyle='--', linewidth=1.0, alpha=0.8, zorder=4)
+            ax_t.set_ylabel('Score', fontsize=9)
+            ax_t.set_title(f'{name}  —  AR-threshold (ar={ar:.4f}) = {thr:.4g}', fontsize=10)
+            ax_t.legend(handles=[
+                mpatches.Patch(color='red', alpha=0.25, label='ground truth event'),
+                Line2D([], [], color=scolor, label='score'),
+                Line2D([], [], color='black', linestyle='--', label='threshold (AR)'),
+            ], loc='upper right', fontsize=8, framealpha=0.9)
+            ax_t.grid(alpha=0.3)
+            for yi, (regs, color) in enumerate([(gt_regions, 'red'), (pred_regions, 'tab:blue'),
+                                                (overlap_regions, 'tab:purple')]):
+                yy = 2 - yi
+                for a, b in regs:
+                    ax_k.broken_barh([(a, max(1, b - a))], (yy - 0.35, 0.7), facecolors=color)
+            ax_k.set_yticks([2, 1, 0]); ax_k.set_yticklabels(['gt', 'pred', 'overlap'], fontsize=8)
+            ax_k.set_ylim(-0.6, 2.6)
+            ax_k.legend(handles=[
+                mpatches.Patch(color='red', label='ground truth'),
+                mpatches.Patch(color='tab:blue', label='prediction'),
+                mpatches.Patch(color='tab:purple', label='overlap'),
+            ], loc='upper right', ncol=3, fontsize=8, framealpha=0.9)
+            ax_k.grid(alpha=0.2, axis='x')
+
+        # (3) shared y-axis across the score / recon / disc timelines — they are
+        # additive components of the anomaly score (same units), so a common scale
+        # makes their relative magnitude (recon dominant, disc small) intuitive.
+        _vals = np.concatenate([np.asarray(sv) for (_, sv, _) in series])
+        _lo, _hi = float(np.min(_vals)), float(np.max(_vals))
+        _pad = 0.05 * (_hi - _lo) + 1e-9
+        for _si in range(n):
+            all_axes[2 * _si].set_ylim(_lo - _pad, _hi + _pad)
+
+        all_axes[-1].set_xlabel('Test point index')
+        all_axes[0].set_xlim(0, m)
+        fig.suptitle(f'Test Event Timeline (AR threshold) — best_epoch={best_epoch}, '
+                     f'anomaly_ratio={ar:.4f}', fontsize=12)
+        plt.tight_layout()
+        out_path = os.path.join(self.output_dir, 'anomaly_threshold_test_event.png')
+        plt.savefig(out_path, dpi=110, bbox_inches='tight')
+        plt.close()
+        print(f"  - anomaly_threshold_test_event.png")
 
     def generate_all(self, experiment_dir: str = None, history: Dict = None):
         """Generate all best model visualizations
@@ -3201,6 +3349,7 @@ Margin:    {margin:+.6f}
         _safe_plot('prc_curve', self.plot_prc_curve)
         _safe_plot('confusion_matrix', self.plot_confusion_matrix)
         _safe_plot('anomaly_threshold', lambda: self.plot_anomaly_threshold(experiment_dir))
+        _safe_plot('anomaly_threshold_test_event', lambda: self.plot_anomaly_threshold_test_event(experiment_dir))
         _safe_plot('score_contribution', lambda: self.plot_score_contribution_analysis(experiment_dir))
         _safe_plot('reconstruction_examples', self.plot_reconstruction_examples)
         _safe_plot('detection_examples', self.plot_detection_examples)
