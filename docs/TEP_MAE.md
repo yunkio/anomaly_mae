@@ -34,12 +34,12 @@ flag로 모델을 꺾을 필요가 없다(아래 "자동 inert 근거" 참조).
 | **B** label-blind | contaminated | **안 달기 (0%)** | 4 fold | `+ blind_train_labels=True` |
 | **B0** clean ref | **clean (faulty 제외)** | — | 1 (fold 무관) | `TEP_typegen_ffonly` 데이터 |
 | **D** recon-only | = A | — | **0 (A에서 파생)** | A run의 `teacher_pak_auc_f1` |
-| **noisy** u25 / u50 | contaminated | **일부만** (75% / 50%) | 8 (추가실험) | `TEP_typegen_<fold>_u25/_u50` 데이터 |
+| **noisy** lab80/50/25/10 | contaminated | **일부만** (80/50/25/10% labeled) | 16 (추가실험) | `TEP_typegen_<fold>_{lab80,lab50,lab25,lab10}` 데이터 |
 | **LOFO** (추가) | **3 family seen** | A/B처럼 | 8+ (추가실험) | `TEP_typegen_lofo_<heldout>[_cont]` 데이터 |
 
 - **A vs B** = 데이터·모델 완전 동일, **오직 라벨 유무**만 차이 → 깨끗한 matched control (라벨의 순수 효과).
 - **B vs B0** = 둘 다 무라벨, B는 오염 섞임 / B0는 오염 뺌 → 오염의 순수 피해(C_dmg).
-- **noisy(부분 라벨)** = A(0% 무라벨) → u25(25% 무라벨) → u50(50% 무라벨) → B(100% 무라벨) 곡선. seen-family
+- **noisy(부분 라벨)** = A(100% labeled) → lab80(80%) → lab50(50%) → lab25(25%) → lab10(10%) → B(0% labeled) 곡선 (태그=labeled %). seen-family
   faulty run 중 일부를 무라벨 오염으로 남김(per-fault 뒤쪽 run; #12 "앞쪽 k labeled" 규칙). **모델·config는 A와 동일** — labeled 부분에만 GRL 등이 작동.
 
 > **자동 inert 근거 (코드 검증)**: 라벨(anomaly) 0이면 ① GRL classifier loss가 **명시적으로 skip**됨
@@ -92,10 +92,11 @@ train_ratio는 fold별로 자동 산출 (ffonly 0.3529, 오염 fold 0.4054 — t
   - anomaly_regions = test의 연속 `y==1` 구간(각 800), `anomaly_type`=fault_id (per-fault partition metric용).
   - feature_names = `manifest.json`의 `feature_cols` (52) 또는 generic.
 - **DATASET_LOADERS 등록**: `tep_typegen_{ffonly,fstep,frand,fds,funk}`.
-- **noisy-label (부분 라벨, 2026-06-22)**: `load_tep_typegen(fold, unlabeled_frac)` — seen-family faulty
-  train run 중 per-fault 뒤쪽 `round(n*frac)` run의 라벨을 0으로(무라벨 오염으로 잔류). **데이터 레벨**
-  연산(point_labels만 변경, signals/test 무손상). 등록 키: `tep_typegen_{fstep,frand,fds,funk}_{u25,u50}`
-  (u25=25%·u50=50% 무라벨). 실측 무라벨 run: u25 = 12~16/60(per-fault round), u50 = 30/60.
+- **noisy-label (부분 라벨, 2026-06-22; 태그 재정의 2026-06-23)**: `load_tep_typegen(fold, unlabeled_frac)` —
+  seen-family faulty train run 중 per-fault 뒤쪽 `round(n*frac)` run의 라벨을 0으로(무라벨 오염으로 잔류). **데이터 레벨**
+  연산(point_labels만 변경, signals/test 무손상). 등록 키: `tep_typegen_{fstep,frand,fds,funk}_{lab80,lab50,lab25,lab10}`
+  — **태그 = labeled %** (`lab80`=80% labeled=`unlabeled_frac` 0.20, `lab50`=0.50, `lab25`=0.75, `lab10`=0.90).
+  per-fault round 기준 실측 무라벨 run: lab80 ≈ 12/60, lab50 = 30/60, lab25 ≈ 45/60, lab10 ≈ 54/60.
 - **LOFO (leave-one-family-out, 2026-06-22)**: `load_tep_typegen_lofo(held_out, contaminate_heldout)` —
   기존 frozen NPZ에서 **재시뮬 없이 조립**: FF 240 + seen 3 family faulty(각 60, labeled) [+ held-out 60 unlabeled].
   등록 키: `tep_typegen_lofo_{step,rand,ds,unk}`(held-out 제외) + `_cont`(held-out 무라벨 오염). train 420 runs
@@ -103,7 +104,7 @@ train_ratio는 fold별로 자동 산출 (ffonly 0.3529, 오염 fold 0.4054 — t
 
 ### (2) `scripts/run_base_experiments.py`
 - **`TEP_TYPEGEN_DATASETS`** 별도 리스트 신규 (SMAP/MSL simple 정의 뒤). 5 base 키(`TEP_typegen_<fold>`)
-  + 8 noisy 키(`TEP_typegen_<fold>_{u25,u50}`). loader=동명, train_stride=1, results_subdir=`TEP/typegen_<...>`.
+  + 16 noisy 키(`TEP_typegen_<fold>_{lab80,lab50,lab25,lab10}`). loader=동명, train_stride=1, results_subdir=`TEP/typegen_<...>`.
   - **`DATASETS`에 넣지 않음** → 기본 5-base sweep 오염 없음. `--dataset TEP_typegen_<...>`로만 접근.
 - `all_datasets` 조립부에 `+ TEP_TYPEGEN_DATASETS` 추가.
 - **train_dataset 생성부에 `blind_train_labels=getattr(config,'blind_train_labels',False)` 전달**.
@@ -195,21 +196,18 @@ A의 각 fold `epoch_metrics.json`에서 best epoch의 **`teacher_pak_auc_f1`** 
 ## ⊕ 추가 실험 (본 계획과 **별도** — 옵션)
 
 > 기본 계획(Phase 1 pilot + Phase 2 A/B/B0/D)과 분리된 추가 실험. 동일 코드·config, dataset 키만 다름.
-> 추가 학습 = noisy 8 + LOFO 8 = **16 runs (옵션)**.
+> 추가 학습 = noisy 16 + LOFO 8 = **24 runs (옵션)**.
 
 ### A. Noisy-label (부분 라벨) sweep, epoch 10
-A(0%)→u25(25%)→u50(50%)→B(100%) 무라벨 곡선. **A와 동일 config**, dataset 키만 noisy(데이터에 부분 라벨).
+A(100% labeled)→lab80→lab50→lab25→lab10→B(0% labeled) 곡선 (태그=labeled %). **A와 동일 config**, dataset 키만 noisy(데이터에 부분 라벨).
 ```bash
-# u25 (25% 무라벨) × 4 fold
-python scripts/run_base_experiments.py --set A \
-  --dataset TEP_typegen_fstep_u25 TEP_typegen_frand_u25 TEP_typegen_fds_u25 TEP_typegen_funk_u25 \
-  --output-base results/experiments/271_${TS}_10_42_u25 \
-  --config-override official=True num_epochs=10 eval_interval=2 official_keep_checkpoints=False random_seed=42
-# u50 (50% 무라벨) × 4 fold
-python scripts/run_base_experiments.py --set A \
-  --dataset TEP_typegen_fstep_u50 TEP_typegen_frand_u50 TEP_typegen_fds_u50 TEP_typegen_funk_u50 \
-  --output-base results/experiments/271_${TS}_10_42_u50 \
-  --config-override official=True num_epochs=10 eval_interval=2 official_keep_checkpoints=False random_seed=42
+# labeled % sweep: lab80(80%)→lab50(50%)→lab25(25%)→lab10(10%), 각 × 4 fold
+for LAB in lab80 lab50 lab25 lab10; do
+  python scripts/run_base_experiments.py --set A \
+    --dataset TEP_typegen_fstep_${LAB} TEP_typegen_frand_${LAB} TEP_typegen_fds_${LAB} TEP_typegen_funk_${LAB} \
+    --output-base results/experiments/271_${TS}_10_42_${LAB} \
+    --config-override official=True num_epochs=10 eval_interval=2 official_keep_checkpoints=False random_seed=42
+done
 ```
 
 ### B. LOFO (leave-one-family-out), epoch 10
@@ -234,7 +232,7 @@ seen 3 family = S, held-out = U(이 protocol의 관심 U).
 
 > seed 여러 개로 반복하려면 `random_seed`와 디렉토리의 seed 부분을 바꿔 재실행 (예: `..._10_43_A`).
 > **기본 계획 = 9 runs** (Phase 2: A4+B4+B0×1), D=0(파생), simple baseline=0(#12 재활용).
-> **추가 실험(별도) = 16 runs** (noisy u25×4+u50×4 + LOFO lofoA×4+lofoB×4). held-out `_cont` 변형은 선택(+8).
+> **추가 실험(별도) = 24 runs** (noisy lab80/50/25/10 ×4 = 16 + LOFO lofoA×4+lofoB×4 = 8). held-out `_cont` 변형은 선택(+8).
 
 ### LOFO 설계 결정 (조정 가능)
 - **오염 budget**: seen 3 family를 각각 **full 60 runs**(180 total, labeled-anom 35.7%)로 둠 — 각 family가 메인과
