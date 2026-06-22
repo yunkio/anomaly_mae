@@ -425,6 +425,28 @@ if self.config.use_student and self.student_decoder is not None:
 - Allows teacher to learn basic reconstruction before introducing discrepancy
 - When `freeze_teacher_after_warmup=True`: encoder/teacher frozen at warmup end (method C: eval + no_grad)
 
+**Dynamic warm-up early-stop** (`use_teacher_warmup_early_stop=True`, opt-in; default-off byte-identical):
+End the teacher-only warm-up *dynamically* instead of at the fixed `teacher_only_warmup_epochs`
+(which then acts as an upper bound). On trigger, model+optimizer+scheduler are reverted to the
+metric's best epoch before the student joins. Two metrics:
+- `teacher_warmup_early_stop_metric='recon_snr'` (default): **maximize** train recon SNR
+  (`(recon_a−recon_n)/(σ_a+σ_n+ε)`, anomaly↔normal separation); trigger when the strict-max best
+  is not improved for `teacher_warmup_early_stop_patience` (10) epochs, after
+  `teacher_warmup_early_stop_min_epochs` (50). Revert to the highest-SNR epoch.
+- `teacher_warmup_early_stop_metric='train_loss'` (2026-06-20, peak_reversal): **minimize** epoch
+  train_loss (= teacher reconstruction during warm-up). From `teacher_warmup_es_min_epoch` (20),
+  every `teacher_warmup_es_check_interval` (5) epochs compare to the best-low; a check worsening
+  by more than `teacher_warmup_es_relative_threshold` (1%) counts a reversal, and
+  `teacher_warmup_es_patience_checks` (2) consecutive reversals trigger a revert to the
+  lowest-train_loss check epoch. Targets the overfitting-onset point (recon rising), distinct from
+  recon_snr's separation-peak. The two metric branches are mutually `elif`-separated so the
+  recon_snr path is byte-identical.
+
+**`train_recon_snr` logging** (2026-06-20): the train recon SNR above is computed and stored in
+`training_histories.json` as `train_recon_snr` for **every run** (not only early-stop runs), all
+epochs; `None` when undefined (no anomaly/normal samples that epoch). Always detached/no-grad →
+training byte-identical.
+
 **Implementation**:
 ```python
 # In trainer.py __init__():
@@ -475,6 +497,22 @@ When `epoch_offset=True`, each epoch's train window start positions are shifted 
 # After 21 epochs: all offsets 0-20 used exactly once → full stride=1 coverage
 ```
 
+**Official MAE-mode (`official=True`, default-off)**:
+
+A single config flag that switches a SEPARATE code path (default `False` → byte-identical). It lays `CANON_271` (the full canonical 271 config) as the base for anything not explicitly passed, lets the user's `config_override` keys win over it, then FORCES the bundle below (last writer in `make_config` → beats preset/override-string/dataset_def). All new behavior sits behind `if getattr(config, 'official', False)` guards; `apply_official_overrides()` short-circuits with `if not official: return config`.
+
+| # | Forced behavior | Where |
+|---|---|---|
+| 1 | `epoch_offset=False` + train `stride=1` (the local `train_stride`, which the datasets actually read — not just the config field) | `apply_official_overrides` + run_base local |
+| 2 | `num_epochs` default **30** (overridable), `teacher_only_warmup_epochs` default **`num_epochs//2`** (overridable); early-stop off forced. The two are defaults set BEFORE the user-override merge (explicit `num_epochs`/`teacher_only_warmup_epochs` win); NOT forced by `apply_official_overrides` | run_base official build |
+| 3 | **Per-iteration LR** (MAE `util/lr_sched.py`): linear warmup 0→peak over `w=teacher_only_warmup_epochs`, half-cosine→`min_lr=0` over `[w, num_epochs)`, `e=epoch+batch/len(loader)`; param-group ratios preserved; per-epoch `scheduler.step()` skipped | `trainer.py _official_lr_now` |
+| 4 | Model-only checkpoint EVERY epoch → `official_epochs/epoch_NNN.pt` (separate namespace; ~3.3 GB/dataset at d_model=512). **Keep-option** `official_keep_checkpoints` (global, default True) + `official_ckpt_overrides='k1:false,k2:true'` (per-dataset, unlisted→global): `False` skips `official_epochs/` writes, runs eval+viz, then deletes best/best_checkpoint/latest at the end (→ only metrics+npz+viz remain) | `run_base post_epoch_save_callback` + end-cleanup |
+| 5 | `eval_interval=1` (per-experiment local; global `EVAL_INTERVAL` untouched) | `run_base` local |
+| 6 | **Causal/online anomaly score** (`scoring.py`, single source): seed `R_tr=Σrecon_tr[norm]`, `D_tr=Σdisc_tr[norm]`; `s_t=(R_tr+cumsum recon)/(D_tr+cumsum disc+ε)`; `score_t=recon_t+0.25·disc_t·s_t`. Prefix-only cumsum ⇒ no future/label use. Per-epoch train-inference yields `R_tr/D_tr`; best epoch picked on this score's `pak_auc_f1`; metrics/VUS/excl22/viz all consistent; npz gains `official_score` (keeps `adaptive_score`) | `scoring.compute_official_causal_score`, `run_base _evaluate_all_parallel` |
+| 7 | Thorough single-knob seeding (`set_seed_official`: +PYTHONHASHSEED + DataLoader generator/worker_init_fn; keeps `cudnn.benchmark`, no determinism-algos) | `config.set_seed_official` |
+
+Usage: `--set C --dataset <key> --config-override "official=True <optional deltas>"`. See CHANGELOG (2026-06-22) for the verification record.
+
 ### Training Loss
 
 **Reconstruction Loss**:
@@ -520,6 +558,17 @@ L_total = L_rec + normal_loss_weight * L_normal + anomaly_loss_weight * L_anomal
 - λ_disc = 2.0 (default)
 - masking_ratio = 0.15 (default)
 - normal_loss_weight = 1.0, anomaly_loss_weight = 2.0
+
+**Collected diagnostic — anomaly output discrepancy** (`train_anomaly_disc_forward`, 2026-06-20):
+The forward/un-margined mean discrepancy on anomaly patches (`anomaly_disc_forward` = mean of
+`(teacher_out.detach() − student_out)²` over masked anomaly patches) is **always computed**,
+outside the `disable_anomaly_loss` gate. It is now also **logged per-epoch into
+`training_histories.json`** (`loss_dict` → `epoch_losses` → `history['train_anomaly_disc_forward']`),
+including **GRL/SCAD paths** where the anomaly maximize-loss (`L_anomaly`) is disabled (=0). This is
+**collect-only** — a detached scalar that never enters `L_total`/gradients, so training stays
+byte-identical. It is the symmetric counterpart to the already-logged normal discrepancy
+(`train_normal_loss`) and records the actual anomaly-detection signal during training regardless of
+objective. `0.0` sentinel during teacher-only warmup / when discrepancy is off (same convention as `dis`).
 
 ### Adversarial Discriminator (Optional)
 
@@ -704,6 +753,12 @@ All scoring formulas above produce **patch-level** scores (n_windows × num_patc
 - If anomaly patches > budget: only `budget` anomaly patches are masked (randomly selected), excess remain visible as encoder context
 - This maintains uniform masking count across the batch, which is required by `_encode_visible_only` (standard MAE encoder)
 - Ensures model primarily learns to reconstruct normal patterns while preserving batch-level masking invariants
+
+**force_mask_all_anomaly=True** (opt-in, 2026-06-22, exp337; requires force_mask_anomaly + use_masking; default False = byte-identical):
+- Removes the "excess remain visible" behavior: masks **ALL** anomaly patches per-sample even above budget, so the encoder never sees an anomaly patch.
+- Per-sample masked count `K_s = min(max(budget, n_anomaly_patches), num_patches-1)` (cap keeps ≥1 visible; a fully-anomalous window keeps exactly 1 visible).
+- This makes the per-sample masked count **ragged** (variable across the batch), which the MAE visible-only encoder (`mask_after_encoder=True`) normally forbids. Preserved without changing the architecture via **padding + `src_key_padding_mask`**: `_encode_visible_only` pads over-masked samples up to the batch-max visible count and key-pads the extras (encoder ignores them); `_insert_mask_tokens_and_unshuffle` overwrites those padded rows with the mask token before the standard `ids_restore` unshuffle. When the mask is uniform (eval, default, no over-budget sample) both functions take their original path → byte-identical.
+- Trade-off: only the per-sample over-budget masking deviates (no batch-wide over-masking of normals); but the masked normal/anomaly partition shifts, so `train_recon_snr`, recon/discrepancy splits, and GRL/SCAD/FM populations legitimately change under this flag (OFF runs unaffected).
 
 ---
 

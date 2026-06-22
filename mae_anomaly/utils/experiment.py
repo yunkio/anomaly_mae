@@ -4,6 +4,7 @@ import os
 import re
 
 from mae_anomaly import Config
+from mae_anomaly.config import apply_official_overrides
 
 
 # Dynamic d_model candidates (must be divisible by nhead=8)
@@ -134,6 +135,12 @@ def make_config(overrides: dict) -> Config:
             continue
         if hasattr(config, k):
             setattr(config, k, v)
+
+    # Official MAE-mode: FORCE the official bundle as the LAST writer so it wins
+    # over every preset / override-string / dataset_def / CANON_271 value. No-op
+    # (byte-identical) when config.official is False. Placed AFTER the merge loop
+    # and BEFORE dim_feedforward + consistency checks (official touches no geometry).
+    config = apply_official_overrides(config)
 
     # Auto-compute dim_feedforward = 4 * d_model if not explicitly overridden
     if 'dim_feedforward' not in overrides:

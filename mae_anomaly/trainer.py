@@ -129,6 +129,20 @@ class Trainer:
             if getattr(config, 'use_scad', False):
                 raise ValueError(f"fm_balance_mode={_fbm!r}와 use_scad=True는 동시 사용 불가합니다.")
 
+        # 11c. force_mask_all_anomaly (2026-06-22, exp337) — force-mask ALL anomaly patches
+        #      per-sample. Only meaningful inside the force_mask_anomaly block (model.py:1007),
+        #      which itself requires use_masking. Validate here (fully-assembled config; config.py
+        #      has no __post_init__ that would see override-applied flags) to avoid silent no-op.
+        if getattr(config, 'force_mask_all_anomaly', False):
+            if not getattr(config, 'force_mask_anomaly', False):
+                raise ValueError(
+                    "force_mask_all_anomaly=True는 force_mask_anomaly=True를 필요로 합니다 "
+                    "(아니면 force-mask 블록 미진입 → silent no-op).")
+            if not getattr(config, 'use_masking', True):
+                raise ValueError(
+                    "force_mask_all_anomaly=True는 use_masking=True를 필요로 합니다 "
+                    "('force MORE' modifier이지 masking on/off 스위치가 아님).")
+
         # 10. seq_length / patch_size / num_patches 일관성 (defense-in-depth;
         #    make_config()에서도 검증되나 Trainer가 직접 호출되는 경로 보호)
         if config.seq_length % config.patch_size != 0:
@@ -197,6 +211,12 @@ class Trainer:
             betas=(0.9, 0.99),  # Compromise: 0.95 (original MAE, 75% masking) ↔ 0.999 (PyTorch default)
             fused=True,
         )
+
+        # [official] Capture each group's PEAK lr (config.learning_rate for the
+        # main groups, learning_rate*grl_cls_lr_ratio for the GRL classifier
+        # groups) BEFORE any scheduler mutates pg['lr'], so the official
+        # per-iteration LR can scale every group while preserving its ratio.
+        self._official_base_lrs = [g['lr'] for g in self.optimizer.param_groups]
 
         # LR warmup + cosine annealing (matching original MAE)
         lr_warmup_epochs = config.warmup_epochs  # Reuse anomaly loss warmup period for LR warmup
@@ -328,7 +348,17 @@ class Trainer:
             'train_disc_loss': [],
             'train_normal_loss': [],
             'train_anomaly_loss': [],
+            # Anomaly-region output discrepancy (forward/un-margined). Logged for ALL paths
+            # incl. GRL/SCAD where train_anomaly_loss is disabled (=0), so the anomaly
+            # discrepancy signal is recorded in training_histories regardless of objective.
+            'train_anomaly_disc_forward': [],
             'train_mean_discrepancy': [],
+            # Teacher train-recon SNR (anomaly↔normal separation of teacher recon error,
+            # = (recon_a − recon_n)/(σ_a+σ_n+ε)). Already computed for the warmup early-stop
+            # metric but was never persisted; now logged so the warmup separation trajectory
+            # is in training_histories. ONLY populated when use_teacher_warmup_early_stop=True
+            # during teacher-only warmup epochs; None otherwise (not computed → kept null).
+            'train_recon_snr': [],
             # Detailed metrics by sample type
             'train_teacher_recon_normal': [],
             'train_teacher_recon_anomaly': [],
@@ -811,6 +841,22 @@ class Trainer:
 
         return real_patches, fake_patches, anomaly_patch_mask
 
+    def _official_lr_now(self, epoch, batch_idx, n_batches):
+        """[official] MAE-style per-iteration LR. Linear warmup from 0 over w
+        epochs, then half-cosine to min_lr over [w, E). e = fractional epoch
+        (epoch + batch_idx/n_batches); w = teacher_only_warmup_epochs (15),
+        E = num_epochs (25). Matches facebookresearch/mae util/lr_sched.py."""
+        cfg = self.config
+        base = cfg.learning_rate
+        w = float(cfg.teacher_only_warmup_epochs)
+        E = float(cfg.num_epochs)
+        min_lr = float(getattr(cfg, 'min_lr', 0.0))
+        e = epoch + (batch_idx / max(1, n_batches))
+        if w > 0 and e < w:
+            return base * e / w
+        denom = max(1.0, E - w)
+        return min_lr + (base - min_lr) * 0.5 * (1.0 + math.cos(math.pi * (e - w) / denom))
+
     def train_epoch(self, epoch: int, teacher_only: bool = False,
                     profile_batches: int = 0) -> Dict[str, float]:
         self.model.train()
@@ -833,6 +879,9 @@ class Trainer:
             'discrepancy_loss': 0.0,
             'normal_loss': 0.0,
             'anomaly_loss': 0.0,
+            # Anomaly discrepancy (forward) — accumulated+averaged via the `for key in
+            # epoch_losses` loop from loss_dict['anomaly_disc_forward']. Collect-only.
+            'anomaly_disc_forward': 0.0,
             'fm_loss': 0.0,
             'mean_discrepancy': 0.0,
             # Detailed metrics by sample type
@@ -994,9 +1043,10 @@ class Trainer:
                     scad_z=_scad_z, ema_teacher_output=_ema_t_out
                 )
 
-            # [신규 2026-06-01] early-stop용 train recon_snr 누적 (GPU 0-dim, no-grad).
-            # warmup(teacher_only) 중에만 누적 — 메트릭은 warmup 동안만 소비되므로 post-warmup 낭비 방지.
-            if _es_on and teacher_only and 'es_teacher_recon_per_sample' in loss_tensors:
+            # train recon_snr 누적 (GPU 0-dim, no-grad). [2026-06-20] _es_on/teacher_only 게이트
+            # 제거 → 모든 실험·모든 epoch에서 누적해 train_recon_snr를 항상 로깅(early-stop OFF 포함).
+            # warmup early-stop은 ON일 때 동일 값을 소비할 뿐. detached → 학습 byte-identical.
+            if 'es_teacher_recon_per_sample' in loss_tensors:
                 _r = loss_tensors['es_teacher_recon_per_sample']
                 _isn = loss_tensors['es_is_normal_sample']
                 _isa = loss_tensors['es_has_anomaly_sample']
@@ -1321,6 +1371,16 @@ class Trainer:
             t_bwd = time.time()
             t_forward_acc += t_bwd - t_fwd
 
+            # [official] Per-iteration MAE-style LR: set every param group's lr by
+            # scaling its captured peak lr (preserves the GRL-classifier ratio).
+            # accum_iter==1 here (optimizer.step fires every batch) so the
+            # fractional-epoch denominator len(train_loader) is exact.
+            if getattr(self.config, 'official', False):
+                _lr_now = self._official_lr_now(epoch, batch_idx, len(self.train_loader))
+                _scale = _lr_now / max(self.config.learning_rate, 1e-12)
+                for _i, _pg in enumerate(self.optimizer.param_groups):
+                    _pg['lr'] = self._official_base_lrs[_i] * _scale
+
             self.optimizer.zero_grad()
             if self.scaler is not None:
                 self.scaler.scale(loss).backward()
@@ -1407,10 +1467,11 @@ class Trainer:
         for key in epoch_losses.keys():
             epoch_losses[key] /= len(self.train_loader)
 
-        # [신규 2026-06-01] early-stop용 epoch 단위 train recon_snr (division loop 뒤에서
-        # '_' 접두 키로 추가 → 위 평균화에 영향 없음). 공식: (mean_a − mean_n)/(σ_a + σ_n + ε),
-        # TEST recon_SNR(run_ablation.py:616)과 동일한 Cohen's-d 형 분리도를 train data로 계산.
-        if _es_on and torch.is_tensor(_es_cnt_n):
+        # epoch 단위 train recon_snr (division loop 뒤에서 '_' 접두 키로 추가 → 위 평균화에
+        # 영향 없음). 공식: (mean_a − mean_n)/(σ_a + σ_n + ε), TEST recon_SNR(run_ablation.py:616)과
+        # 동일한 Cohen's-d 형 분리도를 train data로 계산. [2026-06-20] _es_on 게이트 제거 →
+        # early-stop OFF 포함 모든 실험에서 계산해 training_histories에 항상 기록.
+        if torch.is_tensor(_es_cnt_n):
             _cn = _es_cnt_n.item(); _ca = _es_cnt_a.item()
             if _cn > 0 and _ca > 0:
                 _mn = _es_sum_n.item() / _cn
@@ -1571,6 +1632,24 @@ class Trainer:
         _es_best_epoch = -1
         _es_best_snapshot = None
         _es_triggered = False
+        # [2026-06-20] metric selector + train_loss(peak_reversal) mode state.
+        #   'recon_snr' (default): maximize train recon SNR, plateau-patience (legacy, below).
+        #   'train_loss': spec pseudo-code — minimize epoch train_loss; check every
+        #   check_interval epochs from min_epoch; a check worsening >rel_threshold from the
+        #   best-low counts a reversal; patience_checks consecutive reversals → revert to the
+        #   lowest-loss check epoch and end warmup. Snapshot shared via _es_best_snapshot.
+        _es_metric = str(getattr(self.config, 'teacher_warmup_early_stop_metric', 'recon_snr'))
+        if _es_enabled and _es_metric not in ('recon_snr', 'train_loss'):
+            raise ValueError(
+                f"teacher_warmup_early_stop_metric must be 'recon_snr' or 'train_loss', "
+                f"got {_es_metric!r}.")
+        _es_tl_check_interval = int(getattr(self.config, 'teacher_warmup_es_check_interval', 5))
+        _es_tl_patience_checks = int(getattr(self.config, 'teacher_warmup_es_patience_checks', 2))
+        _es_tl_rel_threshold = float(getattr(self.config, 'teacher_warmup_es_relative_threshold', 0.01))
+        _es_tl_min_epoch = int(getattr(self.config, 'teacher_warmup_es_min_epoch', 20))
+        _es_tl_best = None
+        _es_tl_best_epoch = -1
+        _es_tl_reversals = 0
         import copy as _es_copy
 
         def _es_clone_state(_obj):
@@ -1708,7 +1787,10 @@ class Trainer:
             # Profile only on epoch 0
             pb = profile_n_batches if epoch == 0 else 0
             epoch_losses = self.train_epoch(epoch, teacher_only=teacher_only, profile_batches=pb)
-            self.scheduler.step()
+            # [official] LR is applied PER-ITERATION inside train_epoch; skip the
+            # per-epoch SequentialLR step so it does not double-schedule.
+            if not getattr(self.config, 'official', False):
+                self.scheduler.step()
             # D scheduler: step only after disc_warmup_epochs (when D is active)
             if self.use_discriminator and epoch >= self.config.disc_warmup_epochs:
                 self.d_scheduler.step()
@@ -1726,7 +1808,11 @@ class Trainer:
             self.history['train_disc_loss'].append(epoch_losses['discrepancy_loss'])
             self.history['train_normal_loss'].append(epoch_losses['normal_loss'])
             self.history['train_anomaly_loss'].append(epoch_losses['anomaly_loss'])
+            self.history['train_anomaly_disc_forward'].append(epoch_losses.get('anomaly_disc_forward', 0.0))
             self.history['train_mean_discrepancy'].append(epoch_losses.get('mean_discrepancy', 0.0))
+            # Teacher train-recon SNR (warmup separation). Already in epoch_losses (1428);
+            # persist it. None when not computed (non-early-stop runs / post-warmup epochs).
+            self.history['train_recon_snr'].append(epoch_losses.get('_train_recon_snr', None))
             # Detailed metrics by sample type
             self.history['train_teacher_recon_normal'].append(epoch_losses['teacher_recon_normal'])
             self.history['train_teacher_recon_anomaly'].append(epoch_losses['teacher_recon_anomaly'])
@@ -1810,7 +1896,49 @@ class Trainer:
             # 위치: history append 후, epoch_callback(아래 GPU eval) 전. revert가 eval/checkpoint
             # 보다 먼저 일어나야 둘 다 reverted 가중치를 반영(record-consistency 보존).
             # warmup 중(teacher_only=True)에만 동작. 미트리거 상태에서만 평가.
-            if _es_enabled and not _es_triggered and teacher_only:
+            # [2026-06-20] metric='train_loss' → spec pseudo-code(peak_reversal) 분기.
+            # 아래 recon_snr 분기는 elif로 그대로 → default(metric=recon_snr) 실험은 동일 경로(byte-identical).
+            if _es_enabled and not _es_triggered and teacher_only and _es_metric == 'train_loss':
+                _e1 = epoch + 1   # 1-indexed (pseudo: for epoch in 1..upper_bound)
+                _tl = epoch_losses.get('total_loss', None)  # warmup train_loss == teacher recon objective
+                if (_tl is not None and _e1 >= _es_tl_min_epoch
+                        and (_e1 % _es_tl_check_interval == 0)):
+                    if _es_tl_best is None or _tl < _es_tl_best:   # new best-low → snapshot, reset counter
+                        _es_tl_best = _tl
+                        _es_tl_best_epoch = epoch
+                        _es_best_snapshot = {
+                            'model': _es_clone_state(self.model.state_dict()),
+                            'optim': _es_clone_state(self.optimizer.state_dict()),
+                            'sched': _es_clone_state(self.scheduler.state_dict()),
+                            'epoch': epoch,
+                        }
+                        _es_tl_reversals = 0
+                    else:
+                        _rel = (_tl - _es_tl_best) / max(abs(_es_tl_best), 1e-8)
+                        if _rel > _es_tl_rel_threshold:
+                            _es_tl_reversals += 1
+                        else:
+                            _es_tl_reversals = 0
+                        if (_es_tl_reversals >= _es_tl_patience_checks
+                                and _es_best_snapshot is not None):
+                            # === 트리거: best-low train_loss epoch으로 full revert ===
+                            self.model.load_state_dict(_es_best_snapshot['model'])
+                            self.optimizer.load_state_dict(_es_best_snapshot['optim'])
+                            self.scheduler.load_state_dict(_es_best_snapshot['sched'])
+                            _new_warmup = epoch + 1
+                            teacher_warmup = _new_warmup
+                            self.config.teacher_only_warmup_epochs = _new_warmup
+                            self._early_stopped_warmup_end = _new_warmup
+                            _es_triggered = True
+                            _es_best_snapshot = None
+                            if self.verbose:
+                                print(f"  [WarmupEarlyStop:train_loss] ep{_e1}: peak_reversal "
+                                      f"(best_low={_es_tl_best:.6f} @ ep{_es_tl_best_epoch+1}, "
+                                      f"reversals={_es_tl_reversals}/{_es_tl_patience_checks}, "
+                                      f"rel_thr={_es_tl_rel_threshold}, check={_es_tl_check_interval}, "
+                                      f"min_ep={_es_tl_min_epoch}). Reverted to best-low; warmup "
+                                      f"ends now → teacher_only_warmup_epochs={_new_warmup}.")
+            elif _es_enabled and not _es_triggered and teacher_only:
                 _snr = epoch_losses.get('_train_recon_snr', None)
                 if _snr is not None:
                     if _es_best_snr is None or _snr > _es_best_snr:  # strict-max (no min_delta)

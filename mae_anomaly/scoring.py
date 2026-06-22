@@ -331,3 +331,63 @@ def compute_score(
     if mode == 'ratio_weighted':
         return compute_ratio_weighted_score(recon, disc, config)
     return compute_default_score(recon, disc, config)
+
+
+# =============================================================================
+# Official MAE-mode causal/online score (2026-06-22)
+# =============================================================================
+# Used ONLY when config.official is True; the standard modes above are untouched.
+# Single-source per CLAUDE.md — never inline these elsewhere.
+OFFICIAL_SCORE_W = 0.25      # disc weight in the final score (fixed)
+OFFICIAL_SCORE_EPS = 1e-8    # cumulative-ratio denominator epsilon (fixed)
+
+
+def compute_train_normal_seed(recon_tr, disc_tr, train_pt_labels):
+    """Constant train-normal seed for the official causal score.
+
+    R_tr = Σ recon_tr[label==0], D_tr = Σ disc_tr[label==0] over ALL train-normal
+    points (so each normal sample contributes once; the sum carries the
+    normal-sample count M as weight). NaN/Inf are zeroed before summing.
+
+    Args:
+        recon_tr, disc_tr: (N_train,) point-level teacher-recon error / output
+            discrepancy on the train set (best-epoch inference).
+        train_pt_labels: (N_train,) point labels (0=normal, 1=anomaly).
+
+    Returns:
+        (R_tr, D_tr) as Python floats.
+    """
+    r = np.nan_to_num(np.asarray(recon_tr, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    d = np.nan_to_num(np.asarray(disc_tr, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    y = np.asarray(train_pt_labels).reshape(-1)
+    m = (y == 0)
+    R_tr = float(r[m].sum())
+    D_tr = float(d[m].sum())
+    return R_tr, D_tr
+
+
+def compute_official_causal_score(recon_test, disc_test, *, R_tr, D_tr,
+                                  w=OFFICIAL_SCORE_W, eps=OFFICIAL_SCORE_EPS):
+    """Causal/online anomaly score (no future test data, no test labels).
+
+    For each test timestep t in chronological order:
+        s_t     = (R_tr + Σ_{i<=t} recon_test[i]) / (D_tr + Σ_{i<=t} disc_test[i] + eps)
+        score_t = recon_test[t] + w * disc_test[t] * s_t
+
+    s_t is a cumulative (prefix) ratio: early-on R_tr/D_tr (train prior) dominates,
+    later the test distribution corrects it. Strictly i<=t ⇒ no future leakage.
+    R_tr/D_tr are KEYWORD-ONLY REQUIRED (a missed caller raises TypeError rather
+    than silently degrading — per the FM-omission post-mortem).
+
+    Args:
+        recon_test, disc_test: (T,) point-level teacher-recon / discrepancy in
+            true chronological order (physical timestep 0..T-1).
+
+    Returns:
+        (T,) float32 anomaly score. cumsum is done in float64 then cast to
+        float32 to keep offline-recompute bit-parity.
+    """
+    rt = np.nan_to_num(np.asarray(recon_test, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    dt = np.nan_to_num(np.asarray(disc_test, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    s = (float(R_tr) + np.cumsum(rt)) / (float(D_tr) + np.cumsum(dt) + eps)
+    return (rt + w * dt * s).astype(np.float32)

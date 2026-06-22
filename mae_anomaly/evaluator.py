@@ -1669,6 +1669,10 @@ class Evaluator:
         all_sample_types = []
         all_anomaly_types = []
         all_disc_per_feature = []
+        # [2026-06-22 opt-in, default-off] per-PATCH per-feature disc for point-level
+        # per-feature scoring analysis. Only populated when self._store_perfeat_patches=True
+        # (set externally before inference). Off → byte-identical (empty list, no append).
+        all_disc_per_feature_patches = []
 
         # Detail collectors (when collect_detail=True)
         if collect_detail:
@@ -1889,6 +1893,8 @@ class Evaluator:
                 all_anomaly_types.append(anomaly_types.cpu().numpy())
                 # Per-feature disc: (B, num_patches, F) → window mean (B, F)
                 all_disc_per_feature.append(batch_disc_per_feature.mean(dim=1).cpu().numpy())
+                if getattr(self, '_store_perfeat_patches', False):
+                    all_disc_per_feature_patches.append(batch_disc_per_feature.cpu().numpy())  # (B, num_patches, F)
 
                 # Detail: collect per-batch reconstruction data
                 if collect_detail:
@@ -1932,6 +1938,8 @@ class Evaluator:
 
         # Store per-feature discrepancy as instance attribute (accessed by callers)
         self.disc_per_feature = np.concatenate(all_disc_per_feature)  # (n_windows, F)
+        if getattr(self, '_store_perfeat_patches', False) and all_disc_per_feature_patches:
+            self.disc_per_feature_patches = np.concatenate(all_disc_per_feature_patches)  # (n_windows, num_patches, F)
 
         # Store FM patches if feature matching is enabled
         if hasattr(self, '_all_fm_patches_list') and self._all_fm_patches_list:

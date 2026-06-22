@@ -24,6 +24,70 @@
 
 **검증**: 오프라인(mock model + 실제 metadata 복사본)으로 기존필드 보존·batch override·비스칼라 제외·atomic write assertion 통과. dry-run→디스크 검증(8번 catch×WaDi=32/div4, 10번=16/div8, dcdetector=64/div2). py_compile 3파일 OK. 독립 다중 에이전트 adversarial 검증.
 
+## 2026-06-22: `official=True` — MAE-mode override bundle (separate code path, default-off)
+
+**개요**: 신규 config `official: bool = False`. ON이면 **별도 경로**가 고정 번들을 적용하고 **충돌하는 모든 config을 무조건 override**한다. 언급 안 한 config은 **271(canonical)을 default**로 깔되, 기존 방식(`config_override`)으로 개별 override 가능. **official=False는 byte-identical**(모든 신규 동작이 `if config.official` 가드/단락 뒤).
+
+**번들(강제, official-8)**:
+1. **train offset 제거 + `sliding_window_stride=1`** — `apply_official_overrides` + run_base의 **로컬 `train_stride=1`** 강제(데이터셋은 config 필드가 아닌 로컬 train_stride를 읽으므로 둘 다 필요).
+2. **`num_epochs` default 30 (override 가능)**, **`teacher_only_warmup_epochs` default `num_epochs//2` (override 가능)** + `use_teacher_warmup_early_stop=False`. 둘 다 run_base의 official 빌드에서 user merge **전** default로 깔려 사용자 `config_override` 값이 우선(예: `num_epochs=40`→warmup auto 20, `num_epochs=40 teacher_only_warmup_epochs=10`→10). apply_official_overrides는 이 둘을 **강제하지 않음**(epoch_offset/stride/early_stop만 강제).
+3. **per-iteration LR** — MAE식(`util/lr_sched.py`: 0→선형 warmup over `w=teacher_only_warmup_epochs`, 이후 half-cosine→`min_lr`=0 over `[w, num_epochs)`), fractional epoch `e=epoch+batch/len(loader)`. group별 peak-LR 캡처 후 비율 스케일(GRL-cls lr 비율 보존). per-epoch `scheduler.step()`은 official일 때 skip.
+4. **매 epoch model-only 저장** → `official_epochs/epoch_NNN.pt`(별도 namespace, best_checkpoint 미간섭). ⚠️ d_model=512에서 ~138MB×25 ≈ **3.3GB/dataset** 디스크. **체크포인트 보존 옵션**(`official_keep_checkpoints: bool=True` 전역 + `official_ckpt_overrides='key1:false,key2:true'` per-dataset, 미명시는 전역): `False`('저장 안함')면 official_epochs/ writes를 **skip**하고 eval+viz는 정상 수행, **끝나면** best_model/best_checkpoint/latest를 **삭제**(save_weights/KEEP_CHECKPOINT_DATASETS 무관) → 결과(metrics·npz·viz)만 남김(스모크: 3.3GB→**13MB**).
+5. **`eval_interval=1`**(매 epoch eval) — per-experiment **로컬**(전역 `EVAL_INTERVAL=5` 미변경 → 큐 오염 0).
+6. **신규 causal/online anomaly score** (`scoring.py` 단일출처): train-normal seed `R_tr=Σrecon_tr[정상]`, `D_tr=Σdisc_tr[정상]`; per test t: `s_t=(R_tr+cumsum recon)/(D_tr+cumsum disc+eps)`; `score_t=recon_t+0.25·disc_t·s_t`. cumsum=prefix-only → **미래·라벨 미사용**. best-epoch는 매 epoch **train-inference(R_tr/D_tr)** 후 causal score의 pak_auc_f1로 선택. 최종 metric·VUS·excl22·viz **전부 causal로 일관**(npz에 `official_score` key 추가, `adaptive_score` 보존).
+7. **단일 전역 seed** — `set_seed_official`(+PYTHONHASHSEED + DataLoader generator/worker_init_fn), `cudnn.benchmark=True` 유지·`use_deterministic_algorithms` 미호출(속도 보존). 하나(`random_seed`) 바꾸면 전부 바뀜.
+
+**271-base 레이어링**: `make_config`에서 official이면 `CANON_271`(완전한 271 dict) 베이스 ← 사용자 명시 `config_override` key ← `apply_official_overrides`(official-8 강제, 최종 writer). Set C preset 기하는 우회(271이 자체 공급).
+
+**핵심 메커니즘**: `apply_official_overrides(config)`는 `if not official: return config`로 단락(official=False면 setattr 0). `make_config`(queue/CLI 양쪽 유일 깔때기)에서 merge loop 직후·dim_feedforward/검증 직전에 호출 → official이 preset/override-string/dataset_def를 last-writer로 이김.
+
+**파일**: `config.py`(+82/−0: 필드·CANON_271·apply_official_overrides·set_seed_official), `utils/experiment.py`(+7/−0), `scoring.py`(+60/−0: causal 2함수), `trainer.py`(+36/−1: per-iter LR), `run_base_experiments.py`(+161/−11: 271-base 빌드·로컬 stride/eval_interval·매-epoch 저장·per-epoch train-inference→causal 치환·npz·viz·seeding). 삭제 전수감사 = 전부 의도된 교체, 비-official 경로 보존.
+
+**검증**: ① **official=False byte-identity** — 가드/단락 + 삭제 12줄 전수감사 + `make_config(official=False)==hand-built` 단위테스트. ② 코어 단위테스트(config 깔때기·271-base·causal **미래미사용 경험증명**·per-iter LR MAE공식 일치) PASS. ③ **실제 GPU e2e 스모크**(MSL T-13, batch=64, 동시 실행 중인 exp336 무영향): official=True/ep25/warmup15/stride1/offset off/d_model512(271-base)·batch64(사용자 override) 확인, eval_interval=1·25 eval, `official_epochs/` 25 ckpt(model-only), npz `official_score`(causal, adaptive와 distinct, finite), best-epoch 10 causal-pak_auc_f1 선택, 전 파이프라인(train+eval+train-inference+VUS+viz) 57s 완주. 백업: `.trash/0622/`.
+
+## 2026-06-22: `force_mask_all_anomaly` — per-sample mask ALL anomaly patches (Option C) + exp337
+
+**문제**: `force_mask_anomaly`는 **고정 budget**(`round(num_patches*masking_ratio)`)만큼만 마스킹하고 anomaly 패치를 우선순위로 채운다. 한 윈도우의 anomaly 패치가 budget을 **초과**하면 초과분은 top-budget에 못 들어 **encoder에 그대로 보인다**([model.py:1004](mae_anomaly/model.py#L1004) 주석의 "excess remain visible").
+
+**변경 (default-off, 271 byte-identical)**: 신규 플래그 `force_mask_all_anomaly`. ON이면 **per-sample**로 `K_s = min(max(budget, N_a), num_patches-1)`만큼 마스킹 → 모든 anomaly 패치를 가린다(encoder가 anomaly 미관측). 단일변수.
+
+**핵심 — mask_after_encoder=True(MAE visible-only) 유지하며 ragged(가변 visible) 처리**: per-sample 마스킹 개수가 달라 visible 개수가 ragged가 되는데, MAE visible-only 인코더는 직사각 텐서를 요구한다. 이를 **padding + `src_key_padding_mask`**로 해결:
+- `model.py` force 블록: flag-gated per-sample 가변 마스크(`(rank >= K_s)`). OFF는 기존 scatter 경로 **verbatim**(byte-identical).
+- `_encode_visible_only`: `num_keep = visible.max()`, uniform이면 **원본 경로 그대로**, ragged면 over-masked 샘플을 max까지 padding하고 padding 위치를 `src_key_padding_mask`로 인코더가 무시. padding mask를 `self._last_encode_kpm`에 저장.
+- `_insert_mask_tokens_and_unshuffle`: `_last_encode_kpm`이 있으면 padding 행 latent을 mask token으로 덮어쓰고 기존 `cat + ids_restore` 복원. None(uniform/eval/default)이면 **no-op → byte-identical**.
+- `config.py`: `force_mask_all_anomaly: bool = False`. `trainer.py`: 검증(force_mask_anomaly=True + use_masking=True 요구, fully-assembled config 위치 — config.py는 `__post_init__`이 setattr override를 못 봄).
+- **loss.py 무수정**: 반환 mask가 그대로 흘러가고 모든 소비처가 `+1e-4`/`n==0` 가드.
+
+**eval/viz 무영향**: force 블록은 `self.training` 게이트 → 학습 forward(trainer.py:981) 1곳에서만. eval/scoring/viz(evaluator.py:1755/1818, training_visualizer.py:206)는 외부 uniform mask + `masking_ratio=0.0` + eval 모드라 force 블록 미진입.
+
+**검증(GPU 미사용, CPU, HEAD 대비 실증) — 전부 PASS**: ① **OFF + eval byte-identity**: model.py만 HEAD로 stash해 동일 seed 학습-force-mask + eval-external-mask forward 시그니처 비교 → **완전 일치**. ② ON ragged: per-sample `n_masked==K_s`, **anomaly_left_visible=[0,0,0,0]**(이상 전부 마스킹). ③ unshuffle STRONG: mask token이 masked 위치에 **정확히** 일치(다른 곳 없음). ④ all-anomaly 윈도우: cap→1 visible, 무크래시·유한. ⑤ 271-path(GRL+FM+patch_level)+ON: forward·criterion·**backward 유한, grads 유한**. ⑥ config 검증 ValueError 발화.
+
+**exp337**: 271 base + `force_mask_all_anomaly=True` (단일변수, queue 끝에 추가). 백업: `.trash/0622/`.
+
+## 2026-06-20: Warmup early-stop `train_loss` peak_reversal mode + always-on `train_recon_snr` + exp330/331
+
+**1) `train_recon_snr` 항상 계산·저장 (early-stop OFF 포함 전 실험)**: teacher train-recon SNR(`(recon_a−recon_n)/(σ_a+σ_n+ε)`, anomaly↔normal 분리도)은 warmup early-stop 메트릭으로 이미 계산됐으나 `use_teacher_warmup_early_stop=True`에서만, 그리고 history에 미저장이었음. 이제 `loss.py`의 per-sample teacher recon 노출을 **항상**으로(게이트 제거), `trainer.py` 누적/계산도 `_es_on`/`teacher_only` 게이트 제거 → **모든 실험·모든 epoch**에서 `_train_recon_snr` 계산 후 `history['train_recon_snr']`에 기록(미정의 epoch=None). detached/no-grad → 학습 byte-identical.
+
+**2) Warmup early-stop `metric='train_loss'` (peak_reversal, spec pseudo-code 정확 구현)**: 기존 `recon_snr`(분리도 maximize, 무갱신-plateau) 외에 **`train_loss`**(teacher recon **minimize**, peak_reversal) 모드 추가. `teacher_warmup_early_stop_metric='train_loss'`로 선택. 규칙: `min_epoch=20`부터 `check_interval=5` epoch마다 epoch train_loss 확인 → 최저점 대비 `relative_threshold=1%` 초과 악화 check가 `patience_checks=2`회 연속이면 종료, **train_loss 최저 epoch**으로 model+optimizer+scheduler rollback 후 student 시작(`teacher_only_warmup_epochs`는 상한). 신규 config 4종(`teacher_warmup_es_check_interval/_patience_checks/_relative_threshold/_min_epoch`)이 pseudo 기본값. `recon_snr` 경로는 `elif`로 분리 → **byte-identical**. 미지원 metric은 trainer init에서 ValueError.
+
+**파일**: `config.py`(metric enum 주석 + 4 신규 필드), `loss.py`(es-tensor 노출 항상), `trainer.py`(누적/계산 게이트 제거 + `train_recon_snr` history + train_loss 분기 + metric validation).
+
+**검증(GPU 미사용, CPU, HEAD 대비 실증)**: ① **byte-identity**: 동일 seed GRL 학습의 per-epoch train/recon/disc/normal/anomaly/fm/grl loss가 **현재 vs git-HEAD 10자리 완전일치**(stash↔pop diff 공란) → anomaly_disc+train_recon_snr+train_loss 변경 전부 학습-중립. ② **recon_snr 경로**: ES=ON 현재 vs HEAD의 recon_snr+loss 시리즈 완전일치 → 기존 292/294 거동 불변. ③ **ES=OFF**: `train_recon_snr`가 실수값으로 기록(요청 기능). ④ **train_loss peak_reversal**: 실제 `Trainer.train()`에 스크립트 손실곡선 주입 → best-low @ep30, reversal 2/2 @ep35·40 → 트리거 @ep40, ep30 rollback, warmup=40 (pseudo 손계산과 정확히 일치). ⑤ import/문법/impact-surface(loss.py 다른 사용처 0, `_train_recon_snr`가 누적·평균 루프 뒤 추가) 점검.
+
+**3) exp330/331 (Group V) + 332–336 renumber**: 신규 **330 warmup_es_trainloss**(271 + ES train_loss) · **331 warmup_es_trainloss_freezeenc**(330 + `freeze_encoder_only=True`, 동적 단축 warmup_end 직후 encoder freeze) 끼워넣고 기존 dual-balancer/capacity 330–334 → **332–336** renumber(queue 54개, 중복 없음, parse+metric-validation PASS). Notion Spec(Group V 신설 + Group U 332–336) + Results(4표 행 renumber+삽입, callout/footnote) 반영.
+
+## 2026-06-20: Collect anomaly output-discrepancy in training_histories (all paths, incl. GRL/SCAD)
+
+**문제**: anomaly-region output discrepancy(= teacher↔student 출력 MSE를 anomaly 패치에서 평균낸 forward/un-margined 값, `anomaly_disc_forward`)는 `loss.py:296/462`에서 **`disable_anomaly_loss` 게이트 바깥**, 즉 GRL/SCAD 경로에서도 **항상 계산**되지만 `loss_tensors`(adaptive-λ용)에만 있고 **`loss_dict`→`epoch_losses`→`history`(training_histories.json)로는 수집되지 않았음**. 결과적으로 GRL/SCAD 실험(271 포함, `anomaly_loss`=0)에서는 normal discrepancy(`train_normal_loss`)는 기록되는데 **anomaly discrepancy는 미기록**(비대칭). anomaly discrepancy가 곧 anomaly detection score의 학습-시점 신호인데도 로깅 파일에 남지 않았음.
+
+**변경 (additive, 학습 byte-identical)**: 이미 계산된 `anomaly_disc_forward`를 실험 로깅 파일에 per-epoch 수집.
+- `loss.py` — `loss_dict['anomaly_disc_forward']`에 detached `.item()` 노출(1 라인 + 주석). `loss`/gradient 미접촉.
+- `trainer.py` — (1) `self.history['train_anomaly_disc_forward']` init, (2) `epoch_losses['anomaly_disc_forward']` init(기존 `for key in epoch_losses` 누적·평균 루프가 자동 처리 — SCAD/GRL 집계버그 회피 패턴), (3) history append. 총 3 지점, 전부 additive.
+
+**의미**: GRL/SCAD 경로에서도(`anomaly_loss` disable 무관) anomaly discrepancy 신호를 training_histories에 기록 → normal(`train_normal_loss`)과 대칭 비교 가능. warmup/teacher_only·discrepancy off 구간은 `0.0` sentinel(기존 `dis`와 동일 규약). 동적 스키마 UI 대시보드는 신규 키 자동 인식.
+
+**검증(GPU 미사용, CPU)**: ① GRL 경로 — `disable_anomaly_loss=True`·`anomaly_loss=0`인데 `anomaly_disc_forward=2.21` 실수집, `total_loss` 불변. ② SCAD 경로 동일(1.88). ③ warmup `teacher_only` → 0.0 sentinel. ④ 실제 `train_epoch`(누적 루프 포함) tiny end-to-end: `history['train_anomaly_disc_forward']=[0.0, 2.05, 1.25]`(warmup 0/post-warmup 실값), `anomaly_loss` 내내 0 → 학습 불변. ⑤ trainer import/문법 정상. diff는 loss.py 1 + trainer.py 3 지점 **additive-only**.
+
 ## 2026-06-17: GRL effect diagnostics (`grl_diagnostics/`) + 6 new GRL scalars
 
 SCAD-C가 `scad_diagnostics/`로 효과를 검증하듯, **GRL(gradient-reversal adversarial classifier)의 효과 검증** 진단을 추가. GRL은 적대적 minimax라 "성공"이 직관 반대(classifier가 나빠짐=balanced_acc→0.5가 목표)인데, 그 0.5가 **starvation/class-collapse와 구분 불가** → 진단의 핵심은 **진짜 invariance vs 죽은 게임 구분**. (이 세션 분석에서 발견한 #1 실패모드 = adaptive-λ starvation `effective_weight→0`.)

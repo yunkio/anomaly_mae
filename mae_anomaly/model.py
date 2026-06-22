@@ -822,12 +822,12 @@ class SelfDistilledMAEMultivariate(nn.Module):
         """
         seq_len, batch_size, d_model = x_embed.shape
         visible_counts = mask.sum(dim=0)  # (batch,)
-        num_keep = int(visible_counts[0].item())
-        assert (visible_counts == num_keep).all(), (
-            f"Non-uniform masking in batch: visible counts range "
-            f"[{int(visible_counts.min())}, {int(visible_counts.max())}]. "
-            f"force_mask_anomaly should maintain fixed masking budget."
-        )
+        # num_keep = MAX visible across the batch. When masking is uniform (eval / default /
+        # force_mask_all_anomaly with no over-budget sample) this equals the common count, so the
+        # original path below runs byte-identical. When RAGGED (exp337 over-budget samples),
+        # num_keep is the least-masked sample's visible count; over-masked samples get padded up.
+        num_keep = int(visible_counts.max().item())
+        _is_uniform = bool((visible_counts == num_keep).all())
 
         # Sort patches: visible first, then masked
         # noise gives same order for patches with same mask value, preserving relative order
@@ -853,8 +853,21 @@ class SelfDistilledMAEMultivariate(nn.Module):
         )
         x_visible_with_pos = x_visible + pe_for_visible
 
-        # Encode only visible patches
-        latent = self.encoder(x_visible_with_pos)  # (num_keep, batch, d_model)
+        # Encode only visible patches. self._last_encode_kpm carries the padding mask to
+        # _insert_mask_tokens_and_unshuffle (None in the uniform/eval/default path → that fn is a
+        # no-op there, byte-identical).
+        if _is_uniform:
+            self._last_encode_kpm = None
+            latent = self.encoder(x_visible_with_pos)  # (num_keep, batch, d_model)
+        else:
+            # RAGGED (exp337): rows >= visible_counts[b] of ids_keep are masked patches gathered
+            # into the visible region. Mark them as key-padding so the encoder ignores them as
+            # keys (real visible patches attend only to real visible keys; the seq_len-1 cap in the
+            # force block guarantees >=1 real visible key per sample → no all-padding NaN).
+            _pad = (torch.arange(num_keep, device=x_embed.device).unsqueeze(1)
+                    >= visible_counts.unsqueeze(0))                       # (num_keep, batch) True=pad
+            self._last_encode_kpm = _pad
+            latent = self.encoder(x_visible_with_pos, src_key_padding_mask=_pad.transpose(0, 1))
 
         return latent, ids_restore
 
@@ -876,6 +889,15 @@ class SelfDistilledMAEMultivariate(nn.Module):
             latent_full: (seq_len, batch, d_model) - full sequence with mask tokens
         """
         num_visible, batch_size, d_model = latent.shape
+
+        # [exp337] ragged path: rows flagged as padding by _encode_visible_only are masked patches
+        # that got gathered into the visible region — overwrite them with the mask token so they
+        # become mask tokens after unshuffle (visible/masked partition then exact per sample).
+        # Uniform / eval / default path: _last_encode_kpm is None → skipped → byte-identical.
+        _kpm = getattr(self, '_last_encode_kpm', None)
+        if _kpm is not None and _kpm.shape[0] == num_visible:
+            latent = torch.where(_kpm.unsqueeze(-1), mask_token.to(latent.dtype), latent)
+
         num_masked = seq_len - num_visible
 
         # Create mask tokens for masked positions
@@ -1021,11 +1043,26 @@ class SelfDistilledMAEMultivariate(nn.Module):
             # normal patches get low priority (0+noise). Top target_num_masked are masked.
             noise = torch.rand(current_seq_len, batch_size, device=patch_mask.device)
             masking_priority = anomaly_patches * 1000 + noise
-            ids_sorted = torch.argsort(masking_priority, dim=0, descending=True)
 
-            patch_mask = torch.ones(current_seq_len, batch_size, device=patch_mask.device)
-            patch_mask.scatter_(0, ids_sorted[:target_num_masked, :], 0.0)
-            mask = patch_mask
+            if (getattr(self.config, 'force_mask_all_anomaly', False)
+                    and self.config.use_masking and masking_ratio > 0):
+                # [exp337] per-sample variable budget: mask exactly K_s = min(max(budget, N_a),
+                # seq_len-1) patches per sample. anomaly patches (priority ~1000) fill the top
+                # ranks → ALL anomalies masked; normals fill the rest up to budget. Cap keeps >=1
+                # visible. Produces a RAGGED mask (variable masked count per sample) — handled by
+                # _encode_visible_only's padding/src_key_padding_mask path (mask_after_encoder=True).
+                _n_anom = anomaly_patches.sum(dim=0)                                    # (batch,)
+                _k_s = torch.clamp(torch.clamp(_n_anom, min=float(target_num_masked)),
+                                   max=float(current_seq_len - 1))                      # (batch,)
+                _rank = torch.argsort(torch.argsort(masking_priority, dim=0, descending=True), dim=0)
+                patch_mask = (_rank >= _k_s.unsqueeze(0)).to(masking_priority.dtype)    # 1=keep, 0=mask top-K_s
+                mask = patch_mask
+            else:
+                # === LEGACY (byte-identical to pre-2026-06-22): fixed uniform budget ===
+                ids_sorted = torch.argsort(masking_priority, dim=0, descending=True)
+                patch_mask = torch.ones(current_seq_len, batch_size, device=patch_mask.device)
+                patch_mask.scatter_(0, ids_sorted[:target_num_masked, :], 0.0)
+                mask = patch_mask
 
             # Re-apply masking for non-mask_after_encoder mode
             if not self.mask_after_encoder:

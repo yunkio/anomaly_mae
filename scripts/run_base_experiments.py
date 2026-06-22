@@ -71,6 +71,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 # === Imports from active codebase ===
 from mae_anomaly import Config, SelfDistilledMAEMultivariate, set_seed
+from mae_anomaly.config import set_seed_official, official_worker_init_fn, CANON_271
 from mae_anomaly.dataset_sliding import SlidingWindowDataset, AnomalyRegion
 from mae_anomaly.evaluator import Evaluator
 from mae_anomaly.trainer import Trainer
@@ -578,7 +579,41 @@ def compute_epoch_test_inference(model, test_loader, config, test_dataset=None):
     }
 
 
-def _evaluate_all_parallel(evaluator, executor, also_excl22: bool = False):
+def _official_keep_ckpt_for(config, dataset_key):
+    """[official] Resolve whether to keep this dataset's checkpoints. Global default
+    = official_keep_checkpoints; per-dataset overrides come from official_ckpt_overrides
+    ('key1:false,key2:true'). Returns True for the non-official path (unused there)."""
+    keep = bool(getattr(config, 'official_keep_checkpoints', True))
+    ov = getattr(config, 'official_ckpt_overrides', '') or ''
+    for pair in str(ov).split(','):
+        pair = pair.strip()
+        if ':' in pair:
+            dk, dv = pair.split(':', 1)
+            if dk.strip() == dataset_key:
+                keep = dv.strip().lower() in ('true', '1', 'yes', 'keep')
+    return keep
+
+
+def _official_train_seed(model, train_infer_loader, train_infer_dataset, config):
+    """[official] Run an eval-style forward over the TRAIN set at the current
+    weights and return the train-normal causal seed (R_tr, D_tr) = sum over
+    label==0 of the point-level RAW teacher-recon / output-discrepancy. Mirrors
+    the post-training train inference (same loader stride=test_stride, same
+    aggregation), but produces only the two scalar sums."""
+    from mae_anomaly.evaluator import _build_aggregation_map, _aggregate_with_map
+    from mae_anomaly.scoring import compute_train_normal_seed
+    ted = compute_epoch_test_inference(model, train_infer_loader, config,
+                                       test_dataset=train_infer_dataset)
+    tr_labels = np.array(train_infer_dataset.point_labels)
+    tlen = len(tr_labels)
+    tws = np.array(train_infer_dataset.window_start_indices)
+    ft, fw, cov, cvd = _build_aggregation_map(tws, config.patch_size, config.num_patches, tlen)
+    recon_pts = _aggregate_with_map(ted['recon_patches'].ravel(), ft, fw, cov, cvd, tlen, method='mean')
+    disc_pts = _aggregate_with_map(ted['disc_patches'].ravel(), ft, fw, cov, cvd, tlen, method='mean')
+    return compute_train_normal_seed(recon_pts, disc_pts, tr_labels)
+
+
+def _evaluate_all_parallel(evaluator, executor, also_excl22: bool = False, official_seed=None):
     """Dispatch the 3-4 compute_full_metric_set calls (adaptive / disc / teacher_recon /
     optional adaptive-excl22) in parallel via the executor.
 
@@ -643,6 +678,18 @@ def _evaluate_all_parallel(evaluator, executor, also_excl22: bool = False):
     adaptive_pts = adaptive_pts.astype(np.float32)
     disc_pts = disc_pts.astype(np.float32)
     teacher_pts = teacher_pts.astype(np.float32)
+
+    # [official] Replace the adaptive point score with the causal/online score
+    # score_t = recon_test[t] + 0.25*disc_test[t]*s_t, where teacher_pts/disc_pts
+    # are the point-level RAW recon/disc just computed and (R_tr, D_tr) come from a
+    # per-epoch train-normal inference. The downstream f_adaptive/f_excl22 metrics
+    # — and therefore best-epoch selection (pak_auc_f1) — become causal-based.
+    # f_disc/f_teacher stay raw (diagnostics). No-op when official_seed is None.
+    if official_seed is not None and getattr(evaluator.config, 'official', False):
+        from mae_anomaly.scoring import compute_official_causal_score
+        _R_tr, _D_tr = official_seed
+        adaptive_pts = compute_official_causal_score(
+            teacher_pts, disc_pts, R_tr=_R_tr, D_tr=_D_tr).astype(np.float32)
 
     # Dispatch parallel compute_full_metric_set calls.
     # Phase 3 (2026-05-29): compute_full_metric_set requires lite as kw-only.
@@ -747,6 +794,11 @@ def compute_epoch_test_eval(eval_data, config, test_loader, test_dataset=None,
     evaluator.set_eval_context(epoch=epoch)
     # Enable dual eval (full + excl22) for SWaT datasets only
     also_excl22 = bool(dataset_key and 'SWaT' in dataset_key)
+    # [official] Causal-score seed (R_tr, D_tr) staged by epoch_eval_callback on
+    # eval_data. None ⇒ adaptive scoring (non-official path unchanged).
+    _official_seed = None
+    if getattr(config, 'official', False) and 'official_R_tr' in eval_data:
+        _official_seed = (eval_data['official_R_tr'], eval_data['official_D_tr'])
     if executor is not None:
         # Fast path: dispatch the 3-4 compute_full_metric_set calls in parallel.
         # Each call is a CPU-bound chunk of ~5-7 s; sending 4 in parallel to 4
@@ -754,7 +806,7 @@ def compute_epoch_test_eval(eval_data, config, test_loader, test_dataset=None,
         # inside each call (IPC too coarse for inner-level parallelism — verified
         # 2026-05-28 to be IPC-bound when split per-K).
         metrics, disc_metrics, teacher_recon_metrics = _evaluate_all_parallel(
-            evaluator, executor, also_excl22=also_excl22,
+            evaluator, executor, also_excl22=also_excl22, official_seed=_official_seed,
         )
     else:
         # Per-epoch fallback path (no executor) — lite=True for speed (VUS skip).
@@ -935,7 +987,10 @@ def _compute_vus_for_npz_file(npz_path: str, region_starts, region_ends,
     from mae_anomaly.evaluator import compute_full_metric_set
 
     d = np.load(npz_path)
-    score = d['adaptive_score']
+    # [official] Use the causal score when present. Only official runs save the
+    # 'official_score' key, so non-official npz files transparently fall back to
+    # 'adaptive_score' (this function has no config, so npz-presence is the gate).
+    score = d['official_score'] if 'official_score' in d.files else d['adaptive_score']
     labels = d['point_labels'].astype(np.int8)
 
     # excl22 worker: physically remove region22 timesteps so VUS / Aff / R-F1
@@ -1876,7 +1931,12 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
             _best_nd = np.load(_best_npz_path)
             _best_lbl = _best_nd['point_labels'].astype(np.int8)
             _best_ml = min(len(_best_lbl), len(test_point_labels))
-            for _best_skey, _best_mdict in (('adaptive_score', metrics),
+            # [official] Finalize the primary metrics from the causal score (the
+            # same one that selected the best epoch). official=False reads
+            # 'adaptive_score' exactly as before.
+            _primary_key = ('official_score' if getattr(config, 'official', False)
+                            and 'official_score' in _best_nd.files else 'adaptive_score')
+            for _best_skey, _best_mdict in ((_primary_key, metrics),
                                             ('discrepancy_error', disc_metrics),
                                             ('teacher_recon_error', teacher_recon_metrics)):
                 if _best_skey in _best_nd.files and _best_mdict is not None:
@@ -1989,7 +2049,7 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
                         try:
                             ep_num = int(os.path.basename(sf).split('_')[1])
                             sd = np.load(sf)
-                            a_scores = sd['adaptive_score']
+                            a_scores = sd['official_score' if getattr(config, 'official', False) and 'official_score' in sd.files else 'adaptive_score']
                             t_scores = sd['teacher_recon_error']
                             ml = min(len(a_scores), len(test_point_labels))
                             _score_data.append((ep_num, a_scores[:ml], t_scores[:ml]))
@@ -2065,7 +2125,7 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
                         )
                         if os.path.exists(best_sf):
                             sd = np.load(best_sf)
-                            a_scores = sd['adaptive_score']
+                            a_scores = sd['official_score' if getattr(config, 'official', False) and 'official_score' in sd.files else 'adaptive_score']
                             t_scores = sd['teacher_recon_error']
                             ml = min(len(a_scores), len(test_point_labels))
                             best_excl22_em = compute_metrics_with_exclusion(
@@ -2119,7 +2179,7 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
                     )
                     if os.path.exists(scores_path):
                         scores_data = np.load(scores_path)
-                        adaptive_scores = scores_data['adaptive_score']
+                        adaptive_scores = scores_data['official_score' if getattr(config, 'official', False) and 'official_score' in scores_data.files else 'adaptive_score']
                         teacher_scores = scores_data['teacher_recon_error']
 
                         min_len = min(len(adaptive_scores), len(test_point_labels))
@@ -2434,7 +2494,26 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
         print(f"  Normal50 noise applied: train anomaly ratio {noisy_labels[:noisy_train_end].mean():.2%}")
 
     # Create config from preset + dataset-specific overrides
-    overrides = dict(config_preset['overrides'])
+    if config_preset['overrides'].get('official'):
+        # [official] 271-base layering: CANON_271 is the default for every config
+        # the user did NOT explicitly pass; the explicit --config-override keys win
+        # over it; make_config's apply_official_overrides then FORCES the official
+        # bundle on top. (Set C preset geometry is intentionally bypassed — 271
+        # supplies its own.) official=False ⇒ this branch is skipped entirely.
+        _user_keys = config_preset.get('_user_override_keys', [])
+        overrides = dict(CANON_271)
+        # Official defaults that are USER-OVERRIDABLE: num_epochs=30 and
+        # teacher_only_warmup_epochs=num_epochs//2. Set BEFORE the user merge so an
+        # explicit num_epochs / teacher_only_warmup_epochs in config_override wins.
+        overrides['num_epochs'] = 30
+        for _k in _user_keys:
+            if _k in config_preset['overrides']:
+                overrides[_k] = config_preset['overrides'][_k]
+        if 'teacher_only_warmup_epochs' not in _user_keys:
+            overrides['teacher_only_warmup_epochs'] = int(overrides['num_epochs']) // 2
+        overrides['official'] = True
+    else:
+        overrides = dict(config_preset['overrides'])
     overrides['sliding_window_stride'] = train_stride
     overrides['sliding_window_train_ratio'] = train_ratio
 
@@ -2448,6 +2527,24 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
     config = make_config(overrides)
     config.num_features = num_features
     config.device = 'cuda'
+
+    # [official] Per-experiment LOCAL eval interval (1 = every epoch). The module
+    # global EVAL_INTERVAL stays 5 and is NEVER mutated, so a non-official
+    # experiment later in the same queue process is unaffected.
+    eval_interval = 1 if getattr(config, 'official', False) else EVAL_INTERVAL
+
+    # [official] Force the LOCAL train stride to 1 (no offset). The TRAIN datasets
+    # below (2537/2552) read this local `train_stride`, NOT config.sliding_window_stride,
+    # so the config-field override alone would NOT take effect — this is the actual
+    # train-stride gate. test_stride (resolve_test_stride) and the train-inference
+    # loader stride are untouched (req 1 is train-only).
+    if getattr(config, 'official', False):
+        train_stride = 1
+
+    # [official] Whether to keep this dataset's checkpoints (per-dataset override
+    # with global fallback). False ⇒ skip official_epochs/ writes + delete the
+    # best/last checkpoints at the end (eval + viz still run). Only used when official.
+    _official_keep_ckpt = _official_keep_ckpt_for(config, key)
 
     # Experiment directory = results_subdir directly (no timestamp subdirectory)
     # SWaT dual-eval: split into _full (training + full eval) and _excl22 (excl region22 eval)
@@ -2464,7 +2561,13 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
 
     # Create datasets
     print("Creating datasets...")
-    set_seed(config.random_seed)
+    # [official] Thorough single-knob seeding (adds PYTHONHASHSEED + a seeded
+    # generator; same cudnn flags as set_seed → no speed loss). Everything still
+    # derives from config.random_seed, so changing that one value changes all RNG.
+    if getattr(config, 'official', False):
+        set_seed_official(config.random_seed)
+    else:
+        set_seed(config.random_seed)
 
     from mae_anomaly.utils.experiment import resolve_test_stride
     test_stride = resolve_test_stride(config)
@@ -2589,6 +2692,9 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
     if _dataloader_nw > 0:
         _train_loader_kwargs['persistent_workers'] = _dataloader_persistent
         _train_loader_kwargs['prefetch_factor'] = _dataloader_prefetch
+    if getattr(config, 'official', False):
+        # Defensive per-worker seeding (moot at num_workers=0; reproducible if >0).
+        _train_loader_kwargs['worker_init_fn'] = official_worker_init_fn
     train_loader = DataLoader(
         train_dataset, batch_size=config.batch_size,
         sampler=_train_sampler, drop_last=_drop_last,
@@ -2633,6 +2739,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
     _async_eval_thread = [None]        # [thread] — for join before checkpoint ops
     _pending_eval = [None]             # [eval_data] staged by eval callback (eval
                                        # epochs only), consumed by post_epoch_save_callback
+    _official_train_infer = [None, None]  # [official] [train_infer_loader, dataset] built once, reused per eval epoch
     _best_epoch_metric_key = config.best_epoch_metric  # e.g. 'pak_auc_f1'
     _best_ckpt_score = [0.0]  # best score seen so far (mutable for nonlocal)
 
@@ -2952,6 +3059,13 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
                 }
                 if fm_scores is not None:
                     save_dict['fm_error'] = np.nan_to_num(fm_scores, nan=0.0).astype(np.float32)
+                # [official] Also save the causal/online score (same R_tr/D_tr seed
+                # as the best-epoch metric). 'adaptive_score' is preserved untouched.
+                if getattr(config, 'official', False) and 'official_R_tr' in eval_data:
+                    from mae_anomaly.scoring import compute_official_causal_score
+                    save_dict['official_score'] = compute_official_causal_score(
+                        teacher_recon_scores, disc_scores,
+                        R_tr=eval_data['official_R_tr'], D_tr=eval_data['official_D_tr'])
                 np.savez_compressed(
                     os.path.join(epoch_scores_dir, f'epoch_{ep:03d}_scores.npz'),
                     **save_dict,
@@ -2967,7 +3081,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
     def epoch_eval_callback(epoch, model, history):
         nonlocal callback_infer_time
         ep = epoch + 1
-        if ep % EVAL_INTERVAL != 0 and ep != config.num_epochs:
+        if ep % eval_interval != 0 and ep != config.num_epochs:
             return
 
         # GPU inference (synchronous — must block while model is available)
@@ -2976,6 +3090,34 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
             eval_data = compute_epoch_test_inference(
                 model, test_loader, config, test_dataset=test_dataset
             )
+
+            # [official] Causal-score seed: run a TRAIN-normal inference at THIS
+            # epoch's weights → (R_tr, D_tr), staged on eval_data for the bg eval
+            # (drives best-epoch selection + the official_score npz). The
+            # train-inference loader (stride=test_stride, no offset) is built once
+            # and reused. No-op on the non-official path.
+            if getattr(config, 'official', False):
+                if _official_train_infer[0] is None:
+                    _ti_ds = SlidingWindowDataset(
+                        signals=signals, point_labels=point_labels, anomaly_regions=anomaly_regions,
+                        window_size=config.seq_length, stride=test_stride, mask_last_n=config.patch_size,
+                        split='train', train_ratio=train_ratio, seed=config.random_seed,
+                        run_boundaries=run_boundaries, normalize_mode=config.normalize_mode,
+                        minmax_range=getattr(config, 'minmax_range', '0_1'),
+                        minmax_clamp_min=getattr(config, 'minmax_clamp_min', None),
+                        minmax_clamp_max=getattr(config, 'minmax_clamp_max', None),
+                        entity_segments=entity_segments,
+                    )
+                    _ti_kwargs = dict(num_workers=_dataloader_nw, pin_memory=False)
+                    if _dataloader_nw > 0:
+                        _ti_kwargs['prefetch_factor'] = _dataloader_prefetch
+                    _official_train_infer[0] = DataLoader(
+                        _ti_ds, batch_size=config.batch_size, shuffle=False, **_ti_kwargs)
+                    _official_train_infer[1] = _ti_ds
+                _R_tr, _D_tr = _official_train_seed(
+                    model, _official_train_infer[0], _official_train_infer[1], config)
+                eval_data['official_R_tr'] = _R_tr
+                eval_data['official_D_tr'] = _D_tr
 
             # Compute contribution ratios from eval_data (pure numpy, ~1ms).
             # Pass epoch=ep so pre-warmup contribution drops the frozen-student
@@ -3044,6 +3186,20 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
         record: strict-normalize on load forces history to len == ckpt epoch and
         training resumes at ckpt_epoch + 1.
         """
+        # [official] Save a MODEL-ONLY snapshot EVERY epoch (req 4) to a SEPARATE
+        # namespace so it never clobbers best_checkpoint.pt / best_model.pt. Placed
+        # BEFORE the eval-gated early-return so it fires on non-eval epochs too.
+        # Skipped entirely when this dataset opted out of checkpoint saving
+        # (_official_keep_ckpt=False ⇒ '저장 안함'); eval + viz are unaffected.
+        if getattr(config, 'official', False) and _official_keep_ckpt:
+            _ep_off = epoch + 1
+            _off_dir = os.path.join(exp_dir, 'official_epochs')
+            os.makedirs(_off_dir, exist_ok=True)
+            torch.save(
+                {'epoch': _ep_off, 'model_state_dict': _clone_state_to_cpu(model.state_dict())},
+                os.path.join(_off_dir, f'epoch_{_ep_off:03d}.pt'),
+            )
+
         # Staged by epoch_eval_callback ONLY on eval epochs. None → non-eval epoch →
         # nothing to persist (the next eval epoch's snapshot captures this epoch too).
         eval_data = _pending_eval[0]
@@ -3253,7 +3409,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
     # Save epoch metrics
     epoch_metrics_path = os.path.join(exp_dir, 'epoch_metrics.json')
     with open(epoch_metrics_path, 'w') as f:
-        json.dump({'eval_interval': EVAL_INTERVAL, 'epochs': epoch_metrics_list}, f, indent=2)
+        json.dump({'eval_interval': eval_interval, 'epochs': epoch_metrics_list}, f, indent=2)
     print(f"  Epoch metrics saved: {epoch_metrics_path}")
 
     # Generate epoch-wise visualizations (feature stats only).
@@ -3456,6 +3612,21 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
         fm_patches=patch_scores.get('fm'),
         force_recon_only=_is_prewarmup_epoch(config, best_epoch),
     )
+    # [official] Visualize the CAUSAL score at the best epoch (req 5+6). The
+    # best-epoch npz holds the authoritative full-length official_score (the same
+    # one that selected the best epoch + drives the final metrics); overriding the
+    # full-length point score keeps viz consistent with the reported metrics.
+    # Guarded by length-match so a shape mismatch can never corrupt the plot.
+    if getattr(config, 'official', False):
+        _best_off_npz = os.path.join(exp_dir, 'epoch_scores', f'epoch_{best_epoch:03d}_scores.npz')
+        if os.path.exists(_best_off_npz):
+            _off_nd = np.load(_best_off_npz)
+            if ('official_score' in _off_nd.files
+                    and pred_data.get('scores') is not None
+                    and len(_off_nd['official_score']) == len(pred_data['scores'])):
+                _off_sc = _off_nd['official_score']
+                pred_data['scores'] = _off_sc
+                pred_data['point_scores'] = _off_sc
     detailed_data = {k: v[viz_indices] if isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == total_test else v
                      for k, v in full_detail.items()}
     del full_detail
@@ -3608,6 +3779,31 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
                 excl22_model = os.path.join(exp_dir_excl22, 'best_model.pt')
                 if os.path.exists(excl22_model):
                     os.remove(excl22_model)
+
+    # [official] '저장 안함' (per-dataset, global fallback): eval + viz have already
+    # run (the bg-worker holds its data in memory — proven safe by the existing
+    # cleanup above that also deletes best_model.pt mid-viz). Remove ALL checkpoint
+    # artifacts for this dataset regardless of save_weights / KEEP_CHECKPOINT_DATASETS.
+    # official_epochs/ was skipped during training, so this mostly clears best/last.
+    if getattr(config, 'official', False) and not _official_keep_ckpt:
+        import shutil as _sh_off
+        _off_dir = os.path.join(exp_dir, 'official_epochs')
+        if os.path.isdir(_off_dir):
+            _sh_off.rmtree(_off_dir, ignore_errors=True)
+        for _wf in [os.path.join(exp_dir, 'best_model.pt'),
+                    os.path.join(checkpoints_dir, 'latest_checkpoint.pt'),
+                    os.path.join(checkpoints_dir, 'best_checkpoint.pt')]:
+            try:
+                if os.path.exists(_wf):
+                    os.remove(_wf)
+            except OSError:
+                pass
+        if os.path.isdir(checkpoints_dir) and not os.listdir(checkpoints_dir):
+            try:
+                os.rmdir(checkpoints_dir)
+            except OSError:
+                pass
+        print(f"  [official 저장안함] removed checkpoints for '{key}' (eval + viz preserved)")
 
     return {
         'key': key,
@@ -3901,7 +4097,10 @@ def main():
         flat_kvs = []
         for item in args.config_override:
             flat_kvs.extend(item.split())
+        _user_override_keys = []  # [official] keys the user EXPLICITLY passed (271-base layering)
         for kv in flat_kvs:
+            if '=' not in kv:
+                continue  # defensive: skip malformed bare token (neutral for every k=v)
             key, val = kv.split('=', 1)
             # Auto-cast value types
             if val.lower() == 'true':
@@ -3918,6 +4117,10 @@ def main():
             elif val.replace('.', '', 1).replace('-', '', 1).isdigit():
                 val = float(val) if '.' in val else int(val)
             config_preset['overrides'][key] = val
+            _user_override_keys.append(key)
+        # [official] Stash the explicit-key list so run_base_experiment can layer
+        # CANON_271 (base) < user-explicit < forced official bundle.
+        config_preset['_user_override_keys'] = _user_override_keys
         print(f"  Config overrides: {args.config_override}")
 
     # Determine output base (after --list check and overrides applied)

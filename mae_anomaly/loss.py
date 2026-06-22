@@ -505,6 +505,14 @@ class SelfDistillationLoss(nn.Module):
             'discrepancy_loss': discrepancy_loss.item() if isinstance(discrepancy_loss, torch.Tensor) else discrepancy_loss,
             'normal_loss': normal_loss.item() if isinstance(normal_loss, torch.Tensor) else normal_loss,
             'anomaly_loss': anomaly_loss.item() if isinstance(anomaly_loss, torch.Tensor) else anomaly_loss,
+            # Anomaly-region output discrepancy (teacher↔student MSE on anomaly patches/samples,
+            # forward / un-margined). Computed at line 296/462 OUTSIDE the disable_anomaly_loss
+            # gate, so it carries the real anomaly discrepancy even in GRL/SCAD runs where the
+            # anomaly maximize-loss is disabled. Collected here (detached .item()) only so the
+            # trainer can log it into training_histories — it never enters `loss`/gradients, so
+            # training stays byte-identical. Symmetric counterpart to normal discrepancy
+            # (≈ train_normal_loss). 0.0 during warmup / when discrepancy is off (sentinel).
+            'anomaly_disc_forward': anomaly_disc_forward.item() if isinstance(anomaly_disc_forward, torch.Tensor) else anomaly_disc_forward,
             'mean_discrepancy': sample_discrepancy.mean().item(),
             # Detailed metrics for visualization
             'teacher_recon_normal': teacher_recon_normal.item(),
@@ -527,12 +535,15 @@ class SelfDistillationLoss(nn.Module):
             'reconstruction_loss': reconstruction_loss,
             'fm_loss': fm_loss,
         }
-        # [신규 2026-06-01] early-stop ON일 때만: per-sample teacher recon + label mask 노출
-        # (detach, no-grad). train_epoch가 epoch 단위로 누적해 train recon_snr 계산.
-        if self.use_teacher_warmup_early_stop:
-            loss_tensors['es_teacher_recon_per_sample'] = teacher_recon_per_sample.detach()
-            loss_tensors['es_is_normal_sample'] = is_normal_sample.detach()
-            loss_tensors['es_has_anomaly_sample'] = has_anomaly_sample.detach()
+        # Per-sample teacher recon + label masks (detach, no-grad). train_epoch accumulates
+        # these per-epoch to compute train_recon_snr (teacher anomaly↔normal recon separation).
+        # [2026-06-20] Exposed ALWAYS (was gated on use_teacher_warmup_early_stop) so the
+        # train_recon_snr diagnostic is logged for EVERY run, not only early-stop runs. The
+        # warmup early-stop just consumes the same value when enabled. All detached → no grad,
+        # never enters `loss` → training byte-identical.
+        loss_tensors['es_teacher_recon_per_sample'] = teacher_recon_per_sample.detach()
+        loss_tensors['es_is_normal_sample'] = is_normal_sample.detach()
+        loss_tensors['es_has_anomaly_sample'] = has_anomaly_sample.detach()
         # Patch-level masks for WDGRL critic (no grad needed)
         if self.patch_level_loss:
             _pll = locals()

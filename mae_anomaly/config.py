@@ -2,6 +2,7 @@
 Configuration classes for MAE anomaly detection
 """
 
+import os
 import random
 import numpy as np
 import torch
@@ -372,7 +373,15 @@ class Config:
     use_teacher_warmup_early_stop: bool = False
     teacher_warmup_early_stop_patience: int = 10    # recon_snr 무갱신 epoch 수 → 트리거
     teacher_warmup_early_stop_min_epochs: int = 50  # 이 epoch 이전엔 트리거 금지(최소 warmup floor)
-    teacher_warmup_early_stop_metric: str = 'recon_snr'  # 판정 기준 metric (학습 데이터 대상 recon_snr)
+    teacher_warmup_early_stop_metric: str = 'recon_snr'  # 'recon_snr' | 'train_loss'
+    # --- metric='train_loss' (peak_reversal, 2026-06-20 spec pseudo-code) 전용 상수 ---
+    # 매 check_interval epoch마다(min_epoch 이상) epoch train_loss를 확인: 최저점 대비
+    # relative_threshold(=1%) 초과 악화 check가 patience_checks회 연속 누적되면 종료하고
+    # train_loss가 가장 낮았던 check epoch으로 model+optimizer+scheduler rollback.
+    teacher_warmup_es_check_interval: int = 5       # train_loss 확인 주기(epoch)
+    teacher_warmup_es_patience_checks: int = 2      # 연속 reversal check 수 → 트리거(≈10ep @int=5)
+    teacher_warmup_es_relative_threshold: float = 0.01  # best-low 대비 상대 악화 임계(1%)
+    teacher_warmup_es_min_epoch: int = 20           # 이 epoch 이전엔 트리거 금지(train_loss 모드)
 
     best_epoch_metric: str = 'pak_auc_f1'  # Metric for best epoch selection
     # - 'pak_auc_f1': PA%K AUC of F1 with per-K threshold re-optimization (best_f1_w_pa, recommended)
@@ -399,6 +408,13 @@ class Config:
     use_student: bool = True
     use_masking: bool = True
     force_mask_anomaly: bool = True  # Prioritize masking anomaly patches during training
+    force_mask_all_anomaly: bool = False  # [exp337] Force-mask ALL anomaly patches per-sample,
+    # even above the fixed budget, so the encoder never sees an anomaly patch. Requires
+    # force_mask_anomaly=True AND use_masking=True. Default False = byte-identical to exp271.
+    # Per-sample masked count = min(max(budget, n_anomaly_patches), num_patches-1) → produces a
+    # RAGGED mask (variable count per sample), handled by _encode_visible_only's padding +
+    # src_key_padding_mask path so mask_after_encoder=True is preserved. A fully-anomalous window
+    # keeps exactly 1 visible patch (encoder needs >=1).
     # - True: Anomaly patches are masked first within fixed masking budget (masking_ratio).
     #   If anomaly patches exceed the budget, excess remain visible as encoder context.
     #   Masking count is always exactly round(num_patches * masking_ratio) per sample.
@@ -407,6 +423,26 @@ class Config:
     # Reproducibility
     random_seed: int = 42
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # ── Official MAE-mode override bundle (2026-06-22) ────────────────────────
+    # When official=True a SEPARATE code path applies a fixed bundle that
+    # OVERRIDES any conflicting config (see apply_official_overrides + the
+    # `getattr(config,'official',False)` guards in trainer/scoring/run_base).
+    # Default False ⇒ byte-identical to today. min_lr is the cosine-decay floor
+    # used only by the official per-iteration LR schedule (matches the legacy
+    # CosineAnnealingLR eta_min=0, so it is inert when official=False).
+    official: bool = False
+    min_lr: float = 0.0
+    # [official] Per-epoch checkpoint persistence (official mode only).
+    # official_keep_checkpoints: GLOBAL default. True = keep official_epochs/ (every
+    # epoch) + the run's best/last checkpoints (current behavior). False ('저장 안함')
+    # = SKIP official_epochs/ writes, still run eval + visualization normally, then
+    # DELETE best_model/best/latest checkpoints at the end (end state: only metrics,
+    # epoch_scores npz, and visualizations remain). official_ckpt_overrides: per-
+    # dataset override as 'key1:false,key2:true' — overrides the global for those
+    # dataset keys only (anything unlisted uses official_keep_checkpoints).
+    official_keep_checkpoints: bool = True
+    official_ckpt_overrides: str = ''
 
 
 def set_seed(seed: int) -> None:
@@ -419,3 +455,78 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
     torch.backends.cudnn.benchmark = True  # Auto-tune convolution algorithms for speed
+
+
+# =============================================================================
+# Official MAE-mode (2026-06-22)
+# =============================================================================
+# CANON_271 = the COMPLETE effective config of the canonical Exp 271
+# (`271canon_baseline`). It is the single source of truth for "when official=True,
+# every config not explicitly overridden defaults to 271". Derived verbatim from
+# exp271's queue config_override string + the Set C geometry (seq=500/p=10/np=50)
+# that 271 inherits from the preset. The official run path lays this down as the
+# BASE, lets the user's explicit per-experiment overrides win over it, then
+# apply_official_overrides() FORCES the official bundle on top. Keep in sync with
+# configs/queue_dedup_renumbered_v6.json exp271 if 271 ever changes.
+CANON_271 = {
+    'seq_length': 500, 'patch_size': 10, 'num_patches': 50,
+    'num_encoder_layers': 4, 'num_teacher_decoder_layers': 3,
+    'num_student_decoder_layers': 2, 'dim_feedforward': 2048,
+    'patchify_mode': 'linear', 'cnn_kernel_size': 3, 'd_model': 512, 'nhead': 8,
+    'mask_after_encoder': True, 'num_epochs': 500,
+    'teacher_only_warmup_epochs': 250, 'epoch_offset': True,
+    'anomaly_score_mode': 'adaptive', 'normalize_mode': 'minmax',
+    'minmax_range': '0_1', 'minmax_clamp_min': -4.0, 'minmax_clamp_max': 4.0,
+    'use_feature_matching': True, 'fm_loss_weight': 1.0, 'fm_distance_metric': 'l2',
+    'fm_adaptive_lambda': True, 'use_grl': True, 'grl_loss_weight': 0.2,
+    'grl_target_mode': 'window', 'grl_cls_lr_ratio': 0.1,
+    'grl_balanced_sampling': False, 'grl_use_focal': True, 'use_scad': False,
+    'use_output_discrepancy': True, 'dynamic_margin_k': 6, 'anomaly_loss_weight': 2.0,
+    'lambda_disc': 2.0, 'eval_disc_weight': -1.0, 'eval_fm_weight': -1.0,
+    'force_mask_anomaly': True, 'amp_dtype': 'bf16', 'batch_size': 1024,
+    'learning_rate': 0.001, 'sliding_window_test_stride': -1,
+}
+
+# The OFFICIAL bundle. apply_official_overrides FORCES the truly-fixed items
+# (epoch_offset off, train stride 1, early-stop off). num_epochs (default 30) and
+# teacher_only_warmup_epochs (default num_epochs//2) are OVERRIDABLE — they are set
+# as defaults in run_base's official overrides build BEFORE the user-override merge
+# (so a user's explicit num_epochs / teacher_only_warmup_epochs wins), and are NOT
+# forced here. The per-iteration LR warmup horizon w = teacher_only_warmup_epochs;
+# cosine decays over [w, num_epochs). Other official behaviors (per-iteration LR,
+# every-epoch save, eval_interval=1, causal score, thorough seeding) are read off
+# `config.official` directly in the trainer / run_base / scoring subsystems.
+def apply_official_overrides(config: 'Config') -> 'Config':
+    """Force the truly-fixed official items onto `config`. No-op (byte-identical)
+    when config.official is falsy. MUST be the LAST writer so these win over
+    preset / override-string / dataset_def / CANON_271. (num_epochs and
+    teacher_only_warmup_epochs are deliberately NOT forced here — they are
+    user-overridable defaults applied in run_base before the user merge.)"""
+    if not getattr(config, 'official', False):
+        return config
+    config.epoch_offset = False              # (1) no train epoch-offset
+    config.sliding_window_stride = 1         # (1) train stride = 1 (display/field; run_base also forces the local)
+    config.use_teacher_warmup_early_stop = False  # fixed-warmup mode ⇒ disable runtime shortening
+    return config
+
+
+def set_seed_official(seed: int) -> 'torch.Generator':
+    """Thorough, SINGLE-knob reproducible seeding for official mode WITHOUT the
+    determinism slowdown. Everything derives from `seed`, so changing this one
+    value changes every RNG stream. Keeps cudnn.benchmark=True and does NOT call
+    torch.use_deterministic_algorithms / cudnn.deterministic (speed preserved).
+    Returns a torch.Generator (seeded from `seed`) for the train DataLoader."""
+    set_seed(seed)  # random / numpy / torch / cuda(+all); cudnn flags unchanged (benchmark on)
+    os.environ['PYTHONHASHSEED'] = str(seed)  # best-effort (full effect needs launcher export)
+    g = torch.Generator()
+    g.manual_seed(seed)
+    return g
+
+
+def official_worker_init_fn(worker_id: int) -> None:
+    """Per-worker deterministic seeding derived from the main-process torch seed
+    (which set_seed_official set from the single master seed). Defensive: today
+    num_workers=0 so this is moot, but it makes any future worker use reproducible."""
+    base = (torch.initial_seed() + worker_id) % (2 ** 31)
+    np.random.seed(base)
+    random.seed(base)
