@@ -32,8 +32,12 @@ RESBASE = os.path.join(HERE, "results", "experiments")
 DL_MODELS = ['anomaly_transformer', 'catch', 'dagmm', 'dcdetector', 'gcn_lstm',
              'gdn', 'memto', 'mlp', 'mlpmixer', 'moderntcn', 'npsr', 'omnianomaly',
              'tfmae', 'timesnet', 'tranad', 'transformer', 'usad']
+# Weak-SSL (exp9). deepmil/wetas print per-epoch loss -> recoverable; treemil /
+# nrdetector / nrdetector_full do NOT print it -> stay null (kept at best-epoch).
+WEAK_MODELS = ['deepmil', 'wetas', 'treemil', 'nrdetector', 'nrdetector_full']
 NONDL = {'random', 'l2_norm', 'nn_distance', 'pca_error', 'sensor_range'}
-_MODELS_BY_LEN = sorted(DL_MODELS, key=len, reverse=True)   # mlpmixer before mlp
+# nrdetector_full must out-rank nrdetector in prefix match -> sort by length desc.
+_MODELS_BY_LEN = sorted(DL_MODELS + WEAK_MODELS, key=len, reverse=True)
 
 # experiment output dir -> queue logs that wrote into it (any order; merged by mtime)
 LOG_DIR = os.path.join(HERE, "..", "temp", "baseline_experiment_run")
@@ -47,6 +51,15 @@ LOG_MAP = {
     "10_20260615_230000_baseline_contaminated": [
         "chain_contaminated_20260615.log",
     ],
+    "9_20260606_175756_weak_ssl": [          # only deepmil/wetas have logged loss
+        "weak_ssl_orch.log",
+        "weak_ssl_50ep_orch.log",
+        "rerun_backed_up_orch.log",
+        "nrdetector_rerun_then_resume.log",
+        "chain_8_9_modelmajor.log",
+        "chain_8_9_resumed.log",
+        "chain_10_11_12_resumed_0613.log",
+    ],
 }
 
 _F = r"(-?(?:\d+\.?\d*(?:[eE][-+]?\d+)?|nan|inf|-inf))"
@@ -59,6 +72,7 @@ PAT_NPSR  = re.compile(rf"Epoch\s+(\d+):\s*M_pt={_F}\s+M_seq={_F}")            #
 PAT_RECL  = re.compile(rf"Epoch\s+(\d+):\s*rec_loss\s*=\s*{_F}")              # anomaly_transformer
 PAT_EPLOSS= re.compile(rf"Epoch\s+(\d+):\s*loss\s*=\s*{_F}")                  # catch/dcdetector/tfmae/timesnet/moderntcn/memto
 PAT_WETAS = re.compile(rf"Epoch\s*\[(\d+)/\d+\]\s*loss=\s*{_F}")              # wetas
+PAT_DEEPMIL = re.compile(rf"epoch=(\d+)/\d+\s+loss=\s*{_F}")                  # deepmil: [DeepMIL] epoch=N/T loss=X
 PAT_TRAIN = re.compile(rf"Training:\s*\[(\d+)/\d+\].*?Loss:\s*{_F}")          # gcn_lstm/gdn/omnianomaly/tranad/usad
 PAT_GEN   = re.compile(rf"(?<!model=)\[(\d+)/\d+\]\s*Loss:\s*{_F}")           # generic loop: mlp/mlpmixer/transformer
 
@@ -81,7 +95,7 @@ def match_loss(rest):
     if m:
         a, b = _flt(m.group(2)), _flt(m.group(3))
         return int(m.group(1)), (None if a is None or b is None else a + b)
-    for p in (PAT_RECL, PAT_EPLOSS, PAT_WETAS, PAT_TRAIN, PAT_GEN):
+    for p in (PAT_RECL, PAT_EPLOSS, PAT_WETAS, PAT_DEEPMIL, PAT_TRAIN, PAT_GEN):
         m = p.search(rest)
         if m:
             return int(m.group(1)), _flt(m.group(2))
