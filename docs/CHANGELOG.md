@@ -25,7 +25,7 @@ TEP type-gen 실험을 기존 MAE 파이프라인(`official=True`)으로 돌리�
 
 **중요(scale 검증)**: adaptive의 scale-match `disc×(recon.mean/disc.mean)/4`는 official의 `0.25·disc·s_t`와 **다르다**(SWaT 실측: 평균 0.53×, 점별 corr 0.85, `s_t`는 1.652 상수가 아니라 0~1.384 변동). 둘 다 0.25(=/4=w)는 같지만 "비율 맞추는 작업"(scale-match)이 TEST 평균비(전역 상수) vs train-seed 누적비(점별)로 갈림. 초기엔 official 런에도 adaptive scaled_disc를 그려 실제 점수의 disc 기여를 잘못 표현했던 것을 정정 — official 런은 이제 `official_score`/`official_score−recon`을 사용. AR-threshold는 quantile 기반이라 pred/트랙은 단조변환에 불변, plot/threshold 스케일만 정합.
 
-**색상/축**: test_event 선 색은 `anomaly_threshold.png`와 동일(anomaly score=black, recon=tab:blue, disc=tab:green). score·recon·disc는 anomaly score의 *가산 성분*(같은 단위)이라 3개 timeline의 **y축을 공통 스케일로 통일** — recon 지배·disc 작은 가산분이 직관적으로 드러남(disc 세부는 트랙으로 별도 표시).
+**색상/축**: test_event 선 색은 `anomaly_threshold.png`와 동일(anomaly score=black, recon=tab:blue, disc=tab:green). y축은 **panel별 독립(자동 스케일)** — 각 컴포넌트의 detail이 보이도록(y축 공통 통일도 시도했으나 disc가 과도하게 눌려 가독성이 떨어져 사용자 판단으로 미적용).
 
 **`anomaly_threshold.png`도 official scale로 정합**: official 런에서 panel1 = `official_score`, disc panel = `official_score − recon`(= 0.25·disc·s_t), FPR도 official 기준. det_ratio/panels/FPR 모두 `score_plot`(official) 사용. non-official은 기존 adaptive 그대로. (anomaly_threshold.png의 per-panel 독립 y축 레이아웃은 det-ratio 주석 때문에 유지 — test_event만 y축 통일.)
 

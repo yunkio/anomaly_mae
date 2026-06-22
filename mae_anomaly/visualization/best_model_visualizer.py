@@ -3311,15 +3311,6 @@ Margin:    {margin:+.6f}
             ], loc='upper right', ncol=3, fontsize=8, framealpha=0.9)
             ax_k.grid(alpha=0.2, axis='x')
 
-        # (3) shared y-axis across the score / recon / disc timelines — they are
-        # additive components of the anomaly score (same units), so a common scale
-        # makes their relative magnitude (recon dominant, disc small) intuitive.
-        _vals = np.concatenate([np.asarray(sv) for (_, sv, _) in series])
-        _lo, _hi = float(np.min(_vals)), float(np.max(_vals))
-        _pad = 0.05 * (_hi - _lo) + 1e-9
-        for _si in range(n):
-            all_axes[2 * _si].set_ylim(_lo - _pad, _hi + _pad)
-
         all_axes[-1].set_xlabel('Test point index')
         all_axes[0].set_xlim(0, m)
         fig.suptitle(f'Test Event Timeline (AR threshold) — best_epoch={best_epoch}, '
