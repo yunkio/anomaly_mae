@@ -85,7 +85,8 @@ from mae_anomaly.datasets import (
 from mae_anomaly.datasets.loaders import (SMD_MACHINE_NAMES, EXATHLON_APP_IDS,
                                           SMAP_CHANNEL_NAMES, MSL_CHANNEL_NAMES)
 from mae_anomaly.utils import make_config, free_gpu, mem_status
-from mae_anomaly.utils.experiment import make_numbered_experiment_dir, resolve_dynamic_d_model
+from mae_anomaly.utils.experiment import (make_numbered_experiment_dir, resolve_dynamic_d_model,
+                                          resolve_warmup_boundary, select_best_epoch)
 from scripts.ablation.run_ablation import compute_loss_statistics
 
 # Background process tracking
@@ -2125,6 +2126,11 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
                     best_excl22_em = None
                     best_excl22_teacher_em = None
                     excl22_epoch_metrics_list = []
+                    # [post-warmup-forced] excl22 best epoch (overrides timing['best_epoch']
+                    # below) may also only move to a POST-warmup epoch. Init already holds the
+                    # full-SWaT post-warmup best (from select_best_epoch above), so no post-warmup
+                    # excl22 eval ⇒ it stays post-warmup. Consistent with metric/checkpoint/viz.
+                    _warm_excl = resolve_warmup_boundary(config)
 
                     # Load copied epoch_metrics for disc_snr and D metrics (non-exclusion-dependent)
                     em_path = os.path.join(exp_dir, 'epoch_metrics.json')
@@ -2194,7 +2200,7 @@ def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
                             except Exception:
                                 continue
                             pak_f1 = em.get('pak_auc_f1', 0)
-                            if pak_f1 > best_excl22_pak_f1:
+                            if ep_num > _warm_excl and pak_f1 > best_excl22_pak_f1:
                                 best_excl22_pak_f1 = pak_f1
                                 best_excl22_epoch = ep_num
                                 # Defer best-epoch full-metric recompute until after scan
@@ -2957,6 +2963,11 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
     _official_train_infer = [None, None]  # [official] [train_infer_loader, dataset] built once, reused per eval epoch
     _best_epoch_metric_key = config.best_epoch_metric  # e.g. 'pak_auc_f1'
     _best_ckpt_score = [0.0]  # best score seen so far (mutable for nonlocal)
+    # [post-warmup-forced] best_checkpoint + reported best_epoch are chosen ONLY from
+    # post-warmup epochs (epoch > _warm_boundary). UNCONDITIONAL (not gated on official):
+    # during warmup the student/discrepancy is untrained so a pre-warmup best is
+    # misleading. Single source of truth = select_best_epoch / resolve_warmup_boundary.
+    _warm_boundary = resolve_warmup_boundary(config)
 
     # ---- Option A+C (2026-05-28): ProcessPoolExecutor for per-K eval work ----
     # Per-eval CPU cost was ~33s because per-K loops (21 K × 2 funcs +
@@ -2997,8 +3008,12 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
         e_t = cb_metrics.get('_eval_time', 0)
         ep = cb_metrics.get('epoch', 0)
         # Update best checkpoint if best_epoch_metric improved
+        # [post-warmup-forced] only post-warmup epochs (ep > _warm_boundary) may become
+        # best_checkpoint, so the saved best_model never lands on a pre-warmup epoch.
+        # Greedy running-max over post-warmup == full-list max ⇒ stays consistent with the
+        # final best_epoch selection (select_best_epoch) below.
         epoch_score = cb_metrics.get(_best_epoch_metric_key, 0)
-        is_best = epoch_score > _best_ckpt_score[0]
+        is_best = (ep > _warm_boundary) and (epoch_score > _best_ckpt_score[0])
         best_marker = ""
         if is_best:
             _best_ckpt_score[0] = epoch_score
@@ -3642,15 +3657,19 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
           f"(epoch_dashboard.png will be rendered by bg-worker after VUS sweep)")
 
     # ========== Find Best Epoch ==========
-    best_epoch = config.num_epochs
-    best_score = -1.0
-    best_prc = -1.0
-    for em in epoch_metrics_list:
-        score = em.get(_best_epoch_metric_key, 0)
-        if score > best_score:
-            best_score = score
-            best_epoch = em.get('epoch', config.num_epochs)
-            best_prc = em.get('prc_auc', 0)
+    # [post-warmup-forced] choose best_epoch ONLY among post-warmup epochs (epoch >
+    # _warm_boundary); falls back to all epochs if none. UNCONDITIONAL. Matches the
+    # greedy best_checkpoint guard above ⇒ the loaded best_checkpoint.pt and best_epoch
+    # reference the SAME post-warmup epoch (consistent weights + label + metric).
+    _best_em = select_best_epoch(epoch_metrics_list, _best_epoch_metric_key, _warm_boundary)
+    if _best_em is not None:
+        best_epoch = _best_em.get('epoch', config.num_epochs)
+        best_score = _best_em.get(_best_epoch_metric_key, 0)
+        best_prc = _best_em.get('prc_auc', 0)
+    else:
+        best_epoch = config.num_epochs
+        best_score = -1.0
+        best_prc = -1.0
 
     best_ckpt_path = os.path.join(checkpoints_dir, 'best_checkpoint.pt')
     if best_epoch != config.num_epochs and os.path.exists(best_ckpt_path):

@@ -166,3 +166,38 @@ def make_config(overrides: dict) -> Config:
         )
 
     return config
+
+
+# =============================================================================
+# Best-epoch selection — POST-WARMUP forced (single source of truth)
+# =============================================================================
+def resolve_warmup_boundary(config) -> int:
+    """The post-warmup region is `epoch > resolve_warmup_boundary(config)`.
+
+    Resolves `teacher_only_warmup_epochs`, mapping the -1 sentinel (auto) to
+    `num_epochs // 2`. Returns 0 when no warmup is configured, so the post-warmup
+    filter degrades to a no-op (every epoch > 0).
+    """
+    warm = int(getattr(config, 'teacher_only_warmup_epochs', -1) or -1)
+    if warm < 0:
+        warm = int(getattr(config, 'num_epochs', 0) or 0) // 2
+    return max(warm, 0)
+
+
+def select_best_epoch(epoch_records, metric_key, warm):
+    """UNCONDITIONALLY pick the best epoch record by `metric_key` from POST-warmup
+    epochs only (`epoch > warm`), falling back to all epochs if no post-warmup eval
+    exists. Returns the chosen record dict (or None for empty input).
+
+    Single source of truth for best-epoch selection across run_base (best_checkpoint
+    + reported metric) AND the visualizer: during teacher-only warmup the student /
+    output-discrepancy is untrained, so a pre-warmup "best" is misleading. The choice
+    is NOT gated on any config flag (e.g. `official`) — it is always post-warmup.
+
+    `warm`: pass `resolve_warmup_boundary(config)`. warm=0 ⇒ no restriction.
+    """
+    if not epoch_records:
+        return None
+    post = [e for e in epoch_records if int(e.get('epoch', 0)) > warm]
+    cands = post if post else list(epoch_records)
+    return max(cands, key=lambda e: e.get(metric_key, 0))

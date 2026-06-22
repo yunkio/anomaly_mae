@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-23: best-epoch 선택 POST-WARMUP 무조건 강제 (checkpoint + metric + viz 일원화)
+
+**문제**: 지금까지 post-warmup 강제는 **viz에만**, 그것도 `config.official` 게이트로만 적용됐다. best_checkpoint 저장(greedy)·최종 best_epoch·SWaT excl22 best는 **warmup 필터 없이** pak_auc_f1 전체 최대를 골라, student/discrepancy가 아직 안 배운 **pre-warmup epoch이 best_model·보고 메트릭으로 선택**될 수 있었다(예: WaDi_A1 metric-best=ep12 pre-warmup, viz=ep27 post-warmup으로 불일치).
+
+**수정 — 단일 진실원**: `mae_anomaly/utils/experiment.py`에 `resolve_warmup_boundary(config)`(teacher_only_warmup_epochs, -1→num_epochs//2) + `select_best_epoch(records, metric_key, warm)`(epoch>warm 중 최대, 없으면 전체 fallback, **config 플래그 비게이트=무조건**) 추가. 네 지점이 전부 이 헬퍼를 사용:
+- `scripts/run_base_experiments.py` **(A) greedy best_checkpoint**: `is_best = (ep > _warm_boundary) and (score > best)` — pre-warmup epoch은 best_checkpoint.pt가 되지 못함.
+- `scripts/run_base_experiments.py` **(B) 최종 best_epoch**: `select_best_epoch(...)` — greedy와 동일 epoch 보장 → 로드되는 가중치·라벨·메트릭 일관.
+- `scripts/run_base_experiments.py` **(excl22)**: SWaT excl22 best override도 `ep_num > _warm_excl` 가드(init이 이미 full-SWaT post-warmup best라 fallback 자동).
+- `mae_anomaly/visualization/best_model_visualizer.py` `_select_best_epoch_for_viz`: `config.official` 게이트 제거 → **무조건** post-warmup, 위 헬퍼 공유.
+
+**범위**: 새 run_base 프로세스부터 적용(실행 중인 freeze는 메모리 내 구코드라 영향 없음 — 의도된 "freezeenc 이후"). SMD/Exathlon 요약-집계 CLI(`run_base:4106/4210`)는 official 경로 아님·config 없음·display-only라 제외. warmup 없는 런(warm=0)은 no-op. 헬퍼 단위테스트 통과(WaDi_A1형 ep12 무시→ep27, fallback, auto-warm).
+
 ## 2026-06-23: official warmup score BUG FIX (force_recon_only) + TEP eval_interval/viz/bg-join 정리 + noisy-label 재정의(labeled %)
 
 **핵심 버그 수정 — `mae_anomaly/scoring.py`**: `compute_official_causal_score(..., force_recon_only=False)` 추가. teacher-only warmup(`is_prewarmup_epoch`) 동안 student discrepancy는 **아직 학습 안 된 noise**라 anomaly score에 들어가면 안 되는데(이미 `compute_adaptive_components`는 같은 게이트 적용), official causal score는 이를 그대로 섞어 **warmup 구간에서 `official_score < teacher_recon`**이 되는 문제가 있었다. `force_recon_only=True`면 score를 teacher reconstruction-only로 환원(= `teacher_recon_error`와 bit-identical). `scripts/run_base_experiments.py`의 두 호출 지점(per-epoch npz 저장 `is_prewarmup_epoch(config, ep)`, parallel eval `evaluator._force_recon_only`)에 wiring.
