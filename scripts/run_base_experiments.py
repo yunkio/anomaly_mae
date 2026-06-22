@@ -390,6 +390,31 @@ for _ch in MSL_CHANNEL_NAMES:
     })
 del _ch  # Clean up loop variable
 
+# TEP type-disjoint generalization datasets (frozen streams in scripts/TEP/data/).
+# Kept OUT of DATASETS so the default 5-base sweep is untouched — reachable only via
+# explicit `--dataset TEP_typegen_<fold>`. train_stride is set to 1 (official forces
+# stride=1 anyway). ffonly = B0 clean reference; the 4 fault folds share one frozen test.
+TEP_TYPEGEN_DATASETS = [
+    {'key': f'TEP_typegen_{_f}', 'loader': f'tep_typegen_{_f}',
+     'train_stride': 1, 'normal50': False, 'results_subdir': f'TEP/typegen_{_f}'}
+    for _f in ('ffonly', 'fstep', 'frand', 'fds', 'funk')
+]
+# Noisy-label (partial-label) variants: u25 = 25% of seen contamination UNLABELED
+# (75% labeled), u50 = 50% unlabeled. Additional experiment between A (0% unlabeled)
+# and B (100% unlabeled). Full LASAD config — labels used on the labeled portion.
+TEP_TYPEGEN_DATASETS += [
+    {'key': f'TEP_typegen_{_f}_{_t}', 'loader': f'tep_typegen_{_f}_{_t}',
+     'train_stride': 1, 'normal50': False, 'results_subdir': f'TEP/typegen_{_f}_{_t}'}
+    for _f in ('fstep', 'frand', 'fds', 'funk') for _t in ('u25', 'u50')
+]
+# LOFO (leave-one-family-out) additional protocol: 3 seen families, 1 held out as unseen.
+# _<ho> = held-out family excluded from train; _<ho>_cont = held-out also in train, unlabeled.
+TEP_TYPEGEN_DATASETS += [
+    {'key': f'TEP_typegen_lofo_{_h}{_c}', 'loader': f'tep_typegen_lofo_{_h}{_c}',
+     'train_stride': 1, 'normal50': False, 'results_subdir': f'TEP/typegen_lofo_{_h}{_c}'}
+    for _h in ('step', 'rand', 'ds', 'unk') for _c in ('', '_cont')
+]
+
 
 # =============================================================================
 # Normal50 Noise Application
@@ -2661,6 +2686,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
             minmax_clamp_min=getattr(config, 'minmax_clamp_min', None),
             minmax_clamp_max=getattr(config, 'minmax_clamp_max', None),
             entity_segments=entity_segments,
+            blind_train_labels=getattr(config, 'blind_train_labels', False),
         )
     # drop_last=True (when dataset is large enough): keeps batch shape constant across steps,
     # which stabilizes cuDNN.benchmark heuristic search and removes a small last-batch overhead.
@@ -4078,7 +4104,7 @@ def main():
 
     config_preset = CONFIG_PRESETS[args.set]
 
-    all_datasets = DATASETS + SMD_DATASETS + EXATHLON_DATASETS + SMAP_MSL_SIMPLE_DATASETS
+    all_datasets = DATASETS + SMD_DATASETS + EXATHLON_DATASETS + SMAP_MSL_SIMPLE_DATASETS + TEP_TYPEGEN_DATASETS
 
     if args.list:
         print(f"\nSet {args.set}: {config_preset['description']}")

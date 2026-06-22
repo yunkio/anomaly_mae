@@ -856,6 +856,302 @@ def load_tep(
     return all_signals, all_labels, anomaly_regions, feature_cols, train_ratio, data_info
 
 
+def load_tep_typegen(fold: str, unlabeled_frac: float = 0.0):
+    """Load a frozen TEP type-disjoint generalization stream (experiment #12 design).
+
+    Reads the pre-built, frozen NPZ streams in ``scripts/TEP/data/`` (built by
+    ``scripts/TEP/build_tep_data.py``) and lays them out as the standard
+    ``[train | test]`` 6-tuple so the unchanged MAE SlidingWindowDataset machinery
+    ingests them (train-only normalization fitted on the train|test seam, minmax
+    like every other dataset).
+
+    fold:
+      'ffonly'                      -> B0 clean fault-free reference (240 FF runs, 0% anomaly)
+      'fstep'/'frand'/'fds'/'funk'  -> contaminated train (240 FF + 60 seen-family
+                                       faulty runs, ~16.7% anomaly). The TEST stream is
+                                       the SAME shared frozen test for every fold.
+
+    unlabeled_frac (noisy-label / partial-label experiment): fraction of the seen-family
+      faulty TRAIN runs whose labels are ZEROED (kept in the data as UNLABELED
+      contamination). 0.0 = full labels (condition A). 1.0-equivalent = condition B
+      (use blind_train_labels instead). Selection follows the pre-registered #12 rule
+      "label the first k runs of each fault": per seen fault with n runs, the LAST
+      round(n*frac) runs are unlabeled, the rest keep their onset labels. This is a
+      DATA-LEVEL operation (only point_labels change; signals/test untouched), so the
+      standard LASAD pipeline uses the labeled portion and is blind to the rest — no
+      model flags involved.
+
+    Returns the canonical 6-tuple:
+        signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+
+    The frozen npz ``y`` already carries the corrected fault onset (each faulty run
+    is normal for its first 160 samples, anomalous for the last 800 = sample 161+,
+    1-indexed); it is consumed as-is. ``anomaly_regions`` are derived from contiguous
+    test ``y==1`` runs, tagged with the fault id for per-fault partition metrics.
+    """
+    if not (0.0 <= unlabeled_frac < 1.0):
+        raise ValueError(f"unlabeled_frac must be in [0.0, 1.0); for fully unlabeled use "
+                         f"blind_train_labels (condition B). Got {unlabeled_frac}.")
+    _FOLD_FILES = {
+        'ffonly': 'train_ffonly.npz',
+        'fstep':  'train_f_step.npz',
+        'frand':  'train_f_rand.npz',
+        'fds':    'train_f_ds.npz',
+        'funk':   'train_f_unk.npz',
+    }
+    if fold not in _FOLD_FILES:
+        raise ValueError(f"Unknown TEP typegen fold: {fold}. Choices: {sorted(_FOLD_FILES)}")
+
+    data_dir = os.path.join(PROJECT_ROOT, 'scripts', 'TEP', 'data')
+    train_path = os.path.join(data_dir, _FOLD_FILES[fold])
+    test_path = os.path.join(data_dir, 'test_stream.npz')
+    for _p in (train_path, test_path):
+        if not os.path.exists(_p):
+            raise FileNotFoundError(
+                f"TEP typegen stream missing: {_p}. Build via scripts/TEP/build_tep_data.py")
+
+    print(f"\n{'='*60}\nLoading TEP type-gen fold='{fold}'  "
+          f"(train={_FOLD_FILES[fold]}, test=test_stream.npz)\n{'='*60}")
+
+    _tr = np.load(train_path)
+    _te = np.load(test_path)
+    train_X = _tr['X'].astype(np.float32)
+    train_y = _tr['y'].astype(np.int64)
+    test_X = _te['X'].astype(np.float32)
+    test_y = _te['y'].astype(np.int64)
+    test_fault = _te['fault_id'] if 'fault_id' in _te.files else None
+    train_rb = [int(b) for b in _tr['run_boundaries']] if 'run_boundaries' in _tr.files else []
+    test_rb = [int(b) for b in _te['run_boundaries']] if 'run_boundaries' in _te.files else []
+
+    train_len = len(train_X)
+    signals = np.concatenate([train_X, test_X], axis=0).astype(np.float32)
+    point_labels = np.concatenate([train_y, test_y], axis=0).astype(np.int64)
+    n_total = len(signals)
+    test_len = len(test_X)
+    train_ratio = train_len / n_total
+
+    # [noisy-label / partial-label] Zero the labels of a fraction of the seen-family
+    # faulty TRAIN runs (kept as UNLABELED contamination). Per-fault, last round(n*frac)
+    # runs unlabeled (#12 rule: label the first k of each fault). Test untouched.
+    _n_unlab_runs = 0
+    _n_faulty_runs = 0
+    if unlabeled_frac > 0.0:
+        _tr_fault = _tr['fault_id'] if 'fault_id' in _tr.files else None
+        if _tr_fault is None:
+            raise ValueError(f"unlabeled_frac>0 needs train fault_id (fold={fold}).")
+        _starts = [0] + list(train_rb)
+        _ends = list(train_rb) + [train_len]
+        _by_fault = {}
+        for _s, _e in zip(_starts, _ends):
+            _f = int(_tr_fault[_s:_e].max())
+            if _f > 0:
+                _by_fault.setdefault(_f, []).append((_s, _e))
+        for _f, _runs in _by_fault.items():
+            _runs.sort()
+            _n_faulty_runs += len(_runs)
+            _k = int(round(len(_runs) * unlabeled_frac))
+            for (_s, _e) in _runs[len(_runs) - _k:]:   # last k runs → unlabeled
+                point_labels[_s:_e] = 0
+                _n_unlab_runs += 1
+        print(f"  [noisy-label] unlabeled_frac={unlabeled_frac}: zeroed {_n_unlab_runs}/"
+              f"{_n_faulty_runs} faulty train runs (kept as unlabeled contamination)")
+
+    # Combined run boundaries: train-internal + the train|test seam + test-internal (+train_len offset).
+    _rb = set(int(b) for b in train_rb)
+    _rb.add(train_len)
+    _rb.update(train_len + int(b) for b in test_rb)
+    run_boundaries = sorted(b for b in _rb if 0 < b < n_total)
+
+    # Anomaly regions = contiguous y==1 runs in the TEST portion (offset by train_len),
+    # anomaly_type = fault id at the region start (per-fault partition metrics).
+    anomaly_regions = []
+    _i = 0
+    while _i < test_len:
+        if test_y[_i] == 1:
+            _j = _i
+            while _j < test_len and test_y[_j] == 1:
+                _j += 1
+            _ftype = int(test_fault[_i]) if test_fault is not None else 1
+            anomaly_regions.append(AnomalyRegion(
+                start=int(train_len + _i), end=int(train_len + _j), anomaly_type=_ftype))
+            _i = _j
+        else:
+            _i += 1
+
+    # Feature names: from manifest.json if it matches the feature count, else generic.
+    feature_names = None
+    _man = os.path.join(data_dir, 'manifest.json')
+    if os.path.exists(_man):
+        try:
+            import json as _json
+            with open(_man) as _f:
+                feature_names = _json.load(_f).get('feature_cols')
+        except Exception:
+            feature_names = None
+    if not feature_names or len(feature_names) != signals.shape[1]:
+        feature_names = [f'f{_k}' for _k in range(signals.shape[1])]
+
+    _seen = _tr['fault_id'].tolist() if 'fault_id' in _tr.files else []
+    _seen_set = sorted(set(int(f) for f in _seen if int(f) > 0))
+    data_info = {
+        'dataset_type': f'tep_typegen_{fold}',
+        'fold': fold,
+        'n_total': n_total,
+        'n_features': int(signals.shape[1]),
+        'train_len': train_len,
+        'test_len': test_len,
+        'train_ratio': train_ratio,
+        # LABELED anomaly ratio the model actually sees (reflects partial unlabeling).
+        'train_attack_ratio': float(np.mean(point_labels[:train_len])) if train_len else 0.0,
+        'test_attack_ratio': float(np.mean(test_y)) if test_len else 0.0,
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'run_boundaries': run_boundaries,
+        'seen_fault_set': _seen_set,
+        'fault_onset_sample': 161,
+        'unlabeled_frac': unlabeled_frac,
+        'n_unlabeled_runs': _n_unlab_runs,
+        'n_faulty_runs': _n_faulty_runs,
+    }
+    print(f"  signals={signals.shape}  train={train_len:,} test={test_len:,}  "
+          f"train_ratio={train_ratio:.4f}  train_anom={data_info['train_attack_ratio']:.2%}  "
+          f"test_anom={data_info['test_attack_ratio']:.2%}  regions={len(anomaly_regions)}  "
+          f"rb={len(run_boundaries)}  seen_faults={_seen_set}")
+    return signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+
+
+def load_tep_typegen_lofo(held_out: str, contaminate_heldout: bool = False):
+    """TEP Leave-One-Family-Out (LOFO) generalization — ADDITIONAL protocol.
+
+    Opposite ratio to the main type-gen folds: here THREE fault families are SEEN in
+    train and ONE family is HELD OUT as the unseen test target. Tests "labels on most
+    fault types -> clean normal manifold -> detect a genuinely NOVEL held-out type".
+
+    Assembled from the existing frozen per-family streams (NO re-simulation): the shared
+    240 FaultFree runs + the full 60 faulty runs of each of the 3 SEEN families
+    (180 faulty total; labeled anomaly ~35.7% of train points — higher than the main
+    16.67% because 3 families are present). The held-out family appears ONLY in the
+    shared test_stream.
+
+    held_out: 'step' | 'rand' | 'ds' | 'unk' (the family removed from train = unseen target).
+    contaminate_heldout: if True, the held-out family's faulty runs are ALSO added to
+      train but UNLABELED (y=0) — tests detection of an unlabeled-but-encountered novel
+      type. Default False = held-out fully excluded from train (pure unseen).
+
+    Conditions reuse the main mechanism: LOFO-A = run as-is (3 seen families labeled);
+    LOFO-B = + blind_train_labels=True (zeros ALL train labels). The held-out family's
+    per-mode pak_auc_f1 (S/U split via tep_common) is the metric of interest.
+
+    Returns the canonical 6-tuple.
+    """
+    _FAM_FILE = {'step': 'train_f_step.npz', 'rand': 'train_f_rand.npz',
+                 'ds': 'train_f_ds.npz', 'unk': 'train_f_unk.npz'}
+    _FAM_FAULTS = {'step': [1, 2, 4, 5, 6, 7], 'rand': [8, 10, 11, 12],
+                   'ds': [13, 14], 'unk': [16, 17, 18, 19, 20]}
+    if held_out not in _FAM_FILE:
+        raise ValueError(f"Unknown held_out family: {held_out}. Choices: {sorted(_FAM_FILE)}")
+
+    data_dir = os.path.join(PROJECT_ROOT, 'scripts', 'TEP', 'data')
+    _RUN_LEN, _N_FF = 960, 240
+    _FF_N = _N_FF * _RUN_LEN  # 230400 = first 240 FF runs in every per-family stream
+
+    seen_fams = [f for f in ('step', 'rand', 'ds', 'unk') if f != held_out]
+    print(f"\n{'='*60}\nLoading TEP LOFO held_out='{held_out}' "
+          f"(seen={seen_fams}, contaminate_heldout={contaminate_heldout})\n{'='*60}")
+
+    # Shared 240 FF runs (take from any per-family stream; verify all-normal).
+    _ff = np.load(os.path.join(data_dir, _FAM_FILE['step']))
+    ff_X = _ff['X'][:_FF_N].astype(np.float32)
+    ff_y = _ff['y'][:_FF_N].astype(np.int64)
+    ff_fid = _ff['fault_id'][:_FF_N]
+    assert int(ff_y.sum()) == 0 and int(np.asarray(ff_fid).max()) == 0, "FF region not all-normal"
+
+    parts_X, parts_y, parts_fid = [ff_X], [ff_y], [np.asarray(ff_fid)]
+    for _fam in seen_fams:                                   # 3 SEEN families: full 60 faulty, LABELED
+        _s = np.load(os.path.join(data_dir, _FAM_FILE[_fam]))
+        parts_X.append(_s['X'][_FF_N:].astype(np.float32))
+        parts_y.append(_s['y'][_FF_N:].astype(np.int64))
+        parts_fid.append(np.asarray(_s['fault_id'][_FF_N:]))
+    if contaminate_heldout:                                  # held-out faulty in train but UNLABELED
+        _s = np.load(os.path.join(data_dir, _FAM_FILE[held_out]))
+        parts_X.append(_s['X'][_FF_N:].astype(np.float32))
+        parts_y.append(np.zeros(_s['X'][_FF_N:].shape[0], dtype=np.int64))
+        parts_fid.append(np.asarray(_s['fault_id'][_FF_N:]))
+
+    train_X = np.concatenate(parts_X, axis=0).astype(np.float32)
+    train_y = np.concatenate(parts_y, axis=0).astype(np.int64)
+    train_len = len(train_X)
+
+    _te = np.load(os.path.join(data_dir, 'test_stream.npz'))
+    test_X = _te['X'].astype(np.float32)
+    test_y = _te['y'].astype(np.int64)
+    test_fault = _te['fault_id'] if 'fault_id' in _te.files else None
+    test_rb = [int(b) for b in _te['run_boundaries']] if 'run_boundaries' in _te.files else []
+    test_len = len(test_X)
+
+    signals = np.concatenate([train_X, test_X], axis=0).astype(np.float32)
+    point_labels = np.concatenate([train_y, test_y], axis=0).astype(np.int64)
+    n_total = len(signals)
+    train_ratio = train_len / n_total
+
+    # run boundaries: train every 960 + seam + test-internal (offset).
+    _rb = set(range(_RUN_LEN, train_len, _RUN_LEN))
+    _rb.add(train_len)
+    _rb.update(train_len + int(b) for b in test_rb)
+    run_boundaries = sorted(b for b in _rb if 0 < b < n_total)
+
+    # Anomaly regions = contiguous test y==1 runs (offset by train_len), tagged by fault id.
+    anomaly_regions = []
+    _i = 0
+    while _i < test_len:
+        if test_y[_i] == 1:
+            _j = _i
+            while _j < test_len and test_y[_j] == 1:
+                _j += 1
+            _ft = int(test_fault[_i]) if test_fault is not None else 1
+            anomaly_regions.append(AnomalyRegion(
+                start=int(train_len + _i), end=int(train_len + _j), anomaly_type=_ft))
+            _i = _j
+        else:
+            _i += 1
+
+    feature_names = None
+    _man = os.path.join(data_dir, 'manifest.json')
+    if os.path.exists(_man):
+        try:
+            import json as _json
+            with open(_man) as _f:
+                feature_names = _json.load(_f).get('feature_cols')
+        except Exception:
+            feature_names = None
+    if not feature_names or len(feature_names) != signals.shape[1]:
+        feature_names = [f'f{_k}' for _k in range(signals.shape[1])]
+
+    _seen_set = sorted(f for _fam in seen_fams for f in _FAM_FAULTS[_fam])
+    data_info = {
+        'dataset_type': f'tep_typegen_lofo_{held_out}' + ('_cont' if contaminate_heldout else ''),
+        'protocol': 'lofo',
+        'held_out_family': held_out,
+        'seen_families': seen_fams,
+        'contaminate_heldout': contaminate_heldout,
+        'n_total': n_total,
+        'n_features': int(signals.shape[1]),
+        'train_len': train_len,
+        'test_len': test_len,
+        'train_ratio': train_ratio,
+        'train_attack_ratio': float(np.mean(point_labels[:train_len])) if train_len else 0.0,
+        'test_attack_ratio': float(np.mean(test_y)) if test_len else 0.0,
+        'n_anomaly_regions_total': len(anomaly_regions),
+        'run_boundaries': run_boundaries,
+        'seen_fault_set': _seen_set,                 # 3 families' faults (SEEN)
+        'heldout_fault_set': _FAM_FAULTS[held_out],  # unseen target faults
+        'fault_onset_sample': 161,
+    }
+    print(f"  signals={signals.shape}  train={train_len:,} ({train_len//_RUN_LEN} runs) test={test_len:,}  "
+          f"train_ratio={train_ratio:.4f}  train_anom={data_info['train_attack_ratio']:.2%}  "
+          f"seen_faults={_seen_set}  heldout={_FAM_FAULTS[held_out]}  regions={len(anomaly_regions)}")
+    return signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
+
+
 # =============================================================================
 # SMD (Server Machine Dataset) Loader
 # =============================================================================
@@ -2719,6 +3015,29 @@ DATASET_LOADERS = {
 for _fn in range(1, 21):
     DATASET_LOADERS[f'tep_fault{_fn}'] = (lambda fn=_fn: load_tep(fault_types=[fn]))
 del _fn  # Clean up loop variable
+# TEP type-disjoint generalization folds (frozen streams in scripts/TEP/data/).
+# ffonly = B0 clean reference; fstep/frand/fds/funk = contaminated train folds
+# (all share the one frozen test_stream). [train|test] 6-tuple, minmax norm.
+for _fold in ('ffonly', 'fstep', 'frand', 'fds', 'funk'):
+    DATASET_LOADERS[f'tep_typegen_{_fold}'] = (lambda fold=_fold: load_tep_typegen(fold))
+del _fold  # Clean up loop variable
+# Noisy-label / partial-label variants of the 4 contaminated folds: a fraction of the
+# seen-family faulty train runs is left UNLABELED (kept as contamination). u25 = 25%
+# unlabeled (75% labeled), u50 = 50% unlabeled. ffonly has no faulty runs → no variant.
+for _fold in ('fstep', 'frand', 'fds', 'funk'):
+    for _uf, _tag in ((0.25, 'u25'), (0.50, 'u50')):
+        DATASET_LOADERS[f'tep_typegen_{_fold}_{_tag}'] = (
+            lambda fold=_fold, uf=_uf: load_tep_typegen(fold, unlabeled_frac=uf))
+del _fold, _uf, _tag  # Clean up loop variables
+# Leave-One-Family-Out (LOFO) additional protocol: 3 families seen, 1 held out as unseen.
+# tep_typegen_lofo_<heldout> = held-out family EXCLUDED from train; _cont = held-out also
+# in train but UNLABELED. held_out in {step,rand,ds,unk}.
+for _ho in ('step', 'rand', 'ds', 'unk'):
+    DATASET_LOADERS[f'tep_typegen_lofo_{_ho}'] = (
+        lambda ho=_ho: load_tep_typegen_lofo(ho, contaminate_heldout=False))
+    DATASET_LOADERS[f'tep_typegen_lofo_{_ho}_cont'] = (
+        lambda ho=_ho: load_tep_typegen_lofo(ho, contaminate_heldout=True))
+del _ho  # Clean up loop variable
 # Add per-machine SMD loaders dynamically (smd_machine-1-1 through smd_machine-3-11)
 for _mn in SMD_MACHINE_NAMES:
     DATASET_LOADERS[f'smd_{_mn}'] = (lambda mn=_mn: load_smd(machines=[mn]))

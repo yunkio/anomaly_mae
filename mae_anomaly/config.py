@@ -419,6 +419,11 @@ class Config:
     #   If anomaly patches exceed the budget, excess remain visible as encoder context.
     #   Masking count is always exactly round(num_patches * masking_ratio) per sample.
     # - False: Random masking only (no anomaly-aware prioritization)
+    blind_train_labels: bool = False  # [label-blind control] Zero ALL TRAIN-split point
+    # labels at the dataset boundary so every downstream consumer (force_mask_anomaly,
+    # GRL classifier, anomaly_loss, dynamic-margin normal-selection) sees a label-free
+    # train stream. Test labels + anomaly_regions (eval) are UNTOUCHED. Used for the TEP
+    # type-gen condition B (matched label-blind control). Default False = unchanged.
 
     # Reproducibility
     random_seed: int = 42

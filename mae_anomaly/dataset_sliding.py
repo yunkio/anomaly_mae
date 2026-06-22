@@ -1116,6 +1116,7 @@ class SlidingWindowDataset(Dataset):
         minmax_clamp_min: Optional[float] = None,  # test-only clamp lower (used when minmax_range='neg1_1')
         minmax_clamp_max: Optional[float] = None,  # test-only clamp upper (used when minmax_range='neg1_1')
         entity_segments: Optional[List[Tuple[int, int]]] = None,  # per-entity (train_len,test_len) for concat multi-entity datasets → per-entity normalization (else whole-array)
+        blind_train_labels: bool = False,  # zero TRAIN-split point labels (label-blind control); no-op on test
     ):
         self.window_size = window_size
         self.mask_last_n = mask_last_n
@@ -1174,6 +1175,11 @@ class SlidingWindowDataset(Dataset):
         if split == 'train':
             self.signals = signals[:train_end]
             self.point_labels = point_labels[:train_end]
+            # [label-blind control] Single root-cause block: zero the TRAIN labels so every
+            # downstream consumer (force_mask_anomaly, GRL, anomaly_loss, dynamic margin) is
+            # label-free. Test split / anomaly_regions (eval) are never touched.
+            if blind_train_labels:
+                self.point_labels = np.zeros_like(self.point_labels)
             offset = 0
         else:  # test
             self.signals = signals[train_end:]

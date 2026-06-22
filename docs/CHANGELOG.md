@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-22: TEP type-disjoint generalization — MAE 실험 (조건=데이터/라벨 체제) + noisy-label·LOFO 추가실험
+
+TEP type-gen 실험을 기존 MAE 파이프라인(`official=True`)으로 돌리기 위한 loader/조건 구현. **조건은 model flag가 아니라 데이터/라벨 체제로 정의** (A=contaminated+라벨, B=contaminated+`blind_train_labels=True`, B0=clean ffonly). 라벨0이면 GRL이 `loss.py:310-323`(`_pos_count==0`)에서 자동 skip → `use_grl=False` 같은 flag 불필요(자동 inert).
+
+**추가 (additive, default-off)**:
+- `mae_anomaly/datasets/loaders.py`: `load_tep_typegen(fold, unlabeled_frac=0.0)` (frozen NPZ → `[train|test]` 6-tuple; noisy-label = per-fault 뒤쪽 일부 무라벨) + `load_tep_typegen_lofo(held_out, contaminate_heldout)` (3 seen / 1 held-out, 기존 NPZ 조립). DATASET_LOADERS 키 21개(base 5 + noisy 8 `_u25/_u50` + LOFO 8 `_lofo_<ho>[_cont]`).
+- `mae_anomaly/config.py`: `blind_train_labels: bool=False` 필드.
+- `mae_anomaly/dataset_sliding.py`: `SlidingWindowDataset(..., blind_train_labels=False)` — train split point_labels zero(단일 root-cause; test 무손상).
+- `scripts/run_base_experiments.py`: `TEP_TYPEGEN_DATASETS`(DATASETS엔 미포함 → `--dataset`로만) + `all_datasets`에 추가 + train_dataset에 `blind_train_labels` 전달.
+- `docs/TEP_MAE.md` 신규(실행 가이드), Notion "TEP Type-Disjoint Generalization (Table D.1)" 페이지.
+
+**기본 계획** = Phase 1(B0 pilot ep30) + Phase 2(A/B/B0/D ep10, 9 runs, D=A에서 파생). **추가실험(별도)** = noisy-label(u25/u50) + LOFO(±cont). weight 미저장, minmax. **검증**: py_compile OK + CPU 스모크(onset 161, FF/test 무손상, blind/noisy/LOFO 라벨·shape, official 모델 forward finite). ⚠️ `scripts/TEP/data/*.npz`는 gitignore(`*.npz`) → 타 머신은 `build_tep_data.py` 재생성 필요.
+
 ## 2026-06-22: baseline epoch_metrics.json — per-epoch `train_loss` 기록
 
 각 baseline의 `epoch_metrics.json` 각 epoch 엔트리에 **평균 train loss(`train_loss`)**를 기록하도록 추가. 기존엔 모든 DL/SOTA wrapper가 epoch마다 loss를 계산해 `self.train_loss_history`에 적재하고 **stdout으로만 출력**했을 뿐, 결과 JSON엔 저장되지 않아 실행 후 소실됐다(8·10번 등 과거 전 실험 0/전체).
@@ -10,7 +23,7 @@
 
 **무영향/안전**: 순수 additive(새 키 1개), 학습/스코어/best-epoch(`pak_auc_f1`) 선정 numeric 불변. py_compile OK + 헬퍼 단위테스트(scalar/npsr튜플/누락/범위초과/nan) 통과. 원본 `comparison/.trash/260622/baseline_common.py.bak` 백업.
 
-**과거 실험 backfill** — `comparison/backfill_train_loss.py`(신규)로 8번·10번의 기존 `epoch_metrics.json`에 동일 형태로 `train_loss` 주입(과거엔 stdout에만 출력돼 소실됐던 값을 캡처 로그에서 복구). 결과: **8번 627 DL run(12,175/12,360 엔트리 non-null) + 10번 456 DL run(10,470/10,655) 전수 채움**, 비-DL은 `null`. 핵심: **8번의 SMD/MSL/SMAP는 06-13+ 후속 run(`chain_10_11_12_resumed_0613.log`·`watcher_10_11.log`)이 8번 출력 디렉토리에 써넣은 것** — 해당 로그에서 복구(SMD 셀당 정확히 1회 기록=재실행 없음 확인). 귀속 정확성: 큐 job별 `[tag] Experiment: <DS>/<VAR>` 라인으로 결과경로 직접 매핑(태그는 `smd_1-2` 단축형이라 토큰 추측 불가→Experiment 라인 사용), baseline 17모델 필터로 exp9 분리, 로그 mtime 시간순 latest-wins. 포맷 7종(generic `Loss:`/`Epoch N: loss=`/memto 2-phase/`rec_loss`/dagmm `L1+L2`/npsr `M_pt+M_seq`/wetas) 커버. 값 검증: dagmm(0.051674+0.177649=0.2293)·npsr(0.074485+0.218612=0.2931)·anomaly_transformer(rec_loss 0.0426)·tranad-SMD(watcher 로그 0.055134) raw와 소수점까지 일치. 멱등(재실행 동일)·atomic write. 사전 전체 스냅샷 `comparison/.trash/260622/epoch_metrics_pre_trainloss_*.tgz`(1,455 files). **미복구 2건**: 8번 SMAP/{P-1,G-7}/dcdetector는 원본 epoch_metrics.json 공백 손상(기존 문제)이라 주입 불가.
+**과거 실험 backfill** — `comparison/backfill_train_loss.py`(신규)로 8번·10번(+9번 weak deepmil/wetas)의 기존 `epoch_metrics.json`에 동일 형태로 `train_loss` 주입(과거엔 stdout에만 출력돼 소실됐던 값을 캡처 로그에서 복구). 결과: **8번 627 DL run(12,175/12,360 엔트리 non-null) + 10번 456 DL run(10,470/10,655) 전수 채움**, 비-DL은 `null`. 핵심: **8번의 SMD/MSL/SMAP는 06-13+ 후속 run(`chain_10_11_12_resumed_0613.log`·`watcher_10_11.log`)이 8번 출력 디렉토리에 써넣은 것** — 해당 로그에서 복구(SMD 셀당 정확히 1회 기록=재실행 없음 확인). 귀속 정확성: 큐 job별 `[tag] Experiment: <DS>/<VAR>` 라인으로 결과경로 직접 매핑(태그는 `smd_1-2` 단축형이라 토큰 추측 불가→Experiment 라인 사용), baseline 17모델 필터로 exp9 분리, 로그 mtime 시간순 latest-wins. 포맷 7종(generic `Loss:`/`Epoch N: loss=`/memto 2-phase/`rec_loss`/dagmm `L1+L2`/npsr `M_pt+M_seq`/wetas) 커버. 값 검증: dagmm(0.051674+0.177649=0.2293)·npsr(0.074485+0.218612=0.2931)·anomaly_transformer(rec_loss 0.0426)·tranad-SMD(watcher 로그 0.055134) raw와 소수점까지 일치. 멱등(재실행 동일)·atomic write. 사전 전체 스냅샷 `comparison/.trash/260622/epoch_metrics_pre_trainloss_*.tgz`(1,455 files). **미복구 2건**: 8번 SMAP/{P-1,G-7}/dcdetector는 원본 epoch_metrics.json 공백 손상(기존 문제)이라 주입 불가.
 
 ## 2026-06-22: baseline metadata.json — 실제 사용 파라미터 자동 기록 + 8/9/10 fact-only backfill
 
