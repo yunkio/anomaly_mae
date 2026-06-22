@@ -245,6 +245,11 @@ seen 3 family = S, held-out = U(이 protocol의 관심 U).
 ---
 
 ## 5. 평가/해석 (#12 설계 정합)
+- **VUS 제외 (2026-06-23 사용자 지시, 영구)**: TEP 최종 분석에서 **VUS 계열(`vus_pr`/`vus_roc`)은 무시**한다. headline은 `pak_auc_f1` 그대로이고 PA%K/PRC/F1/Affiliation/R-F1는 모두 유지된다. 구현 메커니즘은 **`MAE_SKIP_VUS` 환경변수**다:
+  - **자동 (TEP)**: `run_base_experiments.py`가 `key.startswith('TEP_typegen')`이면 `os.environ['MAE_SKIP_VUS']='1'`을 **자동 설정**(run_base:2763)하고, 이 env는 spawn되는 bg eval/viz/pool worker에 상속된다. 효과 세 곳 — ① `evaluator.compute_full_metric_set`가 `skip_vus=(lite or MAE_SKIP_VUS=='1')`로 **VUS만** 건너뜀, ② bg-worker 최종 eval이 중복 재계산 대신 `epoch_metrics[best]` read 경로 사용, ③ 사후 `_run_vus_sweep_on_saved_npz`도 skip → `vus_*`는 0/공백으로 남는다. per-epoch eval은 원래도 `lite=True`라 VUS를 계산하지 않는다. non-TEP은 env 미설정 → VUS를 기존대로 계산(default byte-identical).
+  - **VUS 끄는 법 (임의 런)**: 실행 전 환경변수 `MAE_SKIP_VUS=1`을 주면 어떤 데이터셋이든 위와 동일하게 VUS가 꺼진다 — 예: `MAE_SKIP_VUS=1 python scripts/run_base_experiments.py --dataset <KEY>`. (TEP_typegen* 키는 run_base가 자동으로 set하므로 따로 지정할 필요 없다.)
+  - **VUS 다시 켜는 법**: `MAE_SKIP_VUS`를 unset(또는 `0`)하면 된다. 단 TEP_typegen* 키는 run_base가 강제로 `1`을 set하므로, TEP에서 VUS를 켜려면 run_base:2763 분기를 수정해야 한다.
+  - 향후 `scripts/TEP/build_table_d1.py`(미작성)·Notion "Table D.1"·headline 어디에도 `vus_pr`/`vus_roc`를 싣지 말 것.
 - **셀 metric = macro per-mode `pak_auc_f1`** (= 표 "F1_PA%K"; per-mode 평가셋 = 그 mode 20 faulty run + 공유 40 FF run → positive rate ≈29.4%). **raw S/U를 그대로 읽지 말 것** — label-free엔 type-gen 격차 자체가 없고, 격차 대부분은 평가구성+오염 artifact(#12 insight 1).
 - **판정량**: ① **Ĝ = G_model − G_control(B)** (G = seen − unseen; B 대비로만 해석), ② **Δ_unseen = A_U − B_U > 0** (H1 vs H2 결정), ③ **C_dmg = clean_seen − contaminated_seen** (오염 피해; A가 얼마나 회복하나).
 - **D = `teacher_pak_auc_f1`** (teacher-recon score, A에서 파생).

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-23: docs — TEP_MAE.md §5에 VUS 제외 규칙 + `MAE_SKIP_VUS` 끄는/켜는 법 명문화 (doc-only)
+
+TEP 최종 분석의 **VUS 영구 제외**(`vus_pr`/`vus_roc` 무시, headline=`pak_auc_f1`)와 그 구현(`MAE_SKIP_VUS` 환경변수)을 `docs/TEP_MAE.md §5`에 서술. `TEP_typegen*` 키는 `run_base_experiments.py:2763`이 `MAE_SKIP_VUS=1`을 **자동 set**(spawn된 bg eval/viz/pool worker에 상속), 임의 런은 `MAE_SKIP_VUS=1 python … --dataset <KEY>`로 끄고 unset/`0`으로 켠다. 코드 변경 없음. (로컬 `config.skip_vus` 방식은 폐기되고 origin `MAE_SKIP_VUS`로 일원화됨.)
+
 ## 2026-06-23: TEP eval-bound 완화 — VUS/RF1 skip + eval_interval override + best-epoch 재계산 제거 + EXPERIMENT_INFO.md (base 100% 불변)
 
 TEP-scale 테스트(422K points / 320K anomaly / 400 regions)에서 **wall-clock이 학습이 아니라 평가에 지배**되는 eval-bound 문제를 root-cause로 해소. cProfile 결과 final eval 104s 중 **R-based F1(`metric_RF1`)이 82.3s** — TSB_AD의 순수 Python `O(n_anomaly_points)` 루프 — 가 단일 최대 비용이며, per-epoch ×N + final + per-fault로 반복 지불됨. VUS(~40s/call)도 eval-tail 병목.
@@ -49,6 +53,8 @@ TEP type-gen 실험을 기존 MAE 파이프라인(`official=True`)으로 돌리�
 **`anomaly_threshold.png`도 official scale로 정합**: official 런에서 panel1 = `official_score`, disc panel = `official_score − recon`(= 0.25·disc·s_t), FPR도 official 기준. det_ratio/panels/FPR 모두 `score_plot`(official) 사용. non-official은 기존 adaptive 그대로. (anomaly_threshold.png의 per-panel 독립 y축 레이아웃은 det-ratio 주석 때문에 유지 — test_event만 y축 통일.)
 
 **wiring**: `generate_all`의 `_safe_plot('anomaly_threshold', …)` 직후에 `_safe_plot('anomaly_threshold_test_event', …)` 추가 → 이후 모든 런이 자동 생성. npz 기반(추론 없음). 현재 official SWaT(`271_…_30ep_42`, full + excl22) 두 파일 모두 재생성 완료.
+
+**(viz best-epoch — official은 post-warmup 강제)**: `_select_best_epoch_for_viz` 헬퍼 추가 — `pak_auc_f1` 최대 epoch을 고르되 `official=True`면 **post-warmup(epoch > teacher_only_warmup_epochs)으로 제한**(warmup 중엔 student/discrepancy 미학습이라 pre-warmup 'best'가 score/disc 시각화에 오해 소지). `plot_anomaly_threshold`·`plot_anomaly_threshold_test_event` 둘 다 사용. **VISUALIZATION 한정** — 학습/메트릭 best-epoch(`config.best_epoch_metric='pak_auc_f1'`, run_base 2810)는 불변. 예: official WaDi_A1 전체best=ep12(pre-warmup 0.8054)였으나 viz는 ep27(post-warmup 0.8010) 사용 — WaDi_A1 viz npz 기반 재생성 완료(학습 미중단: npz/CPU라 충돌 없음, official keep=False라 중단은 WaDi_A2 진행분 손실).
 
 ## 2026-06-22: baseline epoch_metrics.json — per-epoch `train_loss` 기록
 
