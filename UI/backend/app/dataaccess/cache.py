@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -31,10 +32,24 @@ def file_signature(path: Path) -> Optional[tuple[str, int, int]]:
 
 
 class MtimeCache:
-    """In-process signature-keyed memo with an optional on-disk JSON sidecar."""
+    """In-process signature-keyed memo with an optional on-disk JSON sidecar.
+
+    Memory discipline (2026-06-16 leak fix): the in-process memo is BOUNDED.
+    * **Per-path stale eviction** — a path is keyed by signature ``(abspath, mtime, size)``;
+      when the same path is re-read with a NEW signature (a live training run rewriting the
+      file), the prior entry for that path is dropped instead of lingering forever. This was
+      the dominant leak with active training + the perf-basis last/epoch modes that read
+      every leaf's (large) ``epoch_metrics`` series.
+    * **LRU cap** — at most ``_MAX_ENTRIES`` entries; the least-recently-used is evicted.
+    """
+
+    # Bound on retained parsed bodies. Large enough to hold a full ranking pass over every
+    # leaf (epoch series included) without thrashing, small enough to cap RSS.
+    _MAX_ENTRIES = 4000
 
     def __init__(self, namespace: str):
-        self._mem: dict[tuple[str, int, int], Any] = {}
+        self._mem: "OrderedDict[tuple[str, int, int], Any]" = OrderedDict()
+        self._by_path: dict[str, tuple[str, int, int]] = {}  # abspath -> current signature
         self._dir = SETTINGS.cache_dir(namespace)
 
     def _sidecar(self, sig: tuple[str, int, int]) -> Path:
@@ -60,22 +75,40 @@ class MtimeCache:
         sig = file_signature(path)
         if sig is None:
             return compute(path)  # file vanished mid-read — recompute (will raise/None)
+
+        # per-path stale eviction: drop any prior (different-signature) entry for this path
+        # so a rewritten file doesn't leave its old parse lingering forever.
+        prev = self._by_path.get(sig[0])
+        if prev is not None and prev != sig:
+            self._mem.pop(prev, None)
+
         if sig in self._mem:
+            self._mem.move_to_end(sig)            # LRU bump
             return self._mem[sig]
         if persist:
             sc = self._sidecar(sig)
             if sc.exists():
                 try:
                     val = json.loads(sc.read_text("utf-8"))
-                    self._mem[sig] = val
+                    self._store(sig, val)
                     return val
                 except (OSError, json.JSONDecodeError):
                     pass
         val = compute(path)
-        self._mem[sig] = val
+        self._store(sig, val)
         if persist:
             self._atomic_write_json(self._sidecar(sig), val)
         return val
+
+    def _store(self, sig: tuple[str, int, int], val: Any) -> None:
+        """Insert + record the per-path signature, then evict LRU beyond the cap."""
+        self._mem[sig] = val
+        self._mem.move_to_end(sig)
+        self._by_path[sig[0]] = sig
+        while len(self._mem) > self._MAX_ENTRIES:
+            old_sig, _ = self._mem.popitem(last=False)   # least-recently-used
+            if self._by_path.get(old_sig[0]) == old_sig:
+                self._by_path.pop(old_sig[0], None)
 
     @staticmethod
     def _atomic_write_json(target: Path, value: Any) -> None:
@@ -97,6 +130,7 @@ class MtimeCache:
 
     def invalidate_all(self) -> None:
         self._mem.clear()
+        self._by_path.clear()
 
     def stats(self) -> dict[str, Any]:
-        return {"namespace": self._dir.name, "entries": len(self._mem)}
+        return {"namespace": self._dir.name, "entries": len(self._mem), "cap": self._MAX_ENTRIES}

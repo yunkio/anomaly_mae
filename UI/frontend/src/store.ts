@@ -40,7 +40,7 @@ type Theme = "light" | "dark";
 /** Performance basis (PERF_BASIS_SPEC) — which epoch snapshot + which threshold the
  * perf TABLES (rankings / leaderboard / compare matrix) resolve their values under.
  * Default (best, optimal) = current behaviour, byte-identical. */
-export type EpochBasis = "best" | "last" | "300" | "350" | "400" | "450";
+export type EpochBasis = "best" | "best_post" | "es" | "last" | "300" | "350" | "400" | "450";
 export type ThresholdBasis = "optimal" | "anomaly_ratio";
 
 interface AppState {

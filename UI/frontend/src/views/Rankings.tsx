@@ -21,6 +21,7 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Card, fmt } from "../components/common";
 import MetricPicker from "../components/MetricPicker";
+import MetricQuickPicks from "../components/MetricQuickPicks";
 import PerformanceBasis from "../components/PerformanceBasis";
 import PerDatasetRankTable from "../components/PerDatasetRankTable";
 import GifViewer from "../components/gif/GifViewer";
@@ -187,6 +188,8 @@ export default function Rankings() {
         {/* FB-R4c-04: the ranking METRIC selector (registry-driven runtime catalog, F5,
             direction-aware). Changing it re-ranks the aggregate + per-dataset tables. */}
         <MetricPicker catalog={catalog.data ?? []} value={metric} onChange={setMetric} loading={catalog.isLoading} />
+        {/* one-click shortcuts for the most-used metrics (full list stays in the picker). */}
+        <MetricQuickPicks value={metric} onChange={setMetric} />
         <span className="grow" style={{ flex: 1 }} />
         <PerformanceBasis />
       </div>
@@ -316,9 +319,13 @@ export default function Rankings() {
                         {d.datasets.map((col) => {
                           const r = a.per_dataset_rank[col];
                           const v = a.per_dataset_value?.[col];
+                          // PERF_STORE_SPEC (3): the SELECTED epoch alongside the value — the
+                          // backend may not serve per_dataset_epoch yet, so read defensively.
+                          const ep = a.per_dataset_epoch?.[col];
                           // P3-01/coverage: a missing per-dataset rank is a real GAP — show
-                          // a dash, never a fabricated rank. The metric VALUE is shown next to
-                          // the rank ("rank (value)"); for an "(avg)" column it is the mean.
+                          // a dash, never a fabricated rank. The metric VALUE (+ epoch when
+                          // known) is shown next to the rank ("rank (value, Nep)"); for an
+                          // "(avg)" column the value is the mean and the epoch the rounded mean.
                           return (
                             <td key={col} className="num" style={{ opacity: r == null ? 0.4 : 1 }}>
                               {r == null ? (
@@ -327,7 +334,11 @@ export default function Rankings() {
                                 <>
                                   {r}
                                   {typeof v === "number" && (
-                                    <span className="subtle" style={{ fontSize: "0.82em" }}> ({v.toFixed(4)})</span>
+                                    <span className="subtle" style={{ fontSize: "0.82em" }}>
+                                      {" "}
+                                      ({v.toFixed(4)}
+                                      {typeof ep === "number" ? `, ${ep}ep` : ""})
+                                    </span>
                                   )}
                                 </>
                               )}

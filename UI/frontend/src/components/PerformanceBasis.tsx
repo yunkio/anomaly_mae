@@ -10,13 +10,19 @@ import { useStore } from "../store";
 import type { EpochBasis } from "../store";
 
 const INFO =
-  "Best = epoch with the best pak_auc_f1; Last = final epoch; 300 / 350 / 400 / 450 = value " +
-  "at that eval epoch (— if the run never reached it). " +
+  "Best = epoch with the best pak_auc_f1 (all epochs); Best≥WU = best pak_auc_f1 restricted " +
+  "to AFTER warm-up; ES = epoch chosen by a leakage-free early-stopping rule on the G_e " +
+  "game-health signal (EMA α=0.1, patience 2, ≥1% rel. improvement, post-warm-up only, " +
+  "rolled back to the best-G_e epoch); Last = final epoch; 300 / 350 / 400 / 450 = value at " +
+  "that eval epoch (— if the run never reached it). " +
   "Threshold applies to F1 / Affiliation-F1 / etc.; pak_auc_f1 is threshold-free (unchanged).";
 
-/* Epoch-basis options in display order — numeric epochs sit between Best and Last. */
+/* Epoch-basis options in display order — selection criteria (Best, post-WU, ES) first,
+ * then fixed epochs, then Last. */
 const EPOCH_OPTIONS: { value: EpochBasis; label: string; title: string }[] = [
-  { value: "best", label: "Best", title: "epoch maximizing pak_auc_f1 (current)" },
+  { value: "best", label: "Best", title: "epoch maximizing pak_auc_f1 over ALL epochs (current)" },
+  { value: "best_post", label: "Best≥WU", title: "best pak_auc_f1 restricted to post-warm-up epochs (epoch > teacher_only_warmup_epochs)" },
+  { value: "es", label: "ES", title: "early-stopping selection on G_e (leakage-free: EMA α=0.1, patience 2, ≥1% rel. improvement, post-warm-up only, rolled back to best-G_e epoch)" },
   { value: "300", label: "300", title: "value at eval epoch 300 (— if the run never reached it)" },
   { value: "350", label: "350", title: "value at eval epoch 350 (— if the run never reached it)" },
   { value: "400", label: "400", title: "value at eval epoch 400 (— if the run never reached it)" },

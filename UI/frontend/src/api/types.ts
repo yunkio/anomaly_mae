@@ -185,6 +185,10 @@ export interface AggregateRow {
   per_dataset_rank: Record<string, number | null>;
   /** per-column metric VALUE alongside the rank (avg columns = mean over entities). */
   per_dataset_value?: Record<string, number | null>;
+  /** PERF_STORE_SPEC (3): per-column SELECTED epoch (single-leaf = that leaf's epoch;
+   * "(avg)" column = round(mean of member epochs)); null/absent when unknown. Rendered
+   * as `<n>ep` inside the per-dataset cell's parenthetical. */
+  per_dataset_epoch?: Record<string, number | null>;
 }
 /** FB-R4c-04: per-column classification advertised by the backend so the dataset-set
  * selector can GROUP the universe (canonical units vs granular machines/channels/concat/

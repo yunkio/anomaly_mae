@@ -67,12 +67,16 @@ def compare_matrix(
             b = repo.load_bundle(exp, ds, leaf, want={"metadata"})
             errors.extend(b.errors)
         for k in metrics:
-            val = (perf_basis.resolve_value(
-                repo, exp, ds, leaf, k,
-                epoch_basis=epoch_basis, threshold_basis=threshold_basis,
-                score_variant=score_variant) if complete else None)
+            if complete:
+                val, sel_epoch = perf_basis.resolve_value_epoch(
+                    repo, exp, ds, leaf, k,
+                    epoch_basis=epoch_basis, threshold_basis=threshold_basis,
+                    score_variant=score_variant)
+            else:
+                val, sel_epoch = None, None
             cells[k] = {
                 "value": val,                                  # null => "—", never 0
+                "epoch": sel_epoch,                            # PERF_STORE_SPEC §2
                 "direction": meta[k]["direction"],
                 "state": (leaf.state if leaf else "missing"),
             }

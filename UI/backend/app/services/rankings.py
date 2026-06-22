@@ -93,7 +93,7 @@ def leaderboard(
                 errors.extend(b.errors)
                 if not b.metadata:
                     continue
-                val = perf_basis.resolve_value(
+                val, sel_epoch = perf_basis.resolve_value_epoch(
                     repo, e, d, leaf, metric,
                     epoch_basis=epoch_basis, threshold_basis=threshold_basis,
                     score_variant=score_variant)
@@ -105,6 +105,9 @@ def leaderboard(
                     "dataset_key_url": d.dataset_key.replace("/", "~"),
                     "variant": variant, "value": val,
                     "best_epoch": b.metadata.timing.get("best_epoch"),
+                    # the basis-selected epoch the value was read at (PERF_STORE_SPEC §2):
+                    # for the default ``best`` basis this equals best_epoch.
+                    "epoch": sel_epoch,
                     "state": leaf.state, "source": e.source,
                     "description": (e.summary.description if e.summary else None),
                 })
@@ -228,21 +231,24 @@ def rankings_aggregate(
         ds_filter = {c.strip() for c in datasets.split(",") if c.strip()}
 
     errors: list[str] = []
-    # raw GRANULAR columns: col_key -> list of {exp_id, exp_num, value, source, description}.
+    # raw GRANULAR columns: col_key -> list of {exp_id, exp_num, value, epoch, source, ...}.
     # SMD/SMAP/MSL per-entity leaves land here too (as granular columns) before collapse.
     granular: dict[str, list[dict[str, Any]]] = {}
     # per-experiment entity-group values (for the canonical "(avg)" columns).
     # group_vals[group][exp_id] -> list of per-entity metric values.
     group_vals: dict[str, dict[str, list[float]]] = {g: {} for g in _ENTITY_GROUPS}
+    # per-experiment entity-group EPOCHS (for the "(avg)" column epoch = round(mean)).
+    group_epochs: dict[str, dict[str, list[int]]] = {g: {} for g in _ENTITY_GROUPS}
     # exp metadata captured once (for the canonical avg rows whose exp may not appear in
     # any RETAINED granular column once the per-machine columns are filtered out).
     exp_meta_all: dict[str, dict[str, Any]] = {}
 
-    def _emit_granular(col_key: str, e, value: Optional[float]) -> None:
+    def _emit_granular(col_key: str, e, value: Optional[float],
+                       epoch: Optional[int] = None) -> None:
         if value is None:
             return
         granular.setdefault(col_key, []).append({
-            "exp_id": e.exp_id, "exp_num": e.exp_num, "value": value,
+            "exp_id": e.exp_id, "exp_num": e.exp_num, "value": value, "epoch": epoch,
             "source": e.source,
             "description": (e.summary.description if e.summary else None),
         })
@@ -280,7 +286,7 @@ def rankings_aggregate(
                     continue
                 # R2-03: read EACH leaf's OWN score_variant block — the excl22 leaf's
                 # plain ``metrics`` IS the excl22 eval. Basis-resolved (epoch × threshold).
-                val = perf_basis.resolve_value(
+                val, sel_epoch = perf_basis.resolve_value_epoch(
                     repo, e, d, leaf, metric,
                     epoch_basis=epoch_basis, threshold_basis=threshold_basis,
                     score_variant=score_variant)
@@ -288,12 +294,14 @@ def rankings_aggregate(
                     col_key = f"{d.dataset_key} · {variant}"
                 else:
                     col_key = d.dataset_key
-                _emit_granular(col_key, e, val)
+                _emit_granular(col_key, e, val, sel_epoch)
                 _remember_exp(e)
                 # FB-R4c-01: feed a per-entity SMD/SMAP/MSL leaf into its group average
                 # (concat excluded by ``_entity_group_of``).
                 if group is not None and isinstance(val, (int, float)):
                     group_vals[group].setdefault(e.exp_id, []).append(val)
+                    if isinstance(sel_epoch, int):
+                        group_epochs[group].setdefault(e.exp_id, []).append(sel_epoch)
 
             # R2-03 fallback: SWaT excl22 LEAF absent → the excl22 eval lives in the FULL
             # leaf's dual-eval blocks. Read ``metrics_excl_region22[metric]`` else
@@ -304,16 +312,16 @@ def rankings_aggregate(
                     fb = repo.load_bundle(e, d, full_leaf, want={"metadata"})
                     errors.extend(fb.errors)
                     if fb.metadata:
-                        excl_val = perf_basis.resolve_value(
+                        excl_val, excl_epoch = perf_basis.resolve_value_epoch(
                             repo, e, d, full_leaf, metric,
                             epoch_basis=epoch_basis, threshold_basis=threshold_basis,
                             score_variant="metrics_excl_region22")
                         if excl_val is None:
-                            excl_val = perf_basis.resolve_value(
+                            excl_val, excl_epoch = perf_basis.resolve_value_epoch(
                                 repo, e, d, full_leaf, f"excl22_{metric}",
                                 epoch_basis=epoch_basis, threshold_basis=threshold_basis,
                                 score_variant=score_variant)
-                        _emit_granular(f"{d.dataset_key} · excl22", e, excl_val)
+                        _emit_granular(f"{d.dataset_key} · excl22", e, excl_val, excl_epoch)
 
     # ── build the canonical "(avg)" columns from the per-group per-experiment values ──
     canonical_cols: set[str] = set()
@@ -330,9 +338,13 @@ def rankings_aggregate(
             if not vals:
                 continue
             em = exp_meta_all.get(exp_id, {"exp_id": exp_id})
+            # "(avg)" column epoch = round(mean of member epochs), None if none recorded.
+            eps = group_epochs[g].get(exp_id) or []
+            avg_epoch = (round(sum(eps) / len(eps)) if eps else None)
             granular.setdefault(col_key, []).append({
                 "exp_id": exp_id, "exp_num": em.get("exp_num"),
                 "value": sum(vals) / len(vals),          # mean over the exp's entities
+                "epoch": avg_epoch,
                 "source": em.get("source"), "description": em.get("description"),
                 "n_entities": len(vals),
             })
@@ -375,6 +387,7 @@ def rankings_aggregate(
     per_dataset: dict[str, list[dict[str, Any]]] = {}
     rank_lookup: dict[str, dict[str, int]] = {}   # exp_id -> {col_key: rank}
     value_lookup: dict[str, dict[str, float]] = {}  # exp_id -> {col_key: value}
+    epoch_lookup: dict[str, dict[str, Any]] = {}    # exp_id -> {col_key: epoch|None}
     for col_key in sorted(active_cols):
         entries = granular.get(col_key, [])
         if rankable:
@@ -400,6 +413,7 @@ def rankings_aggregate(
                 r2["rank"] = None
             per_dataset.setdefault(col_key, []).append(r2)
             value_lookup.setdefault(r["exp_id"], {})[col_key] = v
+            epoch_lookup.setdefault(r["exp_id"], {})[col_key] = r.get("epoch")
 
     dataset_cols = sorted(per_dataset.keys())
     total_cols = len(dataset_cols)
@@ -415,12 +429,17 @@ def rankings_aggregate(
     for exp_id, em in exp_meta.items():
         ranks = rank_lookup.get(exp_id, {})
         col_vals = value_lookup.get(exp_id, {})
+        col_eps = epoch_lookup.get(exp_id, {})
         present = len(col_vals)
         per_col_rank = {c: ranks.get(c) for c in dataset_cols}
         # per-column metric VALUE alongside the rank (2026-06-04): for an "(avg)" column
         # this is already the mean over the entity leaves (granular stores the mean), so
         # the frontend can render "rank (value)" with the averaged performance for avg cols.
         per_col_value = {c: col_vals.get(c) for c in dataset_cols}
+        # PERF_STORE_SPEC §2: per-column SELECTED EPOCH. Single-leaf col = that leaf's
+        # epoch; "(avg)" col = round(mean of member epochs) (already stored on the avg
+        # granular entry). None where no epoch was recorded.
+        per_col_epoch = {c: col_eps.get(c) for c in dataset_cols}
         avg_rank = (sum(ranks.values()) / len(ranks)) if ranks else None
         vals = list(col_vals.values())
         mean_value = (sum(vals) / len(vals)) if vals else None
@@ -432,6 +451,7 @@ def rankings_aggregate(
             "mean_value": mean_value,
             "per_dataset_rank": per_col_rank,
             "per_dataset_value": per_col_value,
+            "per_dataset_epoch": per_col_epoch,
         })
 
     if rankable:

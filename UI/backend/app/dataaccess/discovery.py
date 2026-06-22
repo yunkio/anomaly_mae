@@ -212,6 +212,20 @@ def scan(roots: Optional[dict[str, Path]] = None) -> list[ExperimentRef]:
     """
     roots = roots or SETTINGS.source_roots
     out: list[ExperimentRef] = []
+
+    def _add(d: Path, source: str) -> None:
+        if any(d.name.startswith(p) for p in SETTINGS.exclude_prefixes):
+            return  # hidden by config (e.g. legacy_*): on disk but not shown.
+        try:
+            ref = discover_experiment(d, source)
+        except Exception as exc:  # noqa: BLE001 - isolation by design
+            ref = ExperimentRef(
+                exp_id=d.name, root=d, source=source,  # type: ignore[arg-type]
+                state="early_abort", errors=[f"discover failed: {exc}"],
+            )
+        if ref is not None:
+            out.append(ref)
+
     for source, root in roots.items():
         if not root.exists():
             continue
@@ -223,17 +237,19 @@ def scan(roots: Optional[dict[str, Path]] = None) -> list[ExperimentRef]:
             if not entry.is_dir():
                 continue  # queue_summary.json and friends: skipped, never errored.
             d = Path(entry.path)
-            if not _EXP_NAME_RE.match(d.name):
-                continue  # non-experiment dir: skipped.
-            if any(d.name.startswith(p) for p in SETTINGS.exclude_prefixes):
-                continue  # hidden by config (e.g. legacy_*): on disk but not shown.
+            if _EXP_NAME_RE.match(d.name):
+                _add(d, source)
+                continue
+            # Not an experiment NAME: descend ONE level into a GROUP folder (e.g.
+            # ``official/``) whose children ARE experiments, so experiments nested one
+            # level under a grouping dir still appear in the list. We never descend into a
+            # real experiment dir (those match the regex above and never reach here), so the
+            # dataset leaves (WaDi/, SWaT/, …) are not mistaken for experiments.
             try:
-                ref = discover_experiment(d, source)
-            except Exception as exc:  # noqa: BLE001 - isolation by design
-                ref = ExperimentRef(
-                    exp_id=d.name, root=d, source=source,  # type: ignore[arg-type]
-                    state="early_abort", errors=[f"discover failed: {exc}"],
-                )
-            if ref is not None:
-                out.append(ref)
+                sub = sorted(os.scandir(d), key=lambda e: e.name)
+            except OSError:
+                continue
+            for se in sub:
+                if se.is_dir() and _EXP_NAME_RE.match(se.name):
+                    _add(Path(se.path), source)
     return out

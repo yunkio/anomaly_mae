@@ -53,6 +53,11 @@ def _startup_gate() -> None:
     else:
         log.info("resolver self-test PASS (registry v%s); discovered %d experiments",
                  repo.registry.version, len(repo.experiments()))
+    # No eager perf-store warm: the precomputed sidecars + the transient (non-cached)
+    # epoch/history parse keep even a COLD aggregate at ~370 ms and the steady state at
+    # ~280 MB RSS. An eager background warm running CONCURRENTLY with the page's first
+    # burst of requests drove a transient multi-GB allocation peak that Python never
+    # returned to the OS (2026-06-16). Lazy load on first request is both fast and lean.
 
 
 # ── static PNG serve (path-confined to the source roots; §9) ─────────────────
