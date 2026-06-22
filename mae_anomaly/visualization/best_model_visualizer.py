@@ -2946,6 +2946,22 @@ Margin:    {margin:+.6f}
         plt.close(fig)
         print("  - feature_profile.png")
 
+    def _select_best_epoch_for_viz(self, epochs):
+        """Best epoch by pak_auc_f1. For official runs, FORCE selection to post-warmup
+        epochs only (epoch > teacher_only_warmup_epochs): during warmup the student /
+        output-discrepancy is untrained, so a pre-warmup 'best' is misleading for the
+        score/discrepancy visualizations. Falls back to all epochs if no post-warmup
+        eval exists. (Affects VISUALIZATION only — training/metric best-epoch unchanged.)"""
+        cands = list(epochs)
+        if bool(getattr(self.config, 'official', False)):
+            warm = int(getattr(self.config, 'teacher_only_warmup_epochs', -1) or -1)
+            if warm < 0:
+                warm = int(getattr(self.config, 'num_epochs', 0) or 0) // 2
+            post = [e for e in epochs if int(e.get('epoch', 0)) > warm]
+            if post:
+                cands = post
+        return max(cands, key=lambda e: e.get('pak_auc_f1', 0))
+
     def plot_anomaly_threshold(self, experiment_dir: str = None):
         """Plot anomaly score timeline with each component on its own subplot.
 
@@ -2971,7 +2987,7 @@ Margin:    {margin:+.6f}
             print(f"  [anomaly_threshold] no epoch_metrics.json at {dataset_dir}")
             return
         epoch_data = json.load(open(metrics_path))
-        best = max(epoch_data['epochs'], key=lambda e: e.get('pak_auc_f1', 0))
+        best = self._select_best_epoch_for_viz(epoch_data['epochs'])
         best_epoch = best['epoch']
         threshold = best.get('optimal_threshold', None)
         pak_auc_f1 = best.get('pak_auc_f1', 0.0)
@@ -3214,7 +3230,7 @@ Margin:    {margin:+.6f}
         if not os.path.exists(metrics_path):
             print(f"  [test_event] no epoch_metrics.json"); return
         epoch_data = json.load(open(metrics_path))
-        best = max(epoch_data['epochs'], key=lambda e: e.get('pak_auc_f1', 0))
+        best = self._select_best_epoch_for_viz(epoch_data['epochs'])
         best_epoch = best['epoch']
         npz_path = os.path.join(dataset_dir, 'epoch_scores', f'epoch_{best_epoch:03d}_scores.npz')
         if not os.path.exists(npz_path):
