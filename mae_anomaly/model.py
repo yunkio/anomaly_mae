@@ -291,6 +291,12 @@ class SelfDistilledMAEMultivariate(nn.Module):
         super().__init__()
         self.config = config
         self.patchify_mode = config.patchify_mode
+        self.masking_strategy = getattr(config, 'masking_strategy', 'patch')
+        if self.masking_strategy not in {'patch', 'feature_wise'}:
+            raise ValueError(
+                "masking_strategy must be one of {'patch', 'feature_wise'}, "
+                f"got {self.masking_strategy!r}"
+            )
 
         # Patch configuration (always defined for both strategies)
         # Hard assert: seq_length must be divisible by patch_size. This is also
@@ -306,6 +312,13 @@ class SelfDistilledMAEMultivariate(nn.Module):
         # Both strategies use patch-based processing
         self.use_patch = True
         self.effective_seq_len = self.num_patches
+
+        # Training-only feature-wise masking ablation. Default 'patch' does not create
+        # this parameter, so existing model parameterization is unchanged unless the
+        # ablation is explicitly requested.
+        if self.masking_strategy == 'feature_wise':
+            self.feature_mask_token = nn.Parameter(torch.zeros(1, 1, config.num_features))
+            nn.init.normal_(self.feature_mask_token, std=0.02)
 
         # RevIN (per-window instance normalization) — optional
         # Active path: normalize at forward() entry, denormalize at teacher/student output
@@ -787,6 +800,58 @@ class SelfDistilledMAEMultivariate(nn.Module):
 
         return x_masked, mask
 
+    def feature_wise_masking(
+        self,
+        x: torch.Tensor,
+        masking_ratio: float,
+        point_labels: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Mask patch-feature cells in raw input for the feature-wise ablation.
+
+        The returned feature_keep mask has the same keep-mask convention as the
+        existing patch mask: 1=visible/keep, 0=masked. Shape is (B, L, F), so the
+        loss can restrict reconstruction/discrepancy to masked feature cells
+        instead of broad-casting a timestep mask to every feature.
+        """
+        masking_val = masking_ratio.item() if torch.is_tensor(masking_ratio) else masking_ratio
+        batch_size, seq_length, num_features = x.shape
+        feature_keep = torch.ones(
+            batch_size, seq_length, num_features, device=x.device, dtype=x.dtype
+        )
+        if not self.config.use_masking or masking_val == 0:
+            return x, feature_keep
+
+        num_cells = self.num_patches * num_features
+        num_masked = round(num_cells * masking_val)
+        if num_masked <= 0:
+            return x, feature_keep
+        num_masked = min(num_masked, num_cells)
+
+        # One masking decision per (patch, feature), expanded across the patch's
+        # timesteps. This keeps the temporal patch geometry intact while making
+        # the hidden input corruption feature-selective.
+        noise = torch.rand(batch_size, self.num_patches, num_features, device=x.device)
+        priority = noise
+        if self.training and self.config.force_mask_anomaly and point_labels is not None:
+            patch_labels = point_labels.reshape(batch_size, self.num_patches, self.patch_size)
+            anomaly_patches = (patch_labels.sum(dim=2) > 0).to(x.dtype).unsqueeze(-1)
+            priority = priority + anomaly_patches * 1000
+
+        flat_priority = priority.reshape(batch_size, num_cells)
+        ids_sorted = torch.argsort(flat_priority, dim=1, descending=True)
+        flat_keep = torch.ones(batch_size, num_cells, device=x.device, dtype=x.dtype)
+        flat_keep.scatter_(1, ids_sorted[:, :num_masked], 0.0)
+        patch_feature_keep = flat_keep.reshape(batch_size, self.num_patches, num_features)
+        feature_keep = (
+            patch_feature_keep.unsqueeze(2)
+            .expand(-1, -1, self.patch_size, -1)
+            .reshape(batch_size, seq_length, num_features)
+        )
+
+        mask_token = self.feature_mask_token.to(dtype=x.dtype, device=x.device)
+        x_masked = x * feature_keep + mask_token * (1.0 - feature_keep)
+        return x_masked, feature_keep
+
     def _get_mask_token(self, for_decoder: str = 'shared') -> torch.Tensor:
         """Get the appropriate mask token based on configuration.
 
@@ -979,6 +1044,13 @@ class SelfDistilledMAEMultivariate(nn.Module):
             _t0 = time.time()
 
         batch_size, seq_length, num_features = x.shape
+        self._feature_loss_mask = None
+        feature_time_mask = None
+        feature_wise_training = (
+            self.training
+            and self.masking_strategy == 'feature_wise'
+            and mask is None
+        )
 
         # RevIN normalize (Step 6 in plan): per-window mean/std on top of loader-level zscore.
         # Computes stats from current window, stores on self.revin for later denormalize().
@@ -989,6 +1061,13 @@ class SelfDistilledMAEMultivariate(nn.Module):
                 point_labels=point_labels if self.training else None,
                 visible_only=self.revin_visible_only,
             )
+
+        if feature_wise_training:
+            x, feature_keep = self.feature_wise_masking(
+                x, masking_ratio, point_labels=point_labels
+            )
+            self._feature_loss_mask = feature_keep
+            feature_time_mask = (feature_keep.sum(dim=-1) == num_features).to(feature_keep.dtype)
 
         # Embed input based on patchify_mode
         x_embed = self._embed_input(x)  # (seq_len, batch, d_model)
@@ -1003,11 +1082,19 @@ class SelfDistilledMAEMultivariate(nn.Module):
         x_masked = None  # Only computed when mask_after_encoder=False
 
         if mask is None:
-            x_masked, mask = self.random_masking(
-                x_embed, masking_ratio, mask_only=self.mask_after_encoder
-            )
-            # mask is (seq_len, batch) for patch strategy
-            patch_mask = mask
+            if feature_wise_training:
+                patch_mask = torch.ones(
+                    seq_len, batch_size, device=x_embed.device, dtype=x_embed.dtype
+                )
+                mask = patch_mask
+                if not self.mask_after_encoder:
+                    x_masked = x_embed
+            else:
+                x_masked, mask = self.random_masking(
+                    x_embed, masking_ratio, mask_only=self.mask_after_encoder
+                )
+                # mask is (seq_len, batch) for patch strategy
+                patch_mask = mask
         else:
             # Handle pre-defined mask (from external source like evaluator)
             # External mask is always (batch, seq_length) format
@@ -1026,7 +1113,7 @@ class SelfDistilledMAEMultivariate(nn.Module):
         # Masking budget is always exactly target_num_masked, with anomaly patches
         # prioritized. If anomaly patches exceed the budget, excess remain visible
         # as encoder context (acceptable trade-off to maintain uniform batch masking).
-        if (self.training and self.config.force_mask_anomaly and
+        if (self.training and not feature_wise_training and self.config.force_mask_anomaly and
             point_labels is not None):
             current_seq_len = patch_mask.shape[0]
 
@@ -1302,7 +1389,9 @@ class SelfDistilledMAEMultivariate(nn.Module):
             student_output = teacher_output
 
         # Convert mask back to (batch, seq_length) format
-        if mask_provided_externally:
+        if feature_wise_training and feature_time_mask is not None:
+            mask = feature_time_mask
+        elif mask_provided_externally:
             # External mask was already (batch, seq_length), now is (seq_len, batch) after transpose
             # Just transpose back
             mask = mask.transpose(0, 1)  # (batch, seq_len)

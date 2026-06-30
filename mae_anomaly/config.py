@@ -67,6 +67,11 @@ class Config:
     mask_after_encoder: bool = True  # Standard MAE masking architecture
     # - False: Mask tokens go through encoder (current behavior)
     # - True: Encode visible patches only, insert mask tokens before decoder (standard MAE)
+    masking_strategy: str = 'patch'  # 'patch' (existing), 'feature_wise' (training-only ablation)
+    # - 'patch': mask full temporal patch tokens exactly as before.
+    # - 'feature_wise': during training, mask patch-feature cells in the raw input before
+    #   embedding and compute loss only on those masked feature cells. Evaluation still uses
+    #   the existing patch leave-one-out masks, so official scoring/inference is unchanged.
     shared_mask_token: bool = False  # Share mask token between teacher and student
     # - True: Single mask token shared (current behavior)
     # - False: Separate mask tokens for teacher and student decoders
@@ -425,6 +430,21 @@ class Config:
     # GRL classifier, anomaly_loss, dynamic-margin normal-selection) sees a label-free
     # train stream. Test labels + anomaly_regions (eval) are UNTOUCHED. Used for the TEP
     # type-gen condition B (matched label-blind control). Default False = unchanged.
+    train_label_mask_frac: float = 0.0  # [label-mask, 2026-06-24; rank-fix 2026-06-30] unlabel
+    # the chronologically-LAST `frac` of the TRAIN ANOMALY timepoints (by rank among the train
+    # anomaly points), NOT the back frac of the timeline. 0.0=off (no-op, byte-identical),
+    # 1.0=all train anomaly labels zeroed (≡ blind_train_labels=True), 0.5=latest 50% of the
+    # train anomaly timepoints unlabeled. (Old position-based semantics wiped ~all anomalies at
+    # the smallest frac because these datasets pack every train anomaly into the back few % of
+    # the timeline; rank-based gives the intended graded sweep.) Applied ONLY to the training
+    # train_dataset (via .copy(), so the shared array / test split / best_epoch_train_scores keep
+    # TRUE labels). Normal labels are never touched. Test labels + eval UNTOUCHED.
+    train_exclude_anomaly_segments: bool = False  # [exclude-anomaly 2026-06-24] REMOVE anomaly-
+    # labeled timesteps from the TRAIN signal entirely (not mask — splice out), inserting run
+    # boundaries at the splice junctions so windows never span a removed gap (existing boundaries
+    # preserved). Applied ONLY to the training train_dataset (fancy-index copy → shared array /
+    # test split / best_epoch_train_scores UNTOUCHED; normalization scaler unchanged). Default
+    # False = no-op, byte-identical.
 
     # Reproducibility
     random_seed: int = 42

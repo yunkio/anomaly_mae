@@ -165,6 +165,7 @@ class SelfDistillationLoss(nn.Module):
         student_hidden: Optional[torch.Tensor] = None,
         scad_z: Optional[torch.Tensor] = None,
         ema_teacher_output: Optional[torch.Tensor] = None,
+        loss_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, torch.Tensor]]:
         """
         Args:
@@ -175,23 +176,42 @@ class SelfDistillationLoss(nn.Module):
             point_labels: (batch, seq_length) - 1=anomaly, 0=normal
             warmup_factor: factor for anomaly loss warmup
             teacher_only: if True, only compute teacher reconstruction loss (for warm-up epochs)
+            loss_mask: optional (batch, seq_length, num_features) keep mask for
+                feature-wise masking. Same convention as mask: 1=keep, 0=masked.
         """
         batch_size = teacher_output.size(0)
+        num_features = teacher_output.size(-1)
         mask_expanded = mask.unsqueeze(-1)
+        if loss_mask is not None:
+            if loss_mask.shape != teacher_output.shape:
+                raise ValueError(
+                    f"loss_mask shape {tuple(loss_mask.shape)} must match "
+                    f"teacher_output shape {tuple(teacher_output.shape)}"
+                )
+            mask_inverse_full = 1.0 - loss_mask.to(device=teacher_output.device, dtype=teacher_output.dtype)
+            masked_cell_count_per_sample = mask_inverse_full.sum(dim=(1, 2)) + 1e-4
+            time_mask_inverse = (mask_inverse_full.sum(dim=-1) > 0).to(point_labels.dtype)
+            mask_count_per_feature = mask_inverse_full.sum(dim=(0, 1)) + 1e-4
+        else:
+            mask_inverse_full = 1 - mask_expanded
+            masked_cell_count_per_sample = (
+                (1 - mask_expanded).sum(dim=(1, 2)) * num_features + 1e-4
+            )
+            time_mask_inverse = 1 - mask
+            mask_count_per_feature = (1 - mask_expanded).sum(dim=(0, 1)) + 1e-4
 
         # Determine which samples have anomaly in masked region (used for multiple loss computations)
-        masked_point_labels = point_labels * (1 - mask)
+        masked_point_labels = point_labels * time_mask_inverse
         has_anomaly_sample = (masked_point_labels.sum(dim=1) > 0).float()  # (batch,)
         is_normal_sample = 1 - has_anomaly_sample
 
         # Teacher reconstruction loss (total)
         teacher_recon_full = F.mse_loss(
-            teacher_output * (1 - mask_expanded),
-            original_input * (1 - mask_expanded),
+            teacher_output * mask_inverse_full,
+            original_input * mask_inverse_full,
             reduction='none'
         )
-        num_features = teacher_recon_full.size(-1)
-        teacher_recon_per_sample = teacher_recon_full.sum(dim=(1, 2)) / ((1 - mask_expanded).sum(dim=(1, 2)) * num_features + 1e-4)
+        teacher_recon_per_sample = teacher_recon_full.sum(dim=(1, 2)) / masked_cell_count_per_sample
         reconstruction_loss = teacher_recon_per_sample.mean()
 
         # Teacher reconstruction loss by sample type
@@ -211,17 +231,17 @@ class SelfDistillationLoss(nn.Module):
             student_recon_anomaly_metric = torch.tensor(0.0, device=teacher_output.device)
         else:
             student_recon_full = F.mse_loss(
-                student_output * (1 - mask_expanded),
-                original_input * (1 - mask_expanded),
+                student_output * mask_inverse_full,
+                original_input * mask_inverse_full,
                 reduction='none'
             )
-            student_recon_per_sample = student_recon_full.sum(dim=(1, 2)) / ((1 - mask_expanded).sum(dim=(1, 2)) * num_features + 1e-4)
+            student_recon_per_sample = student_recon_full.sum(dim=(1, 2)) / masked_cell_count_per_sample
             student_recon_normal_metric = (is_normal_sample * student_recon_per_sample).sum() / (is_normal_sample.sum() + 1e-4)
             student_recon_anomaly_metric = (has_anomaly_sample * student_recon_per_sample).sum() / (has_anomaly_sample.sum() + 1e-4)
 
         # Feature-level stats from teacher_recon_full (B, L, F) — masked positions only
         # Uses existing tensor, single reduction per stat: ~0.03ms/batch overhead
-        _mask_count_per_feature = (1 - mask_expanded).sum(dim=(0, 1)) + 1e-4  # (F,)
+        _mask_count_per_feature = mask_count_per_feature  # (F,) for feature-wise, scalar-broadcast for patch
         _recon_masked = teacher_recon_full  # already masked at computation (line 137-138)
         feature_recon_mean = (_recon_masked.sum(dim=(0, 1)) / _mask_count_per_feature).detach()  # (F,)
         feature_recon_max = _recon_masked.max(dim=0).values.max(dim=0).values.detach()  # (F,)
@@ -234,7 +254,7 @@ class SelfDistillationLoss(nn.Module):
             discrepancy_full = (_disc_target - student_output) ** 2
 
             # Feature-level discrepancy stats (B, L, F) → (F,) — masked positions only
-            _disc_masked = discrepancy_full * (1 - mask_expanded)
+            _disc_masked = discrepancy_full * mask_inverse_full
             feature_disc_mean = (_disc_masked.sum(dim=(0, 1)) / _mask_count_per_feature).detach()  # (F,)
             feature_disc_max = _disc_masked.max(dim=0).values.max(dim=0).values.detach()  # (F,)
 
@@ -250,11 +270,24 @@ class SelfDistillationLoss(nn.Module):
                 point_labels_patches = point_labels.reshape(batch_size, self.num_patches, self.patch_size)
 
                 # Per-patch discrepancy (only on masked positions)
-                mask_inverse_patches = 1 - mask_patches
-                mask_inverse_expanded = mask_inverse_patches.unsqueeze(-1)
-
-                patch_discrepancy_sum = (discrepancy_patches * mask_inverse_expanded).sum(dim=(2, 3))
-                patch_mask_count = mask_inverse_patches.sum(dim=2) * discrepancy_full.size(-1) + 1e-4
+                if loss_mask is not None:
+                    mask_inverse_patches_full = mask_inverse_full.reshape(
+                        batch_size, self.num_patches, self.patch_size, -1
+                    )
+                    mask_inverse_patches = (
+                        mask_inverse_patches_full.sum(dim=3) > 0
+                    ).to(discrepancy_full.dtype)
+                    patch_discrepancy_sum = (
+                        discrepancy_patches * mask_inverse_patches_full
+                    ).sum(dim=(2, 3))
+                    patch_mask_count = mask_inverse_patches_full.sum(dim=(2, 3)) + 1e-4
+                else:
+                    mask_inverse_patches = 1 - mask_patches
+                    mask_inverse_expanded = mask_inverse_patches.unsqueeze(-1)
+                    patch_discrepancy_sum = (
+                        discrepancy_patches * mask_inverse_expanded
+                    ).sum(dim=(2, 3))
+                    patch_mask_count = mask_inverse_patches.sum(dim=2) * discrepancy_full.size(-1) + 1e-4
                 patch_discrepancy = patch_discrepancy_sum / patch_mask_count
 
                 # Determine patch-level anomaly status
@@ -426,11 +459,11 @@ class SelfDistillationLoss(nn.Module):
                 # ============== WINDOW-LEVEL LOSS ==============
                 # Original behavior: sample-level classification
 
-                discrepancy_masked = discrepancy_full * (1 - mask_expanded)
-                sample_discrepancy = discrepancy_masked.sum(dim=(1, 2)) / ((1 - mask_expanded).sum(dim=(1, 2)) * discrepancy_full.size(-1) + 1e-4)
+                discrepancy_masked = discrepancy_full * mask_inverse_full
+                sample_discrepancy = discrepancy_masked.sum(dim=(1, 2)) / masked_cell_count_per_sample
 
                 # Sample has anomaly if ANY masked position has anomaly
-                masked_point_labels = point_labels * (1 - mask)
+                masked_point_labels = point_labels * time_mask_inverse
                 has_anomaly_in_masked = (masked_point_labels.sum(dim=1) > 0).float()
 
                 normal_mask = (1 - has_anomaly_in_masked)
@@ -544,6 +577,9 @@ class SelfDistillationLoss(nn.Module):
         loss_tensors['es_teacher_recon_per_sample'] = teacher_recon_per_sample.detach()
         loss_tensors['es_is_normal_sample'] = is_normal_sample.detach()
         loss_tensors['es_has_anomaly_sample'] = has_anomaly_sample.detach()
+        # [2026-06-24] per-sample output discrepancy for train disc_snr logging (mirror of
+        # es_teacher_recon_per_sample). zeros during teacher-only warmup (sample_discrepancy=0).
+        loss_tensors['es_disc_per_sample'] = sample_discrepancy.detach()
         # Patch-level masks for WDGRL critic (no grad needed)
         if self.patch_level_loss:
             _pll = locals()

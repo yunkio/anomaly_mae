@@ -143,6 +143,22 @@ class Trainer:
                     "force_mask_all_anomaly=True는 use_masking=True를 필요로 합니다 "
                     "('force MORE' modifier이지 masking on/off 스위치가 아님).")
 
+        # 11d. masking_strategy — default 'patch' is the existing path. feature_wise is
+        # an explicit training-only ablation and must not be silently combined with
+        # patch-only modifiers whose semantics would be ambiguous.
+        _VALID_MASKING_STRATEGIES = {'patch', 'feature_wise'}
+        _masking_strategy = getattr(config, 'masking_strategy', 'patch')
+        if _masking_strategy not in _VALID_MASKING_STRATEGIES:
+            raise ValueError(
+                f"masking_strategy must be one of {_VALID_MASKING_STRATEGIES}, "
+                f"got {_masking_strategy!r}"
+            )
+        if _masking_strategy == 'feature_wise' and getattr(config, 'force_mask_all_anomaly', False):
+            raise ValueError(
+                "masking_strategy='feature_wise' is incompatible with "
+                "force_mask_all_anomaly=True, which is defined only for patch masking."
+            )
+
         # 10. seq_length / patch_size / num_patches 일관성 (defense-in-depth;
         #    make_config()에서도 검증되나 Trainer가 직접 호출되는 경로 보호)
         if config.seq_length % config.patch_size != 0:
@@ -359,6 +375,7 @@ class Trainer:
             # is in training_histories. ONLY populated when use_teacher_warmup_early_stop=True
             # during teacher-only warmup epochs; None otherwise (not computed → kept null).
             'train_recon_snr': [],
+            'train_disc_snr': [],  # [2026-06-24] train discrepancy SNR (anomaly vs normal), per-epoch
             # Detailed metrics by sample type
             'train_teacher_recon_normal': [],
             'train_teacher_recon_anomaly': [],
@@ -969,6 +986,9 @@ class Trainer:
         _es_on = getattr(self.config, 'use_teacher_warmup_early_stop', False)
         _es_sum_n = _es_sumsq_n = _es_cnt_n = 0.0
         _es_sum_a = _es_sumsq_a = _es_cnt_a = 0.0
+        # [2026-06-24] train disc_snr 누적기 (recon_snr과 동일 방식; count는 _es_cnt_n/a 공유).
+        _ds_sum_n = _ds_sumsq_n = 0.0
+        _ds_sum_a = _ds_sumsq_a = 0.0
 
         iterator = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{self.config.num_epochs}',
                         disable=not self.verbose, leave=False)
@@ -1032,6 +1052,8 @@ class Trainer:
                 _s_hidden = getattr(self.model, '_student_hidden', None)
                 # SCAD projection embedding (None if use_scad=False or teacher_only)
                 _scad_z = getattr(self.model, '_scad_z', None)
+                # Feature-wise training mask (None for the default patch masking path).
+                _loss_mask = getattr(self.model, '_feature_loss_mask', None)
 
                 # [신규 2026-06-01] EMA teacher 출력(있으면) — student discrepancy 표적으로 전달.
                 # _ema_active가 아니면 model이 None으로 두므로 loss는 기존(live teacher) 동작.
@@ -1040,7 +1062,8 @@ class Trainer:
                     teacher_output, student_output, sequences, mask, point_labels, warmup_factor,
                     teacher_only=teacher_only, grl_cls_logits=_grl_logits,
                     teacher_hidden=_t_hidden, student_hidden=_s_hidden,
-                    scad_z=_scad_z, ema_teacher_output=_ema_t_out
+                    scad_z=_scad_z, ema_teacher_output=_ema_t_out,
+                    loss_mask=_loss_mask,
                 )
 
             # train recon_snr 누적 (GPU 0-dim, no-grad). [2026-06-20] _es_on/teacher_only 게이트
@@ -1056,6 +1079,13 @@ class Trainer:
                 _es_sum_a = _es_sum_a + (_r * _isa).sum()
                 _es_sumsq_a = _es_sumsq_a + (_r * _r * _isa).sum()
                 _es_cnt_a = _es_cnt_a + _isa.sum()
+                # [2026-06-24] disc_snr 누적 (same masks; count shared with _es_cnt_n/a above)
+                if 'es_disc_per_sample' in loss_tensors:
+                    _d = loss_tensors['es_disc_per_sample']
+                    _ds_sum_n = _ds_sum_n + (_d * _isn).sum()
+                    _ds_sumsq_n = _ds_sumsq_n + (_d * _d * _isn).sum()
+                    _ds_sum_a = _ds_sum_a + (_d * _isa).sum()
+                    _ds_sumsq_a = _ds_sumsq_a + (_d * _d * _isa).sum()
 
             if do_profile:
                 torch.cuda.synchronize()
@@ -1480,9 +1510,19 @@ class Trainer:
                 _va = max(_es_sumsq_a.item() / _ca - _ma * _ma, 0.0)
                 _sn = _vn ** 0.5; _sa = _va ** 0.5
                 epoch_losses['_train_recon_snr'] = (_ma - _mn) / (_sa + _sn + 1e-8)
+                # [2026-06-24] train disc_snr (discrepancy 분리도; count _cn/_ca 공유). teacher-only
+                # warmup epoch 에는 sample_discrepancy=0 이라 ~0 (post-warmup 부터 의미 있음).
+                if torch.is_tensor(_ds_sum_n):
+                    _dmn = _ds_sum_n.item() / _cn; _dma = _ds_sum_a.item() / _ca
+                    _dvn = max(_ds_sumsq_n.item() / _cn - _dmn * _dmn, 0.0)
+                    _dva = max(_ds_sumsq_a.item() / _ca - _dma * _dma, 0.0)
+                    epoch_losses['_train_disc_snr'] = (_dma - _dmn) / (_dva ** 0.5 + _dvn ** 0.5 + 1e-8)
+                else:
+                    epoch_losses['_train_disc_snr'] = None
             else:
                 # anomaly 또는 normal 표본이 epoch 내 전무 → SNR 미정의. None 표식.
                 epoch_losses['_train_recon_snr'] = None
+                epoch_losses['_train_disc_snr'] = None
 
         # Feature-level epoch averages → epoch_losses (for history recording in train())
         if _feature_batch_count > 0 and _feature_accum['recon_mean'] is not None:
@@ -1813,6 +1853,7 @@ class Trainer:
             # Teacher train-recon SNR (warmup separation). Already in epoch_losses (1428);
             # persist it. None when not computed (non-early-stop runs / post-warmup epochs).
             self.history['train_recon_snr'].append(epoch_losses.get('_train_recon_snr', None))
+            self.history['train_disc_snr'].append(epoch_losses.get('_train_disc_snr', None))  # [2026-06-24]
             # Detailed metrics by sample type
             self.history['train_teacher_recon_normal'].append(epoch_losses['teacher_recon_normal'])
             self.history['train_teacher_recon_anomaly'].append(epoch_losses['teacher_recon_anomaly'])

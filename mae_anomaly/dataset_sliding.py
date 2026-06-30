@@ -1117,6 +1117,8 @@ class SlidingWindowDataset(Dataset):
         minmax_clamp_max: Optional[float] = None,  # test-only clamp upper (used when minmax_range='neg1_1')
         entity_segments: Optional[List[Tuple[int, int]]] = None,  # per-entity (train_len,test_len) for concat multi-entity datasets → per-entity normalization (else whole-array)
         blind_train_labels: bool = False,  # zero TRAIN-split point labels (label-blind control); no-op on test
+        train_label_mask_frac: float = 0.0,  # [2026-06-24] zero the BACK frac of TRAIN labels (unlabeled); 0=off, 1=all; no-op on test
+        train_exclude_anomaly_segments: bool = False,  # [2026-06-24] splice out anomaly timesteps from TRAIN + boundary at junctions; no-op on test
     ):
         self.window_size = window_size
         self.mask_last_n = mask_last_n
@@ -1180,6 +1182,22 @@ class SlidingWindowDataset(Dataset):
             # label-free. Test split / anomaly_regions (eval) are never touched.
             if blind_train_labels:
                 self.point_labels = np.zeros_like(self.point_labels)
+            elif train_label_mask_frac and float(train_label_mask_frac) > 0:
+                # [label-mask 2026-06-24; rank-fix 2026-06-30] Unlabel the chronologically-LAST
+                # `frac` of the TRAIN ANOMALY timepoints (ranked among anomaly points), NOT the
+                # back frac of the timeline. These datasets are [all-normal prefix]+[attack start],
+                # so every train anomaly sits in the back few % of the timeline → the old
+                # position-based masking wiped ~all anomalies at the smallest frac (unlab10≈unlab100).
+                # Rank-based removes exactly `frac` of the anomaly labels, scaling linearly.
+                # .copy() so the SHARED point_labels array (read by the test split AND the
+                # best_epoch_train_scores train-inference) keeps TRUE labels — masking is local
+                # to this train_dataset only. Normal labels are never touched. frac=1.0 ⇒ all
+                # anomaly labels zeroed (≡ blind_train_labels).
+                self.point_labels = self.point_labels.copy()
+                _anom_idx = np.nonzero(self.point_labels)[0]  # train anomaly timepoints (chronological)
+                _k = int(round(float(train_label_mask_frac) * len(_anom_idx)))
+                if _k > 0:
+                    self.point_labels[_anom_idx[-_k:]] = 0  # unlabel the latest k anomaly timepoints
             offset = 0
         else:  # test
             self.signals = signals[train_end:]
@@ -1212,6 +1230,25 @@ class SlidingWindowDataset(Dataset):
                         end=region.end - offset,
                         anomaly_type=region.anomaly_type
                     ))
+
+        # [exclude-anomaly-from-train 2026-06-24] REMOVE anomaly-labeled timesteps from the TRAIN
+        # signal (splice out); insert run boundaries at the splice junctions so windows never span
+        # a removed gap, and preserve existing boundaries (remapped to spliced coords). Fancy-index
+        # → new arrays, so the SHARED signals/point_labels (test split + best_epoch_train_scores)
+        # are NOT mutated; normalization scaler (fit pre-split) is untouched. Test split: no-op.
+        if train_exclude_anomaly_segments and split == 'train':
+            _keep = (self.point_labels == 0)
+            if not _keep.all():
+                _orig = np.nonzero(_keep)[0]  # original train-local indices retained (sorted)
+                _newb = set((np.nonzero(np.diff(_orig) != 1)[0] + 1).tolist())  # removed-gap junctions
+                for _b in (self.run_boundaries or []):  # preserve existing boundaries in new coords
+                    _i = int(np.searchsorted(_orig, _b))
+                    if 0 < _i < len(_orig):
+                        _newb.add(_i)
+                self.signals = self.signals[_keep]
+                self.point_labels = self.point_labels[_keep]  # all 0 (anomalies removed)
+                self.run_boundaries = sorted(_newb)
+                self.anomaly_regions = []  # no anomalies remain in train
 
         # Epoch offset for train augmentation
         self._epoch_offset = 0

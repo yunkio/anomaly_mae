@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026-06-24: `masking_strategy='feature_wise'` — feature-wise 마스킹 학습 어블레이션 (기본 'patch' = no-op)
+
+**동기**: 기존 patch 마스킹(시간 패치 토큰을 통째로 마스킹) 대신, **patch-feature 셀 단위**로 raw 입력을 마스킹하고 그 마스킹된 feature 셀에서만 recon/discrepancy loss를 계산하는 학습 어블레이션.
+
+**변경 (additive · 기본 'patch' = byte-identical)**:
+- `mae_anomaly/config.py`: `masking_strategy: str = 'patch'` 추가 (`'patch'`|`'feature_wise'`).
+- `mae_anomaly/model.py`: `feature_wise_masking()` 신규 + forward에 `feature_wise_training`(training ∧ feature_wise ∧ mask=None) 분기. **'patch'면 `feature_mask_token` 파라미터를 아예 생성하지 않음** → 모델 파라미터화 불변. 평가는 기존 patch leave-one-out 마스크 그대로 → **official scoring/inference 불변**.
+- `mae_anomaly/loss.py`: `loss_mask`((B,L,F) keep 마스크) 인자 추가 → feature 셀 단위 loss/denominator. `loss_mask=None`(기존 모든 경로)이면 원래 식과 **동일(byte-identical)**.
+- `mae_anomaly/trainer.py`: `masking_strategy` 검증(+`force_mask_all_anomaly`와 비호환 가드) + `_feature_loss_mask`를 loss에 전달.
+
+**검증**: 기본 'patch' default no-op(파라미터·loss 모두 byte-identical), py_compile OK. official 큐 odoff_featurewise 어블레이션으로 추가.
+
+## 2026-06-30: `train_label_mask_frac` 의미 수정 — 타임라인 위치 → anomaly 타임포인트 순위 기반
+
+**버그**: 기존 구현은 train **타임라인(전체 timestep)의 뒤쪽 frac 구간** 라벨을 통째로 0으로 만들었다(`point_labels[int(len*(1-frac)):]=0`). 그러나 본 base4 데이터셋은 모두 `[전부-정상 prefix] + [attack 시작부]` 구조라 **train anomaly가 전부 타임라인 맨 뒤 few %에 몰려** 있다 → 가장 작은 frac(unlab10=뒤 10%)에서 이미 WaDi_A1은 100%, PSM은 ~전부의 anomaly 라벨이 제거되어 **unlab10≈unlab100(비트-동일)**. 의도(anomaly 타임포인트의 시간순 후반 N%만 unlabel)와 불일치.
+
+**수정 (국소·기본 no-op)**:
+- `mae_anomaly/dataset_sliding.py`: frac>0 블록을 **anomaly 순위 기반**으로 — `anom_idx=np.nonzero(point_labels)[0]`(시간순 train anomaly 타임포인트), `k=round(frac*len(anom_idx))`, `point_labels[anom_idx[-k:]]=0`(최신 k개 anomaly만 unlabel). normal 라벨은 미변경. `.copy()` 유지 → 공유배열/test/train-진단 TRUE 라벨 보존. frac=1.0 ≡ `blind_train_labels`.
+- `mae_anomaly/config.py`: 주석을 "anomaly 타임포인트 후반 frac unlabel"로 동기화.
+
+**효과**: 의도된 graded sweep 복원 — WaDi_A1 unlab10/25/50/75/100 = 잔존 anomaly 라벨 90/75/50/25/0%(검증). frac=0=byte-identical, frac=1.0=blind 동치, test/normal 미변경.
+
+**실험**: 기존 unlab10~100 official 결과(버그 버전) 5개 삭제, `scripts/run_official_unlab_rankfix_after.py`로 현재 캠페인 종료 후 fresh 재실행 큐잉.
+
+## 2026-06-24: `train_exclude_anomaly_segments` — TRAIN에서 anomaly 구간 제거(splice) 옵션
+
+**동기**: "271 그대로지만 label 달린(anomaly) 데이터를 train에서 제외"하는 실험. 마스킹(label→0)이 아니라 **timestep 자체를 제거**하고, 제거로 생긴 이음새에 run boundary를 넣어 윈도가 서로 다른 시점을 잇지 않게.
+
+**변경 (국소·기본 no-op)**:
+- `mae_anomaly/config.py`: `train_exclude_anomaly_segments: bool = False`.
+- `mae_anomaly/dataset_sliding.py`: train-split의 anomaly_regions 필터 직후, flag면 `keep=(point_labels==0)`로 anomaly timestep을 splice(`self.signals[keep]`/`point_labels[keep]` = **fancy-index 새 배열** → 공유 signals/point_labels 미변조). run boundaries = removed-gap junction(`np.diff(orig)!=1`) + 기존 boundary remap(`searchsorted`). anomaly_regions=[]. 정규화 scaler는 분할 전 fit이라 불변 → **test 정규화 무관**.
+- `scripts/run_base_experiments.py`: 학습 train_dataset(2886) **한 곳에만** 전달.
+
+**검증**: 기본 False=byte-identical. synthetic으로 splice(800→720, anomaly 0, boundary=junction+remap), 공유배열 미변조, test split no-op, official config 반영 확인. official 큐 8th(`train_exclude_anomaly_segments=True`)로 추가.
+
+## 2026-06-24: `train_label_mask_frac` — TRAIN 라벨 부분 마스킹(unlabeled) 옵션
+
+**동기**: "271 그대로지만 train 라벨을 unlabeled로 두는" 실험 + 마스킹 비율 선택. 100% 마스킹은 기존 `blind_train_labels=True`로 가능했으나(전부/전무 bool), **부분(%) 마스킹은 미구현**이었다.
+
+**변경 (국소·기본 no-op)**:
+- `mae_anomaly/config.py`: `train_label_mask_frac: float = 0.0` 추가 (0=off, 1.0=전부, 0.5=back 50%).
+- `mae_anomaly/dataset_sliding.py`: `SlidingWindowDataset` train-split 블록에서 frac>0이면 train point_labels의 **뒤쪽 frac 구간만 0**으로. **`.copy()` 사용** → 공유 point_labels 배열 미변조 → test split + `best_epoch_train_scores`(train-추론 진단)는 **TRUE 라벨 유지**. frac=1.0 ≡ blind_train_labels.
+- `scripts/run_base_experiments.py`: 학습용 train_dataset(2885) **한 곳에만** `train_label_mask_frac` 전달. test/train-진단/bg-worker/viz 경로 미전달 → default 0.
+
+**의미**: 마스킹된 구간은 anomaly 라벨(1) 소멸 → GRL/anomaly 감독이 그 구간에서 비활성(라벨 0=정상 취급, label-free). frac=1.0이면 anomaly 표본 0 → train recon/disc SNR은 None(미정의).
+
+**검증**: 기본값 0이라 기존 전 실험 byte-identical. synthetic 테스트로 frac 0/0.5/1.0 정확 + 입력배열 미변조 확인. official 큐 6th(`train_label_mask_frac=1.0`)·7th(`=0.5`)로 추가.
+
+## 2026-06-24: train `disc_snr` per-epoch 로깅 추가 (recon_snr 미러링, early-stop 후보)
+
+**동기**: recon_snr(teacher recon 분리도)는 train history에 있었으나 **disc_snr(discrepancy 분리도, 논문 핵심 기여)** 는 미저장이라 disc_snr 기반 early-stopping을 보려면 매번 재추론해야 했다. freezeenc 재추론 분석 결과 disc_snr early-stop(ema0.2/pat2)이 recon_snr보다 우수(mean regret 0.0039 vs 0.0087, 3/4 데이터셋 정확 적중)여서 상시 로깅 가치 확인됨.
+
+**변경**:
+- `mae_anomaly/loss.py`: `loss_tensors['es_disc_per_sample'] = sample_discrepancy.detach()` 노출 (recon `es_teacher_recon_per_sample`과 동일 패턴; teacher-only warmup엔 sample_discrepancy=0). detached → loss 미진입 → **학습 byte-identical**.
+- `mae_anomaly/trainer.py`: disc 누적기(`_ds_sum/_ds_sumsq`, count는 `_es_cnt` 공유) → epoch 끝에서 `_train_disc_snr = (mean_a−mean_n)/(σ_a+σ_n+ε)` 계산 → `history['train_disc_snr']`에 append. recon_snr 계산을 그대로 미러링 (Cohen's-d, train data + train labels).
+
+**범위**: 새 run_base 프로세스부터 적용(fresh import). 진행 중인 run(메모리 내 구코드)은 미적용 — 2026-06-23 official 재개 큐에서 sd1(실행 중)은 제외, enc1sd1·w100p5·nogrl(미시작)부터 `train_disc_snr` 로깅됨. recon_snr 미저장이던 기존 5모델은 freezeenc만 재추론으로 disc_snr 확보.
+
 ## 2026-06-23: best-epoch 선택 POST-WARMUP 무조건 강제 (checkpoint + metric + viz 일원화)
 
 **문제**: 지금까지 post-warmup 강제는 **viz에만**, 그것도 `config.official` 게이트로만 적용됐다. best_checkpoint 저장(greedy)·최종 best_epoch·SWaT excl22 best는 **warmup 필터 없이** pak_auc_f1 전체 최대를 골라, student/discrepancy가 아직 안 배운 **pre-warmup epoch이 best_model·보고 메트릭으로 선택**될 수 있었다(예: WaDi_A1 metric-best=ep12 pre-warmup, viz=ep27 post-warmup으로 불일치).
