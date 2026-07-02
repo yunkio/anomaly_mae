@@ -21,7 +21,7 @@ EXPERIMENTS = [
     ('unlab25r',  'train_label_mask_frac=0.25 train_label_mask_random=True'),
     ('unlab50r',  'train_label_mask_frac=0.50 train_label_mask_random=True'),
     ('unlab75r',  'train_label_mask_frac=0.75 train_label_mask_random=True'),
-    ('unlab100r', 'train_label_mask_frac=1.00 train_label_mask_random=True'),
+    # unlab100r dropped 2026-07-02 (user): frac=1.0 masks ALL anomalies ⇒ identical to unlab100.
 ]
 
 

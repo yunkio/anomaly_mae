@@ -1118,7 +1118,8 @@ class SlidingWindowDataset(Dataset):
         entity_segments: Optional[List[Tuple[int, int]]] = None,  # per-entity (train_len,test_len) for concat multi-entity datasets → per-entity normalization (else whole-array)
         blind_train_labels: bool = False,  # zero TRAIN-split point labels (label-blind control); no-op on test
         train_label_mask_frac: float = 0.0,  # [2026-06-24] zero the BACK frac of TRAIN labels (unlabeled); 0=off, 1=all; no-op on test
-        train_label_mask_random: bool = False,  # [2026-07-02] unlabel a RANDOM frac (seeded) instead of the chronologically-last frac; no-op on test / when frac=0
+        train_label_mask_random: bool = False,  # [2026-07-02; group 2026-07-03] unlabel a RANDOM frac of 100-ts anomaly GROUPS (seeded) instead of the chronologically-last frac; no-op on test / when frac=0
+        train_label_mask_group_size: int = 100,  # [2026-07-03] bin width (timestamps) for grouped random masking
         train_exclude_anomaly_segments: bool = False,  # [2026-06-24] splice out anomaly timesteps from TRAIN + boundary at junctions; no-op on test
     ):
         self.window_size = window_size
@@ -1196,15 +1197,22 @@ class SlidingWindowDataset(Dataset):
                 # anomaly labels zeroed (≡ blind_train_labels).
                 self.point_labels = self.point_labels.copy()
                 _anom_idx = np.nonzero(self.point_labels)[0]  # train anomaly timepoints (chronological)
-                _k = int(round(float(train_label_mask_frac) * len(_anom_idx)))
-                if _k > 0:
-                    if train_label_mask_random:
-                        # [2026-07-02] unlabel a RANDOM k of the train anomaly timepoints (fixed-seed
-                        # RandomState → reproducible, independent of training RNG). frac=1.0 ⇒ k=len ⇒
-                        # all anomaly labels zeroed (same as back masking). Normal labels untouched.
-                        _sel = np.random.RandomState(42).choice(_anom_idx, size=_k, replace=False)
-                        self.point_labels[_sel] = 0
-                    else:
+                if train_label_mask_random:
+                    # [2026-07-03] GROUP-level random: bin the anomaly timepoints into
+                    # `group_size`-timestamp windows (idx // group_size, chronological), pick a RANDOM
+                    # `frac` of the GROUPS (fixed-seed RandomState → reproducible), and unlabel every
+                    # anomaly point in the chosen groups. Coarser/meaningful vs scattered point masking;
+                    # frac=1.0 ⇒ all groups ⇒ all anomaly labels zeroed. Normal labels untouched.
+                    _gs = max(1, int(train_label_mask_group_size))
+                    _grp = _anom_idx // _gs
+                    _ug = np.unique(_grp)                                  # non-empty 100-ts groups
+                    _ng = int(round(float(train_label_mask_frac) * len(_ug)))
+                    if _ng > 0:
+                        _selg = np.random.RandomState(42).choice(_ug, size=_ng, replace=False)
+                        self.point_labels[_anom_idx[np.isin(_grp, _selg)]] = 0
+                else:
+                    _k = int(round(float(train_label_mask_frac) * len(_anom_idx)))
+                    if _k > 0:
                         self.point_labels[_anom_idx[-_k:]] = 0  # unlabel the latest k anomaly timepoints
             offset = 0
         else:  # test

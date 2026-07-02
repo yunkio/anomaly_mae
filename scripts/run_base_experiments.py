@@ -2884,6 +2884,7 @@ def run_base_experiment(dataset_def, config_preset, results_base, progress_info=
             blind_train_labels=getattr(config, 'blind_train_labels', False),
             train_label_mask_frac=getattr(config, 'train_label_mask_frac', 0.0),
             train_label_mask_random=getattr(config, 'train_label_mask_random', False),
+            train_label_mask_group_size=getattr(config, 'train_label_mask_group_size', 100),
             train_exclude_anomaly_segments=getattr(config, 'train_exclude_anomaly_segments', False),
         )
     # drop_last=True (when dataset is large enough): keeps batch shape constant across steps,

@@ -1,15 +1,15 @@
 # Changelog
 
-## 2026-07-02: `train_label_mask_random` — TRAIN 라벨 마스킹을 시간순-마지막 대신 랜덤 frac으로 (기본 False = no-op)
+## 2026-07-02: `train_label_mask_random` — TRAIN 라벨 마스킹을 시간순-마지막 대신 랜덤으로 (그룹-단위, 2026-07-03 개정; 기본 False = no-op)
 
-**동기**: `train_label_mask_frac`(anomaly 타임포인트의 시간순 후반 frac unlabel)의 랜덤 대조군 — 후반부 편향 없이 **무작위 frac**을 unlabel해 위치 효과와 분리.
+**동기**: `train_label_mask_frac`(anomaly 타임포인트의 시간순 후반 frac unlabel)의 랜덤 대조군 — 후반부 편향 없이 무작위로 unlabel해 위치 효과와 분리. 산발적 point-단위 대신 **연속 구간(그룹) 단위**로 마스킹해야 의미가 있어 group-level로 개정.
 
 **변경 (additive · 기본 False = byte-identical)**:
-- `mae_anomaly/config.py`: `train_label_mask_random: bool = False`. `train_label_mask_frac>0`과 함께일 때만 의미.
-- `mae_anomaly/dataset_sliding.py`: 기존 `frac>0` 블록 안에서 True면 `np.random.RandomState(42).choice(anom_idx, k, replace=False)`로 **랜덤 k개** anomaly 타임포인트 unlabel(고정 시드 → 재현 가능, 학습 RNG 미교란). False면 기존 시간순-마지막 경로 그대로. frac=1.0 ⇒ 전부(back과 동일).
-- `scripts/run_base_experiments.py`: 학습 train_dataset에 `train_label_mask_random` 전달(getattr default False).
+- `mae_anomaly/config.py`: `train_label_mask_random: bool = False` + `train_label_mask_group_size: int = 100`. `train_label_mask_frac>0`과 함께일 때만 의미.
+- `mae_anomaly/dataset_sliding.py`: 기존 `frac>0` 블록 안에서 True면 anomaly 타임포인트를 `group_size`(=100)-ts 빈(`idx // group_size`)으로 묶고 `RandomState(42)`로 **랜덤 frac의 그룹**을 골라 그 그룹의 모든 anomaly point를 unlabel(고정 시드 → 재현 가능, 학습 RNG 미교란). False면 기존 시간순-마지막 경로 그대로. frac=1.0 ⇒ 전 그룹 ⇒ 전부(back과 동일).
+- `scripts/run_base_experiments.py`: 학습 train_dataset에 `train_label_mask_random`/`train_label_mask_group_size` 전달(getattr default False/100).
 
-**검증**: 기본 False + frac=0 이중 default-off → 기존 전 실험 byte-identical. py_compile OK. official 큐 unlab_random(frac 0.10/0.25/0.50/0.75/1.00)으로 추가.
+**검증**: 기본 False + frac=0 이중 default-off → 기존 전 실험 byte-identical. py_compile OK. official 큐 unlab_random(frac 0.10/0.25/0.50/0.75; frac=1.0=unlab100과 동일이라 제외)으로 추가.
 
 ## 2026-06-24: `masking_strategy='feature_wise'` — feature-wise 마스킹 학습 어블레이션 (기본 'patch' = no-op)
 
