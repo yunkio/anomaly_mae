@@ -1118,6 +1118,7 @@ class SlidingWindowDataset(Dataset):
         entity_segments: Optional[List[Tuple[int, int]]] = None,  # per-entity (train_len,test_len) for concat multi-entity datasets → per-entity normalization (else whole-array)
         blind_train_labels: bool = False,  # zero TRAIN-split point labels (label-blind control); no-op on test
         train_label_mask_frac: float = 0.0,  # [2026-06-24] zero the BACK frac of TRAIN labels (unlabeled); 0=off, 1=all; no-op on test
+        train_label_mask_random: bool = False,  # [2026-07-02] unlabel a RANDOM frac (seeded) instead of the chronologically-last frac; no-op on test / when frac=0
         train_exclude_anomaly_segments: bool = False,  # [2026-06-24] splice out anomaly timesteps from TRAIN + boundary at junctions; no-op on test
     ):
         self.window_size = window_size
@@ -1197,7 +1198,14 @@ class SlidingWindowDataset(Dataset):
                 _anom_idx = np.nonzero(self.point_labels)[0]  # train anomaly timepoints (chronological)
                 _k = int(round(float(train_label_mask_frac) * len(_anom_idx)))
                 if _k > 0:
-                    self.point_labels[_anom_idx[-_k:]] = 0  # unlabel the latest k anomaly timepoints
+                    if train_label_mask_random:
+                        # [2026-07-02] unlabel a RANDOM k of the train anomaly timepoints (fixed-seed
+                        # RandomState → reproducible, independent of training RNG). frac=1.0 ⇒ k=len ⇒
+                        # all anomaly labels zeroed (same as back masking). Normal labels untouched.
+                        _sel = np.random.RandomState(42).choice(_anom_idx, size=_k, replace=False)
+                        self.point_labels[_sel] = 0
+                    else:
+                        self.point_labels[_anom_idx[-_k:]] = 0  # unlabel the latest k anomaly timepoints
             offset = 0
         else:  # test
             self.signals = signals[train_end:]

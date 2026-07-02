@@ -19,7 +19,8 @@ SUBDIRS = {'SWaT_A1A2': ['SWaT/A1A2_full', 'SWaT/A1A2_excl22'],
 # only once all three are gone (robust to whatever inter-waiter chain order they use).
 WAIT_TOKENS = ['run_official_resume_full_queue_after_pause',
                'run_official_odoff_featurewise_after_full_queue',
-               'run_official_unlab_rankfix_after']
+               'run_official_unlab_rankfix_after',
+               'run_official_unlab_random_after']  # [2026-07-02] queue-jumped random-unlab runs first
 SEEDS = [40, 41, 43, 44]
 BASE = 'official=True num_epochs=30 official_keep_checkpoints=False'
 

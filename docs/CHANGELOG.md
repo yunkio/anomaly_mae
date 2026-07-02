@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-02: `train_label_mask_random` — TRAIN 라벨 마스킹을 시간순-마지막 대신 랜덤 frac으로 (기본 False = no-op)
+
+**동기**: `train_label_mask_frac`(anomaly 타임포인트의 시간순 후반 frac unlabel)의 랜덤 대조군 — 후반부 편향 없이 **무작위 frac**을 unlabel해 위치 효과와 분리.
+
+**변경 (additive · 기본 False = byte-identical)**:
+- `mae_anomaly/config.py`: `train_label_mask_random: bool = False`. `train_label_mask_frac>0`과 함께일 때만 의미.
+- `mae_anomaly/dataset_sliding.py`: 기존 `frac>0` 블록 안에서 True면 `np.random.RandomState(42).choice(anom_idx, k, replace=False)`로 **랜덤 k개** anomaly 타임포인트 unlabel(고정 시드 → 재현 가능, 학습 RNG 미교란). False면 기존 시간순-마지막 경로 그대로. frac=1.0 ⇒ 전부(back과 동일).
+- `scripts/run_base_experiments.py`: 학습 train_dataset에 `train_label_mask_random` 전달(getattr default False).
+
+**검증**: 기본 False + frac=0 이중 default-off → 기존 전 실험 byte-identical. py_compile OK. official 큐 unlab_random(frac 0.10/0.25/0.50/0.75/1.00)으로 추가.
+
 ## 2026-06-24: `masking_strategy='feature_wise'` — feature-wise 마스킹 학습 어블레이션 (기본 'patch' = no-op)
 
 **동기**: 기존 patch 마스킹(시간 패치 토큰을 통째로 마스킹) 대신, **patch-feature 셀 단위**로 raw 입력을 마스킹하고 그 마스킹된 feature 셀에서만 recon/discrepancy loss를 계산하는 학습 어블레이션.

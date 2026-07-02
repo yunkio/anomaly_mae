@@ -439,6 +439,10 @@ class Config:
     # the timeline; rank-based gives the intended graded sweep.) Applied ONLY to the training
     # train_dataset (via .copy(), so the shared array / test split / best_epoch_train_scores keep
     # TRUE labels). Normal labels are never touched. Test labels + eval UNTOUCHED.
+    train_label_mask_random: bool = False  # [label-mask random 2026-07-02] when True, unlabel a
+    # RANDOM `frac` of the TRAIN ANOMALY timepoints (seeded, reproducible) instead of the
+    # chronologically-LAST frac. False (default) = unchanged back/rank masking (byte-identical).
+    # Only meaningful together with train_label_mask_frac>0.
     train_exclude_anomaly_segments: bool = False  # [exclude-anomaly 2026-06-24] REMOVE anomaly-
     # labeled timesteps from the TRAIN signal entirely (not mask — splice out), inserting run
     # boundaries at the splice junctions so windows never span a removed gap (existing boundaries
