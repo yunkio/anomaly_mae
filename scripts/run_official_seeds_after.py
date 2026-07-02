@@ -15,15 +15,22 @@ PROJECT = '/home/ykio/notebooks/TSMAE'
 ALL4 = ['PSM', 'SWaT_A1A2', 'WaDi_A1', 'WaDi_A2']
 SUBDIRS = {'SWaT_A1A2': ['SWaT/A1A2_full', 'SWaT/A1A2_excl22'],
            'WaDi_A1': ['WaDi/A1'], 'WaDi_A2': ['WaDi/A2'], 'PSM': ['PSM']}
-WAIT_TOKEN = 'run_official_unlabeled_after'
+# Wait for the ENTIRE current campaign: master queue + both follow-up waiters. Seeds run
+# only once all three are gone (robust to whatever inter-waiter chain order they use).
+WAIT_TOKENS = ['run_official_resume_full_queue_after_pause',
+               'run_official_odoff_featurewise_after_full_queue',
+               'run_official_unlab_rankfix_after']
 SEEDS = [40, 41, 43, 44]
 BASE = 'official=True num_epochs=30 official_keep_checkpoints=False'
 
 
 def queue_alive():
-    r = subprocess.run(['pgrep', '-f', WAIT_TOKEN], capture_output=True, text=True)
-    pids = [p for p in r.stdout.split() if p and int(p) != os.getpid()]
-    return bool(pids)
+    for tok in WAIT_TOKENS:
+        r = subprocess.run(['pgrep', '-f', tok], capture_output=True, text=True)
+        pids = [p for p in r.stdout.split() if p and int(p) != os.getpid()]
+        if pids:
+            return True
+    return False
 
 
 def run(outdir, seed):
