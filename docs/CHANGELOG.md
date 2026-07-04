@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-04: `train_label_mask_exclude` — 마스킹된 anomaly를 unlabeled로 두지 않고 학습에서 **제거** (기본 False = no-op)
+
+**동기**: group-random 마스킹 스윕(unlab10r/25r/50r/75r)의 짝 실험. 마스킹은 선택된 anomaly 타임포인트의 **라벨만 0으로** 가리고 데이터는 unlabeled로 학습에 남긴다. 이 옵션은 **똑같이 선택된** 타임포인트를 아예 splice 제거해, "가린 이상치를 unlabeled 데이터로 유지" vs "완전 제거"를 동일 타임포인트에서 분리 비교한다. frac=1.0(전 그룹)은 전 anomaly 제거 ≡ 기존 `exclanom`(`train_exclude_anomaly_segments=True`)과 동일하므로 재실행 제외.
+
+**변경 (additive · 기본 False = byte-identical)**:
+- `mae_anomaly/config.py`: `train_label_mask_exclude: bool = False`. `train_label_mask_frac>0`과 함께일 때만 의미. `train_exclude_anomaly_segments`(frac 무관 전 anomaly 제거)와 상호배타.
+- `mae_anomaly/dataset_sliding.py`: 기존 마스킹 블록을 `_sel`(선택 인덱스) 계산 후 분기하도록 리팩터 — exclude=False면 `point_labels[_sel]=0`(기존과 byte-identical), True면 `_mask_exclude_keep` 마스크를 만들어 run_boundaries 설정 뒤 splice(선택분 제거 + junction에 boundary 삽입 + 생존 anomaly_regions를 spliced 좌표로 remap). 미선택 그룹은 TRUE 라벨 유지 → recon_snr/GRL/anomaly_loss가 그대로 관측. 기존 `train_exclude_anomaly_segments`(전 anomaly 제거) 경로와 별개.
+- `scripts/run_base_experiments.py`: 학습 train_dataset에 `train_label_mask_exclude` 전달(getattr default False).
+
+**검증**: (1) **무회귀** — 실데이터 4개(PSM/WaDi_A1/A2/SWaT) 전 frac에서 리팩터 전후 마스킹 byte-identical. (2) **no-op** — exclude=True+frac=0 → baseline 완전 동일, test split 무영향. (3) **의도 동작** — 합성 SlidingWindowDataset 통합테스트로 선택분만 splice, 미선택 TRUE 라벨 유지, boundary 삽입, region remap 정확, frac=1.0≡전량 제거 확인. (4) **선택 동일성** — exclude가 제거하는 지점 = mask가 가리는 지점(동일 RandomState(42)). py_compile OK. official 큐 exclude_grouprandom(excl10r/25r/50r/75r; 100%=exclanom 제외)로 추가(seeds→discsnr→odofffeat 뒤).
+
 ## 2026-07-02: `train_label_mask_random` — TRAIN 라벨 마스킹을 시간순-마지막 대신 랜덤으로 (그룹-단위, 2026-07-03 개정; 기본 False = no-op)
 
 **동기**: `train_label_mask_frac`(anomaly 타임포인트의 시간순 후반 frac unlabel)의 랜덤 대조군 — 후반부 편향 없이 무작위로 unlabel해 위치 효과와 분리. 산발적 point-단위 대신 **연속 구간(그룹) 단위**로 마스킹해야 의미가 있어 group-level로 개정.
