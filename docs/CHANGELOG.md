@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-07-11: `use_reconsnr_es_halt` — POST-warmup recon_snr early-stop이 실제로 학습을 halt (기본 False = byte-identical)
+
+**동기**: 논문의 recon_snr ES 기준(post-warmup·EMA α=0.2·best-so-far·patience=2)은 지금까지 30ep 완주 후 **사후 선택**이었다. 실제로 그 epoch에서 학습을 멈추게 하여 compute를 절약(ES=16 셀은 e18에서 정지, 12ep 절약)하고 논문이 주장하는 early-stop을 코드로 구현.
+
+**변경 (additive · 기본 False = byte-identical)**:
+- `mae_anomaly/config.py`: `use_reconsnr_es_halt: bool = False` + `reconsnr_es_halt_alpha: float = 0.2` + `reconsnr_es_halt_patience: int = 2`. 기존 `teacher_warmup_*` early-stop(=warmup 단축)과 별개.
+- `mae_anomaly/trainer.py`: epoch 루프 끝(`post_epoch_callback` 뒤, 현재 epoch 산출물 저장 후)에 게이트 블록 추가. `self.history['train_recon_snr']` 위에서 사후 `es()`와 **동일한** 스트리밍 기준을 돌려 patience 소진 epoch에서 `break`. recon_snr None(train 이상라벨 없음: blind/excised)은 skip → 트리거 안 됨(완주). False면 블록 전체 미실행.
+
+**왜 결과가 사후방식과 동일한가**: 사후 `es()`도 첫 patience-소진에서 break해 그 이후 epoch을 무시한다. halt는 바로 그 지점에서 학습을 멈추므로 ES epoch(best_ep)과 그 모델 상태·scores NPZ가 불변. 사후 VUS 스윕은 저장된 **전 epoch**(`glob('epoch_*_scores.npz')`)을 계산하므로 halt로 18ep만 저장돼도 ES epoch(16)의 VUS가 채워진다.
+
+**검증**: (1) 스트리밍 기준이 사후 `es()`와 동일 ES epoch — 실데이터 5시드×4셀 20/20 일치. (2) **end-to-end 수용검증**: PSM seed40 baseline+halt 실행 → e18 halt(12ep skip), e16의 8개 지표(pak/vus_pr/vus_roc/aff/prc/f1_t/pa_0_f1/r_based_f1_ar) **전부 기존 30ep 런과 소수 8자리까지 bit-identical**. (3) flag off → 블록 미실행 byte-identical. py_compile OK.
+
 ## 2026-07-04: `train_label_mask_exclude` — 마스킹된 anomaly를 unlabeled로 두지 않고 학습에서 **제거** (기본 False = no-op)
 
 **동기**: group-random 마스킹 스윕(unlab10r/25r/50r/75r)의 짝 실험. 마스킹은 선택된 anomaly 타임포인트의 **라벨만 0으로** 가리고 데이터는 unlabeled로 학습에 남긴다. 이 옵션은 **똑같이 선택된** 타임포인트를 아예 splice 제거해, "가린 이상치를 unlabeled 데이터로 유지" vs "완전 제거"를 동일 타임포인트에서 분리 비교한다. frac=1.0(전 그룹)은 전 anomaly 제거 ≡ 기존 `exclanom`(`train_exclude_anomaly_segments=True`)과 동일하므로 재실행 제외.

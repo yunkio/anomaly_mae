@@ -390,6 +390,18 @@ class Config:
     teacher_warmup_es_relative_threshold: float = 0.01  # best-low 대비 상대 악화 임계(1%)
     teacher_warmup_es_min_epoch: int = 20           # 이 epoch 이전엔 트리거 금지(train_loss 모드)
 
+    # === [신규 2026-07-11] POST-warmup recon_snr early-stop HALT (opt-in, default off) ===
+    # 위 teacher_warmup_* early-stop(=warmup 단축)과 별개. 이건 POST-warmup 구간에서 논문의 사후
+    # ES 기준(post-warmup·EMA(alpha)·best-so-far·patience)을 스트리밍으로 재현해, 그 기준이 break하는
+    # 바로 그 epoch에서 학습을 halt한다. 사후 선택도 break 이후 epoch을 무시하므로, 기록되는 ES epoch
+    # (best_ep)과 그 지표는 30ep 완주 런과 bit-identical(사후 VUS 스윕이 저장된 전 epoch을 계산 →
+    # ES epoch 포함). recon_snr None(train 이상라벨 없음: blind/excised)이면 트리거 안 됨 → 완주.
+    # keep=False 전제(rollback 불필요; 지표는 NPZ 사후 스윕에서 읽음). False면 블록 전체 미실행 =
+    # byte-identical.
+    use_reconsnr_es_halt: bool = False
+    reconsnr_es_halt_alpha: float = 0.2             # EMA 평활 계수 (사후 기준과 동일)
+    reconsnr_es_halt_patience: int = 2              # 연속 무갱신 EMA epoch 수 → halt (사후 기준과 동일)
+
     best_epoch_metric: str = 'pak_auc_f1'  # Metric for best epoch selection
     # - 'pak_auc_f1': PA%K AUC of F1 with per-K threshold re-optimization (best_f1_w_pa, recommended)
     #   Per-K threshold sweep after PA%K segment adjustment (Kim et al., AAAI 2022 tadpak method)

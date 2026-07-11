@@ -2051,4 +2051,36 @@ class Trainer:
             if post_epoch_callback is not None:
                 post_epoch_callback(epoch, self.history)
 
+            # [신규 2026-07-11] POST-warmup recon_snr early-stop HALT (opt-in; default off →
+            # 블록 전체 미실행 = byte-identical). 논문의 사후 ES 기준(post-warmup·EMA(alpha)·
+            # best-so-far·patience)을 self.history['train_recon_snr'] 위에서 스트리밍으로 재현하고,
+            # patience가 처음 소진되는 epoch에서 break한다. 사후 선택도 그 지점에서 break하므로 기록되는
+            # ES epoch(best_ep)과 그 지표는 불변. 위치: post_epoch_callback(체크포인트/NPZ 저장) 뒤라
+            # 현재 epoch 산출물이 모두 저장된 상태에서 종료. recon_snr None(라벨 없음)은 skip → 트리거 안 됨.
+            if getattr(self.config, 'use_reconsnr_es_halt', False):
+                _hw = int(self.config.teacher_only_warmup_epochs)
+                _ha = float(getattr(self.config, 'reconsnr_es_halt_alpha', 0.2))
+                _hp = int(getattr(self.config, 'reconsnr_es_halt_patience', 2))
+                _rs = self.history['train_recon_snr']
+                _ema = None; _best = None; _bep = None; _cnt = 0; _halt = False
+                for _e in range(1, len(_rs) + 1):
+                    _v = _rs[_e - 1]
+                    if _e <= _hw or _v is None:       # warmup 이하 / recon_snr 미정의 → skip
+                        continue
+                    _ema = _v if _ema is None else _ha * _v + (1.0 - _ha) * _ema
+                    if _best is None or _ema > _best:  # best-so-far EMA 갱신
+                        _best = _ema; _bep = _e; _cnt = 0
+                    else:
+                        _cnt += 1
+                        if _cnt >= _hp:               # patience 소진 → 이 지점에서 halt
+                            _halt = True
+                            break
+                if _halt:
+                    self._reconsnr_es_halt_epoch = _bep
+                    if self.verbose:
+                        print(f"  [ReconSNR-ES-Halt] ep{epoch+1}: patience={_hp} exhausted "
+                              f"(EMA alpha={_ha}, warmup={_hw}); ES epoch={_bep}. Halting "
+                              f"({self.config.num_epochs - (epoch + 1)} epochs skipped).", flush=True)
+                    break
+
         return self.history
