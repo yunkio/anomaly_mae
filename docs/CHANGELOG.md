@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-12: bg-worker HANG BACKSTOP — 고아 eval/viz 워커 무한누적 근본원인 수정 (정상 워커 byte-identical)
+
+**근본원인**: 모든 launcher가 `run_base --no-wait`로 실행 → run_base가 background eval+viz+VUS-sweep 워커(`_cpu_eval_viz_worker`, dataset당 1~2개, `ctx.Process` **non-daemon**, ~35 OpenBLAS 스레드 + 큰 RSS)를 **join/terminate 없이 버리고 종료**. hung/deadlock 워커는 init로 재부모돼 **영원히 고아**로 남고, "max 10" throttle은 run_base별 로컬이라 이전 실험 고아를 세지 않음 → 긴 큐에서 누적 → **재부팅으로만 해소**(사용자 반복 재부팅 증상).
+
+**수정 (`scripts/run_base_experiments.py` `_cpu_eval_viz_worker`)**: body를 감싸는 **hang-backstop daemon Timer** 추가. `MAE_BG_WORKER_TIMEOUT`(기본 **1800s=30min**, 정상 워커 ~2-10min의 3배↑ 여유) 초과 시 자식(VUS pool)까지 `SIGKILL` 후 `os._exit` → 고아 없이 자멸. body 완료(성공/실패) 즉시 `finally`에서 **cancel → 정상 워커는 타이머 무발동 → 출력 byte-identical**. `os.setsid` 미사용(=run_base 프로세스그룹 유지 → 수동 pause의 PGID-kill이 기존대로 워커까지 reap). Timer 스레드는 main이 C-ext(BLAS/torch)에 갇혀도 발동(GIL 짧게만 점유), `os._exit`는 어느 스레드에서도 종료.
+
+**검증**: (1) standalone KILL-path — 타임아웃 시 자식 정리(고아 0) + 자기 종료 확인. (2) standalone CANCEL-path — 완료 시 cancel → 무발동·생존. (3) 정상 워커 무영향은 구조적 보장(cancelled Timer=무효과). (4) end-to-end 실파이프라인 확인. py_compile OK. 성능/속도 무영향(30min 백스톱은 정상 워커에 절대 도달 안 함).
+
 ## 2026-07-11: `use_reconsnr_es_halt` — POST-warmup recon_snr early-stop이 실제로 학습을 halt (기본 False = byte-identical)
 
 **동기**: 논문의 recon_snr ES 기준(post-warmup·EMA α=0.2·best-so-far·patience=2)은 지금까지 30ep 완주 후 **사후 선택**이었다. 실제로 그 epoch에서 학습을 멈추게 하여 compute를 절약(ES=16 셀은 e18에서 정지, 12ep 절약)하고 논문이 주장하는 early-stop을 코드로 구현.

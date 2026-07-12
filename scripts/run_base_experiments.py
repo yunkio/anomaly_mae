@@ -1906,6 +1906,48 @@ def _cpu_eval_viz_worker(exp_name, exp_dir, config_dict, signals, point_labels,
     except Exception as _re:
         print(f"  [{exp_name}] WARN: recovery payload dump failed ({_re}) — proceeding without safety net", flush=True)
 
+    # === [2026-07-12] HANG BACKSTOP (orphan-accumulation root-cause fix) ===
+    # Launchers run run_base with --no-wait, so run_base exits WITHOUT joining its background
+    # eval+viz+VUS-sweep workers (this function). A hung/deadlocked worker then becomes an orphan
+    # (reparented to init) that lives forever — ~35 OpenBLAS threads + large RSS each — and the
+    # per-run_base throttle does not count orphans from prior experiments. Over a long queue these
+    # accumulate until only a reboot clears them. This daemon timer HARD-KILLS this worker AND its
+    # VUS-sweep ProcessPool children if the worker exceeds MAE_BG_WORKER_TIMEOUT (default 1800s =
+    # 30 min — a generous backstop far above any healthy worker (~2-10 min), so legitimate slow
+    # viz/VUS is NEVER killed). It is CANCELLED the instant the body finishes (success OR failure),
+    # so healthy workers are byte-identical (the timer never fires → zero effect on output). The
+    # Timer runs in its own thread and fires even if the main thread is stuck inside a C-extension
+    # (BLAS/torch release the GIL), and os._exit()/SIGKILL terminate from any thread. NOT killed by
+    # os.setsid so the worker stays in run_base's process group → a PGID-kill of the launcher (manual
+    # pause) still reaps it exactly as before.
+    import threading as _threading
+    import signal as _signal
+    _bg_timeout = float(os.environ.get('MAE_BG_WORKER_TIMEOUT', '1800'))
+
+    def _bg_hang_backstop():
+        _mypid = os.getpid()
+        try:  # kill direct children (VUS-sweep pool workers) first — leave nothing orphaned
+            for _pd in os.listdir('/proc'):
+                if not _pd.isdigit():
+                    continue
+                try:
+                    with open(f'/proc/{_pd}/stat') as _sf:
+                        _ppid = int(_sf.read().rsplit(')', 1)[1].split()[1])
+                    if _ppid == _mypid:
+                        os.kill(int(_pd), _signal.SIGKILL)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        sys.stderr.write(f"  [{exp_name}] BG-WORKER HANG BACKSTOP: exceeded {_bg_timeout:.0f}s "
+                         f"(PID={_mypid}) — hard-exiting to prevent orphan accumulation.\n")
+        sys.stderr.flush()
+        os._exit(1)
+
+    _bg_wd = _threading.Timer(_bg_timeout, _bg_hang_backstop)
+    _bg_wd.daemon = True
+    _bg_wd.start()
+
     # Wrap entire bg-worker body so we can preserve recovery file on any failure
     try:
         _bg_worker_body(
@@ -1924,6 +1966,8 @@ def _cpu_eval_viz_worker(exp_name, exp_dir, config_dict, signals, point_labels,
             os.unlink(_recovery_path)
         except OSError:
             pass
+    finally:
+        _bg_wd.cancel()   # [2026-07-12] body done (success/fail) → cancel hang backstop (no-op if unfired)
 
 
 def _bg_worker_body(exp_name, exp_dir, config_dict, signals, point_labels,
