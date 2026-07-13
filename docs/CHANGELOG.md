@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-13: 자원누적 근본원인 완결 — graceful backstop + startup self-heal reaper (재부팅 불필요화)
+
+**증상**: 캠페인이 길어질수록 하드웨어 부담↑ → 반복 재부팅. **근본원인(4-에이전트 적대 워크플로우로 확정, high-conf)**:
+- **1차(RAM staircase, 역사적 주범)**: launcher가 `run_base --no-wait` → run_base가 detached bg-worker를 join 없이 종료 → hang(특히 Timer가 못 깨는 GIL-holding C hang)하거나 sweep 중이던 워커가 **init로 reparent된 영구 고아**(각 0.5~1.7GB+~35스레드). throttle(:4452)은 run_base별 로컬 리스트라 이전 조건 고아를 못 셈. `use_reconsnr_es_halt`가 증폭기(조기종료→데이터셋 빨리끝→3코어에 bg-worker 몰림→N배 느려짐→trailing 고아↑). ~17개 쌓이면 swap-thrash. 12번 재부팅 중 대부분이 backstop(7/12) 이전 = 이게 역사적 driver.
+- **2차(loky semaphore)**: 337e3cc backstop의 `os._exit`+SIGKILL이 **워커 자신의 resource_tracker까지 죽여** sem 정리를 막음 → 발동당 ~5 sem 누수(재현됨). 정상운영·graceful 종료는 누수 0(실증).
+
+**수정(전부 post-training/startup 경로 → 학습 compute/결과/속도 무영향)**:
+1. **graceful backstop** (`_bg_hang_backstop`): resource_tracker는 **살려두고**(EOF로 sem 정리) 나머지 descendant(손자 포함) pool 워커만 SIGTERM→grace(`MAE_BG_BACKSTOP_GRACE`=5s)→SIGKILL 후 os._exit. → 발동당 sem 누수 0 + 손자 고아 방지 + ppid==self race 해소.
+2. **startup loky-sem reaper** (`_startup_self_heal`): `/dev/shm/sem.loky-<pid>-*` 중 owner pid가 죽은 것만 unlink(교차-캠페인 self-heal). mp sem(랜덤명)은 안 건드림.
+3. **startup age-gated orphan reaper**: ppid==1 + spawn/bg-worker 시그니처 + age > `MAE_BG_WORKER_TIMEOUT`+300s인 고아 프로세스만 SIGTERM→SIGKILL. Timer가 못 잡는 GIL-hang 고아를 **외부에서** 회수. age gate로 직전 조건의 정상 trailing 워커(ppid=1이지만 수초~수분)는 보존.
+
+**검증**: (1) graceful backstop 실제 bg-worker 발동 end-to-end — 종료·VUS pool 자식0·ppid1 고아0·**sem 누수0**(구 backstop=5 대비); 정상완료 경로도 clean(자식 정리, sem0). (2) age 계산이 `ps -o etimes`와 정확 일치 → fresh 워커 오살 없음. (3) loky reaper: dead-pid 삭제/live-pid 보존. (4) py_compile OK. 효과: 매 run_base startup이 직전 잔여물 self-heal → 캠페인 누적 불가.
+
 ## 2026-07-12: bg-worker HANG BACKSTOP — 고아 eval/viz 워커 무한누적 근본원인 수정 (정상 워커 byte-identical)
 
 **근본원인**: 모든 launcher가 `run_base --no-wait`로 실행 → run_base가 background eval+viz+VUS-sweep 워커(`_cpu_eval_viz_worker`, dataset당 1~2개, `ctx.Process` **non-daemon**, ~35 OpenBLAS 스레드 + 큰 RSS)를 **join/terminate 없이 버리고 종료**. hung/deadlock 워커는 init로 재부모돼 **영원히 고아**로 남고, "max 10" throttle은 run_base별 로컬이라 이전 실험 고아를 세지 않음 → 긴 큐에서 누적 → **재부팅으로만 해소**(사용자 반복 재부팅 증상).

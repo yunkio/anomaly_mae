@@ -1923,24 +1923,69 @@ def _cpu_eval_viz_worker(exp_name, exp_dir, config_dict, signals, point_labels,
     import threading as _threading
     import signal as _signal
     _bg_timeout = float(os.environ.get('MAE_BG_WORKER_TIMEOUT', '1800'))
+    import time as _time
 
     def _bg_hang_backstop():
+        # [2026-07-13] GRACEFUL backstop. The prior version SIGKILLed EVERY direct child —
+        # including this worker's own multiprocessing resource_tracker — then os._exit(1). That
+        # bypassed the resource_tracker + atexit, LEAKING ~5 POSIX semaphores per fire (reproduced)
+        # that persisted in /dev/shm until reboot, and its ppid==self scan missed grandchildren /
+        # just-forked pool workers. Now: (1) NEVER kill the resource_tracker (keep it alive so it
+        # unlinks the pool's semaphores/shm on pipe-EOF); (2) SIGTERM the real pool workers across
+        # the WHOLE descendant set so they exit cleanly; (3) brief grace; (4) SIGKILL any non-
+        # rtracker survivor; (5) os._exit — which closes our pipe → the spared resource_tracker
+        # sees EOF and unlinks the sems, then exits. Only ever runs after MAE_BG_WORKER_TIMEOUT
+        # (never for a healthy worker) → zero effect on normal output/speed.
         _mypid = os.getpid()
-        try:  # kill direct children (VUS-sweep pool workers) first — leave nothing orphaned
-            for _pd in os.listdir('/proc'):
-                if not _pd.isdigit():
-                    continue
-                try:
-                    with open(f'/proc/{_pd}/stat') as _sf:
-                        _ppid = int(_sf.read().rsplit(')', 1)[1].split()[1])
-                    if _ppid == _mypid:
-                        os.kill(int(_pd), _signal.SIGKILL)
+        _grace = float(os.environ.get('MAE_BG_BACKSTOP_GRACE', '5'))
+
+        def _descendants():
+            _ppid_of = {}
+            try:
+                for _pd in os.listdir('/proc'):
+                    if not _pd.isdigit():
+                        continue
+                    try:
+                        with open(f'/proc/{_pd}/stat') as _sf:
+                            _ppid_of[int(_pd)] = int(_sf.read().rsplit(')', 1)[1].split()[1])
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            _frontier, _seen = [_mypid], set()
+            while _frontier:
+                _nx = []
+                for _par in _frontier:
+                    for _pid, _pp in _ppid_of.items():
+                        if _pp == _par and _pid not in _seen and _pid != _mypid:
+                            _seen.add(_pid)
+                            _nx.append(_pid)
+                _frontier = _nx
+            _out = []
+            for _pid in _seen:
+                try:  # spare the resource_tracker → it unlinks the pool's sems on EOF (no leak)
+                    with open(f'/proc/{_pid}/cmdline', 'rb') as _cf:
+                        if 'resource_tracker' in _cf.read().decode('utf-8', 'replace'):
+                            continue
                 except Exception:
                     pass
-        except Exception:
-            pass
+                _out.append(_pid)
+            return _out
+
+        for _pid in _descendants():          # graceful SIGTERM of pool workers
+            try:
+                os.kill(_pid, _signal.SIGTERM)
+            except Exception:
+                pass
+        _time.sleep(_grace)
+        for _pid in _descendants():          # hard-kill any non-rtracker survivor
+            try:
+                os.kill(_pid, _signal.SIGKILL)
+            except Exception:
+                pass
         sys.stderr.write(f"  [{exp_name}] BG-WORKER HANG BACKSTOP: exceeded {_bg_timeout:.0f}s "
-                         f"(PID={_mypid}) — hard-exiting to prevent orphan accumulation.\n")
+                         f"(PID={_mypid}) — graceful-killed pool workers (resource_tracker spared "
+                         f"to unlink semaphores), hard-exiting.\n")
         sys.stderr.flush()
         os._exit(1)
 
@@ -4319,6 +4364,82 @@ def aggregate_exathlon_results(experiment_dir):
     return global_avg
 
 
+def _startup_self_heal():
+    """[2026-07-13] Reap residue from PRIOR ungraceful bg-worker teardowns so it cannot accumulate
+    across a long campaign and force a reboot (the user's recurring 'hardware burden grows' symptom).
+
+    Root cause: launchers run run_base with --no-wait, so run_base exits WITHOUT joining its detached
+    eval/viz/VUS bg-workers. On the happy path every worker finishes and nothing leaks (a graceful
+    group-SIGTERM leaves zero residue — verified). But a worker that hangs in a GIL-holding C call
+    (which the in-process Timer backstop cannot interrupt) or is OS-killed/OOM'd leaves (a) an orphaned
+    ~1 GB process reparented to init, and (b) orphaned POSIX loky semaphores in /dev/shm. Over weeks
+    these stack into swap-thrash. Each new run_base (= each condition) drains the residue here.
+
+    SAFETY: touches ONLY (1) loky sems whose embedded owner pid is DEAD, and (2) bg-worker processes
+    that are BOTH reparented to init (ppid==1) AND older than the backstop timeout + margin. A
+    legitimately-trailing pipelined worker from the immediately-prior condition is also ppid==1 but
+    only seconds/minutes old → spared by the age gate. It never touches a live training process, a
+    live worker, its results, or mp sems (random names, unattributable)."""
+    import signal as _sig
+    import glob as _glob
+    import re as _re
+    _sem_reaped = 0
+    try:  # (1) orphaned loky POSIX semaphores (name embeds owner pid: sem.loky-<pid>-<rand>)
+        for _sf in _glob.glob('/dev/shm/sem.loky-*'):
+            _m = _re.search(r'sem\.loky-(\d+)-', os.path.basename(_sf))
+            if _m and not os.path.isdir(f'/proc/{_m.group(1)}'):  # owner pid gone → garbage
+                try:
+                    os.unlink(_sf)
+                    _sem_reaped += 1
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    _proc_reaped = 0
+    try:  # (2) orphaned (ppid==1) + ancient bg-worker processes
+        _clk = os.sysconf('SC_CLK_TCK')
+        _uptime = float(open('/proc/uptime').read().split()[0])
+        _min_age = float(os.environ.get('MAE_BG_WORKER_TIMEOUT', '1800')) + 300.0
+        _victims = []
+        for _pd in os.listdir('/proc'):
+            if not _pd.isdigit():
+                continue
+            try:
+                with open(f'/proc/{_pd}/stat') as _stf:
+                    _raw = _stf.read()
+                _rest = _raw[_raw.rindex(')') + 2:].split()  # fields from #3 (state) onward
+                if int(_rest[1]) != 1:                        # field 4 = ppid; must be init-orphaned
+                    continue
+                with open(f'/proc/{_pd}/cmdline', 'rb') as _cf:
+                    _cmd = _cf.read().decode('utf-8', 'replace')
+                if ('multiprocessing.spawn' not in _cmd) and ('_cpu_eval_viz_worker' not in _cmd):
+                    continue
+                _age = _uptime - int(_rest[19]) / _clk        # field 22 = starttime (ticks)
+                if _age >= _min_age:
+                    _victims.append(int(_pd))
+            except Exception:
+                pass
+        for _pid in _victims:
+            try:
+                os.kill(_pid, _sig.SIGTERM)
+            except Exception:
+                pass
+        if _victims:
+            time.sleep(3)
+            for _pid in _victims:
+                try:
+                    os.kill(_pid, _sig.SIGKILL)
+                except Exception:
+                    pass
+                _proc_reaped += 1
+    except Exception:
+        pass
+    if _sem_reaped or _proc_reaped:
+        print(f"  [main] startup self-heal: reaped {_proc_reaped} stale orphan bg-worker(s) "
+              f"(ppid=1, age > {os.environ.get('MAE_BG_WORKER_TIMEOUT', '1800')}s+300) + "
+              f"{_sem_reaped} orphaned loky semaphore(s) from dead pids.", flush=True)
+
+
 def main():
     # === Patch 2 (2026-05-29): Main worker CPU affinity isolation ===
     # Reserve cores [0..total-n_bg-1] for main training process + its thread
@@ -4359,6 +4480,9 @@ def main():
                         help='Save model weights (checkpoints, best_model.pt). '
                              'Default: off. Epoch metrics and scores are always saved.')
     args = parser.parse_args()
+
+    # [2026-07-13] Drain residue from any prior ungraceful bg-worker teardown before this run starts.
+    _startup_self_heal()
 
     config_preset = CONFIG_PRESETS[args.set]
 
