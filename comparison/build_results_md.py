@@ -200,28 +200,7 @@ def ms(mean, std, n):
     return s
 
 
-# ---------------- ranks (Table 2 columns, provisional 26-way) ----------------
-rank_cells = {}     # (code) -> list of ranks over 12 columns
-col_ranks = {}      # (sub, key) -> {code: rank}
-for _, sub in RANKED_ENTITIES:
-    for _, key in RANKED_METRICS:
-        means = {}
-        for _, code, *_rest in MODELS:
-            ranked = _rest[-1]
-            if not ranked:
-                continue
-            m, _, n, _ = agg(code, sub, key)
-            if m is not None:
-                means[code] = m
-        order = sorted(means.items(), key=lambda t: -t[1])
-        rk, prev, prev_rank = {}, None, 0
-        for i, (c, v) in enumerate(order, 1):
-            r = prev_rank if prev is not None and abs(v - prev) < 5e-5 else i
-            rk[c] = r
-            prev, prev_rank = v, r
-        col_ranks[(sub, key)] = rk
-        for c, r in rk.items():
-            rank_cells.setdefault(c, []).append(r)
+# ---------------- ranks: 미산출 (2026-07-19 사용자 결정 — rank 행 불필요) ----------------
 
 
 # ---------------- render ----------------
@@ -280,8 +259,7 @@ A('- **Metrics (ranked, Table 2)**: PAK=`pak_auc_f1`(PA%K sweep AUC), VUS=`vus_p
 A('- **Metrics (supplementary, Table A.5)**: PRC=`prc_auc`, V-R=`vus_roc`, PA=`pa_0_f1`(oracle F1-PA, 랭킹 제외).')
 A('- **Early stopping**: train_loss patience 3, min_delta 0, train split only, restore-best=min train_loss. '
   'NO_ES 5모델(train_loss 부재/상수)은 full budget 실행 후 final epoch 보고.')
-A('- **Rank**: 12 (entity×metric) 컬럼별 내림차순, tie는 better rank 공유. '
-  '현재 **26-way 잠정**(LASAD(ours) 수치 결합 시 27-way로 재산출; `nrdetector_full`·LASAD 변형 행은 랭킹 제외).')
+A('- **Rank**: 미산출 — 2026-07-19 사용자 결정(rank 행 불필요).')
 A('- 논문 기입값 = mean(4자리). 본 문서는 mean±std 병기.')
 A('')
 
@@ -294,24 +272,16 @@ for en, _ in RANKED_ENTITIES:
     for mn, _ in RANKED_METRICS:
         hdr += f' {en}<br>{mn} |'
         sep += '---|'
-A('### 3.1 논문 기입용 (mean, rank 병기)')
+A('### 3.1 논문 기입용 (mean)')
 A('')
-A(hdr + ' mean Rank |')
-A(sep + '---|')
+A(hdr)
+A(sep)
 for pname, code, grp, venue, ranked in MODELS:
     row = f'| {pname}{"†" if not ranked else ""} |'
     for _, sub in RANKED_ENTITIES:
         for _, key in RANKED_METRICS:
             m, sd, n, _ = agg(code, sub, key)
-            r = col_ranks.get((sub, key), {}).get(code)
-            cellv = f4(m)
-            if cellv and r and ranked:
-                cellv += f' ({r})'
-            row += f' {cellv} |'
-    mr = rank_cells.get(code)
-    row += f' {np.mean(mr):.2f} |' if mr and ranked and len(mr) == 12 else ('' if ranked else ' † |')
-    if ranked and (not mr or len(mr) < 12):
-        row = row.rstrip('|') + '|  |'  # incomplete rank population
+            row += f' {f4(m)} |'
     A(row)
 A('')
 A('† `nrdetector_full`(noisy_rate=1.0 변형)은 논문 비수록·비랭킹 부가 행 (paired 정책 유지).')
@@ -363,33 +333,45 @@ for pname, code, grp, venue, ranked in MODELS:
     A(row)
 A('')
 
-# --- 5. Table A.6 (rank distribution, derived) ---
-A('## 5. Rank 분포 — Table A.6 대응 (Table 2 rank에서 파생, 26-way 잠정)')
+# --- 5. Table A.6: 미산출 ---
+A('## 5. Rank 분포 — 미산출')
 A('')
-A('| Method | Mean Rank | Worst Rank | Rank Std |')
-A('|---|---|---|---|')
-for pname, code, grp, venue, ranked in MODELS:
-    if not ranked:
-        continue
-    mr = rank_cells.get(code, [])
-    if len(mr) == 12:
-        A(f'| {pname} | {np.mean(mr):.2f} | {max(mr)} | {np.std(mr, ddof=1):.2f} |')
-    else:
-        A(f'| {pname} |  |  |  |')
-A('')
-A('> LASAD(ours) 수치 결합 후 27-way로 재산출 필요 (§8 트래커 참조).')
+A('> 2026-07-19 사용자 결정: rank 행(Table 2 rank·mean Rank·Table A.6) 불필요 — 산출하지 않음.')
 A('')
 
-# --- 6. TEP Table 4 (structure only; separate pipeline) ---
-A('## 6. TEP type-disjoint — Table 4 대응 (simple 5 baselines, 40셀)')
+# --- 6. TEP Table 4 (source: results/experiments/TEP_phase2_win100_ep30/table4_data.json) ---
+A('## 6. TEP type-disjoint — Table 4 대응 (simple 5 baselines 40셀 + MAE 참조행)')
 A('')
+TEP_T4 = ROOT / 'results' / 'experiments' / 'TEP_phase2_win100_ep30' / 'table4_data.json'
+_tep = json.load(open(TEP_T4)) if TEP_T4.exists() else None
+_FOLDS = ['f_step', 'f_rand', 'f_ds', 'f_unk']
 A('| Method | F-STEP Seen | F-STEP Unseen | F-RAND Seen | F-RAND Unseen | F-DS Seen | F-DS Unseen | F-UNK Seen | F-UNK Unseen |')
 A('|---|---|---|---|---|---|---|---|---|')
-for pname in ['Random score', 'PCA recon.', 'NN-distance', 'Sensor range', 'L2-norm']:
-    A(f'| {pname} |  |  |  |  |  |  |  |  |')
+
+
+def _tep_row(label, rec):
+    row = f'| {label} |'
+    for f in _FOLDS:
+        c = (rec or {}).get(f) or {}
+        row += f" {f4(c.get('S'))} | {f4(c.get('U'))} |"
+    A(row)
+
+
+for pname, jkey in [('Random score', 'Random'), ('PCA recon.', 'PCA recon.'),
+                    ('NN-distance', 'NN-distance'), ('Sensor range', 'Sensor range'),
+                    ('L2-norm', 'L2-norm')]:
+    _tep_row(pname, (_tep or {}).get('simple', {}).get(jkey))
+for label, jkey in [('*(참조) Unlabeled (B)*', 'B'), ('*(참조) LASAD (A)*', 'A'),
+                    ('*(참조) Recon-only (D)*', 'D'), ('*(참조) clean ref (B0)*', 'B0')]:
+    _tep_row(label, (_tep or {}).get('mae', {}).get(jkey))
 A('')
-A('- Metric: macro per-mode F1PA%K (seen/unseen 분리). 산출 파이프라인: `scripts/TEP/` (comparison 실험 dir 체계 밖) — '
-  '**결과 파일 경로 확정 대기** (§8 트래커).')
+A('- **소스**: `results/experiments/TEP_phase2_win100_ep30/table4_data.json` (`scripts/TEP/build_table4.py` 산출). '
+  'simple 5행 원천 = `scripts/TEP/results/12_20260610_211815_tep_typegen_simple/<fold>/<model>/per_fault_metrics.json`, '
+  'MAE행 = `pak_fill.json`(train mean-fixed scoring).')
+A('- **⚠ seed 상태**: 전 셀 **single-seed(42)**. simple 5 중 PCA/NN/Sensor/L2는 deterministic(seed 무관)이나 '
+  '**Random 행은 unseeded 단일 draw**(run_tep_simple.py:197-232, 5-run 평균 아님 — 결함, 재실행 시 seeded 5-draw 필요). '
+  '5-seed 확장 필요분: MAE 36 GPU runs(~16 GPU-h: A×16, B×16, B0×4; D는 파생) + Random seeded 재실행(CPU) + '
+  'pak_fill/build_table4 다중-seed 집계 확장.')
 A('- Fault taxonomy (Table A.4): Step={IDV 1,2,4,5,6,7}→F-STEP; Random-var={8,10,11,12}→F-RAND; '
   'Slow-drift={13}+Sticking={14}→F-DS; Unknown={16–20}→F-UNK; Excluded={3,9,15}. '
   'Fold: train=240 normal+60 seen-family faulty runs(오염≈16.7%), test/fault=20 faulty+40 shared normal(양성≈27.8%), '
@@ -403,9 +385,9 @@ PAPER_PARAMS = [
     # (paper name, window, lr, batch, max_ep, key params)
     ('Random score', '500', '—', '—', '—', '5-run average'),
     ('Sensor range', '500', '—', '—', '—', 'per-feature range'),
-    ('PCA recon.', '500', '—', '—', '—', '50 components'),
+    ('PCA recon.', '500', '—', '—', '—', 'auto components (10/30) *(정정 2026-07-19: 기존 "50 components")*'),
     ('L2-norm', '500', '—', '—', '—', 'window L2'),
-    ('NN-distance', '500', '—', '—', '—', '5 neighbors'),
+    ('NN-distance', '500', '—', '—', '—', '1-NN *(정정 2026-07-19: 기존 "5 neighbors")*'),
     ('MLP', '5', '0.001', '512', '50', 'embed dim 32'),
     ('MLPMixer', '5', '0.0002', '512', '50', 'embed dim 128'),
     ('Transformer', '5', '0.001', '512', '50', 'embed dim 128'),
@@ -426,7 +408,7 @@ PAPER_PARAMS = [
     ('DeepMIL', '128', '0.0001', '60', '50', 'encoder dim 128'),
     ('WETAS', '500', '0.0001', '32', '50', 'hidden 128'),
     ('TreeMIL', '500', '0.0001', '32', '50', 'model dim 128'),
-    ('NRdetector', '100', '1e-5', '32', '50', 'encoder dim 64'),
+    ('NRdetector', '100', 'clf 1e-5 / enc 1e-4 *(정정 2026-07-19)*', '32', '50', 'encoder dim 64, BCE backstop 0.05'),
 ]
 NAME2CODE = {p: c for p, c, *_ in MODELS}
 pv_path = AUX_DIR / 'param_verification.json'
@@ -442,6 +424,9 @@ for (pname, w, lr, b, ep, kp) in PAPER_PARAMS:
     dev = '; '.join(pv.get('deviations', [])) if pv else ''
     A(f'| {pname} | {venue} | {w} | {lr} | {b} | {ep} | {act_ep} | {kp} | {match} | {dev} |')
 A('')
+A('- **정정 결정(2026-07-19, 사용자)**: ①PCA components(auto 10/30) ②NN-distance(1-NN) ⑤NRdetector LR(clf/enc 병기) = '
+  '**논문 A.2 정정 확정** ↔ ③epoch-cap(catch 2·dcdetector 1·timesnet/moderntcn/omni 5) ④batch divisor(OOM cap) = '
+  '**미적용**(논문 표 현행 유지, 실측 편차는 본 표의 실측 컬럼/편차 컬럼으로만 기록).')
 A('- ES 정책: patience 3 / train split only / restore-best=min train_loss / NO_ES 5모델 full-epoch. Max epochs=상한 budget.')
 A('- 실행 환경(논문 A.1): RTX 4090 단일, CUDA 11.8, cuDNN 9.1, PyTorch 2.4.1+cu118, Python 3.10.')
 A('- LASAD 설정(Table A.1 참조): L=500, s=10, N=50, stride 1/49, ρ=0.15, epochs 30/warmup 15, '
@@ -494,14 +479,14 @@ A('| 2 | catch×WaDi_A1 seed42: 학습 NaN 발산으로 **결측**(재현 불가
 A('| 3 | Aff(`affiliation_f1_ar`)=0.0 케이스의 정체: 이산/동률 스코어(예: random의 binary {0,1}, dcdetector-neg의 tie-mass)에서 '
   'AR quantile threshold + strict `>` 비교가 예측 0개를 만들어 0.0 — **draft도 Random Aff=0.0을 인쇄(정합 확인)**. '
   'dcdetector-neg Aff는 seed별 0/비0 혼재(tie 경계 민감) — 논문 기입 시 각주 권장 | 확정(각주) |')
-A('| 4 | epoch-cap 편차: 논문 A.2 Max ep 10 vs reseed 실측 catch=2·dcdetector=1·timesnet/moderntcn/omnianomaly=5 (근거: best-epoch 실측 flat/과적합) — 논문 A.2 갱신 후보 | 논문 갱신 후보 |')
-A('| 5 | NRdetector LR: 논문 1e-5(classifier) vs 코드 encoder_lr 1e-4 corrected + BCE backstop 0.05 | 논문 갱신 후보 |')
-A('| 6 | LASAD(ours)/(label-blind)/(excised) 행 및 27-way rank: MAE 파이프라인 결합 대기 | MAE 소관 |')
-A('| 7 | TEP Table 4: `scripts/TEP/` 결과 파일 경로·Random seed 정책 확정 대기 | 대기 |')
+A('| 4 | epoch-cap 편차(논문 Max ep 10 vs 실측 cap): **미적용 결정(2026-07-19 사용자)** — 논문 표 유지, 실측은 §7 기록 | 종결 |')
+A('| 5 | NRdetector LR: **정정 확정(2026-07-19)** — A.2에 clf 1e-5/enc 1e-4 병기 | 종결 |')
+A('| 6 | LASAD(ours)/(label-blind)/(excised) 행: MAE 파이프라인 결합 대기. rank는 불필요 결정(2026-07-19) | MAE 소관 |')
+A('| 7 | TEP Table 4: 소스 확정·값 채움 완료(§6, 2026-07-19 조사). 잔여 = single-seed(42) 상태 — 5-seed 확장 여부 사용자 결정 대기(필요분 §6 명기) | 조사 완료 |')
 A('| 8 | in-text 파생 수치 동반 갱신 목록: §4.2 weak 4-entity 평균(TreeMIL 0.55/0.32, DeepMIL 0.49/0.26, WETAS 0.40/0.22, '
   'NRdet 0.36/0.15), NPSR excl22 0.7465·0.5556, §A.5 인용(MLPMixer 0.8988·0.9752, NPSR 0.5717·0.8896) — 셀 확정 시 재계산 | 목록 확보 |')
 A('| 8b | GCN-LSTM 인쇄값(WaDi PAK ~0.64)은 dead-head 붕괴 前 era(exp6, wd=1e-4) 산출 — 현 5-seed 재현치(~0.23-0.26)와 구조적 격차. '
-  '충실도 감사(2026-07-19)의 dead ReLU head 발견과 일치. Keras-init 이식+재실험 또는 인쇄값 전면 교체 필요 | **논문 갱신 필수** |')
+  '충실도 감사(2026-07-19)의 dead ReLU head 발견과 일치. **결정(2026-07-19): 옵션 A — Keras-init 이식+dead-head guard 후 재실험**(체인 완주 후 실행, 실패 시 wd=1e-4 fallback) | **A 승인·실행 대기** |')
 A('| 9 | Affiliation α의 excl22 재계산 여부 (`compute_metrics_with_exclusion`) 코드 확인 | 확인 필요 |')
 A('| 10 | 요구사항 스펙의 seed 표기 "42–46"은 구버전 — 실제 {42,43,40,41,44} (2026-07-11 확정) | 정정 완료 |')
 A('')
