@@ -446,6 +446,15 @@ class Config:
     # False (default) = unchanged chronologically-last (rank) masking (byte-identical).
     train_label_mask_group_size: int = 100  # [2026-07-03] bin width (timestamps) for grouped random
     # masking. Only used when train_label_mask_random=True. 100 = group anomalies by 100-timestamp bins.
+    train_label_mask_exclude: bool = False  # [label-mask EXCLUDE 2026-07-04] companion to the label-
+    # mask sweep: when True (with train_label_mask_frac>0), the SAME frac-selected anomaly timepoints
+    # (identical seeded group/rank selection as masking) are SPLICED OUT of the TRAIN signal instead
+    # of merely unlabeled — i.e. treated like train_exclude_anomaly_segments but restricted to the
+    # selected subset. Non-selected anomaly groups keep their TRUE labels. This isolates "keep the
+    # hidden anomalies as unlabeled data" (mask) vs "drop them entirely" (exclude) on the exact same
+    # timesteps. Boundaries inserted at splice junctions; test split / shared array UNTOUCHED. Default
+    # False = no-op (pure masking). Mutually exclusive with train_exclude_anomaly_segments (which
+    # removes ALL anomalies regardless of frac). frac=1.0 ⇒ removes all anomaly groups ≡ excised.
     train_exclude_anomaly_segments: bool = False  # [exclude-anomaly 2026-06-24] REMOVE anomaly-
     # labeled timesteps from the TRAIN signal entirely (not mask — splice out), inserting run
     # boundaries at the splice junctions so windows never span a removed gap (existing boundaries

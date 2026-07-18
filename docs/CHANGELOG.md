@@ -11,6 +11,8 @@ LASAD.pdf(본문+appendix) 요구사항 추출에 따라 `comparison/results/exp
 - 산출: Table 2/A.5 대응(mean-only + mean±std), Table A.6 rank 파생(26-way 잠정), TEP Table 4 구조, Table A.2 파라미터 대조(7모델 불일치 플래그: pca_error 50→auto10/30, nn_distance 5NN→1NN, epoch-cap 5종), draft 인쇄값 reconciliation(|Δ|≥0.02 = 84셀), per-seed 부록, 미해결 트래커.
 - 부속: `results_data.json`(기계가독 셀 덤프).
 
+## 2026-07-10: Fix — catch×SWaT batch-128 GPU-mem thrashing (STUCK) → batch÷4
+
 reseed 8-1 실행 중 `catch × SWaT`가 **batch 128**로 돌다 GPU mem 98%(12GB) 포화 → **batch당 ~50분(3512s)**으로 진행성 stall(tqdm ETA 191일). 사용자 stuck 기준(util 100% + mem 꽉 + power 166W + mem-bw 1%)으로 포착.
 
 **근본 원인**: `run_baseline.py`의 batch 축소 로직이 `'wadi' in args.experiment` **전용**이라 SWaT는 divisor를 못 받아 full batch로 실행. (determinism 무관 — set_baseline_seed는 `cudnn.deterministic=False`; kill 후 GPU 811MB로 해제돼 외부 leak도 아님 = 12GB 전부 catch batch-128 몫.)
@@ -42,6 +44,17 @@ reseed 8-1 실행 중 `catch × SWaT`가 **batch 128**로 돌다 GPU mem 98%(12G
 
 **catch epoch 하드코딩 변경**: run_baseline.py의 catch×WaDi 처리를 "5 강제"→"**5 상한, explicit ≤5 존중**"(_cur None/>5만 5로 cap). 근거=원본 8번 catch best epoch 실측(PSM/SWaT/WaDi_A1=ep1, WaDi_A2=ep2; ep3+ pak_auc_f1 하락). reseed는 catch=2ep, exp10/labelmask는 parity 5 보존. **병목 ETA**(temp/measure_reseed_bottleneck.py): catch 184→74h, GRAND TOTAL 468→**357h(14.9d)** upper bound.
 
+
+## 2026-07-04: `train_label_mask_exclude` — 마스킹된 anomaly를 unlabeled로 두지 않고 학습에서 **제거** (기본 False = no-op)
+
+**동기**: group-random 마스킹 스윕(unlab10r/25r/50r/75r)의 짝 실험. 마스킹은 선택된 anomaly 타임포인트의 **라벨만 0으로** 가리고 데이터는 unlabeled로 학습에 남긴다. 이 옵션은 **똑같이 선택된** 타임포인트를 아예 splice 제거해, "가린 이상치를 unlabeled 데이터로 유지" vs "완전 제거"를 동일 타임포인트에서 분리 비교한다. frac=1.0(전 그룹)은 전 anomaly 제거 ≡ 기존 `exclanom`(`train_exclude_anomaly_segments=True`)과 동일하므로 재실행 제외.
+
+**변경 (additive · 기본 False = byte-identical)**:
+- `mae_anomaly/config.py`: `train_label_mask_exclude: bool = False`. `train_label_mask_frac>0`과 함께일 때만 의미. `train_exclude_anomaly_segments`(frac 무관 전 anomaly 제거)와 상호배타.
+- `mae_anomaly/dataset_sliding.py`: 기존 마스킹 블록을 `_sel`(선택 인덱스) 계산 후 분기하도록 리팩터 — exclude=False면 `point_labels[_sel]=0`(기존과 byte-identical), True면 `_mask_exclude_keep` 마스크를 만들어 run_boundaries 설정 뒤 splice(선택분 제거 + junction에 boundary 삽입 + 생존 anomaly_regions를 spliced 좌표로 remap). 미선택 그룹은 TRUE 라벨 유지 → recon_snr/GRL/anomaly_loss가 그대로 관측. 기존 `train_exclude_anomaly_segments`(전 anomaly 제거) 경로와 별개.
+- `scripts/run_base_experiments.py`: 학습 train_dataset에 `train_label_mask_exclude` 전달(getattr default False).
+
+**검증**: (1) **무회귀** — 실데이터 4개(PSM/WaDi_A1/A2/SWaT) 전 frac에서 리팩터 전후 마스킹 byte-identical. (2) **no-op** — exclude=True+frac=0 → baseline 완전 동일, test split 무영향. (3) **의도 동작** — 합성 SlidingWindowDataset 통합테스트로 선택분만 splice, 미선택 TRUE 라벨 유지, boundary 삽입, region remap 정확, frac=1.0≡전량 제거 확인. (4) **선택 동일성** — exclude가 제거하는 지점 = mask가 가리는 지점(동일 RandomState(42)). py_compile OK. official 큐 exclude_grouprandom(excl10r/25r/50r/75r; 100%=exclanom 제외)로 추가(seeds→discsnr→odofffeat 뒤).
 
 ## 2026-07-02: baseline 라벨마스킹 실험 11(시간순)/12(무작위) + `train_label_mask_frac` UnifiedLoader 포팅
 

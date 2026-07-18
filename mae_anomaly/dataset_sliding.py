@@ -1120,6 +1120,7 @@ class SlidingWindowDataset(Dataset):
         train_label_mask_frac: float = 0.0,  # [2026-06-24] zero the BACK frac of TRAIN labels (unlabeled); 0=off, 1=all; no-op on test
         train_label_mask_random: bool = False,  # [2026-07-02; group 2026-07-03] unlabel a RANDOM frac of 100-ts anomaly GROUPS (seeded) instead of the chronologically-last frac; no-op on test / when frac=0
         train_label_mask_group_size: int = 100,  # [2026-07-03] bin width (timestamps) for grouped random masking
+        train_label_mask_exclude: bool = False,  # [2026-07-04] splice the frac-selected anomaly timepoints OUT of TRAIN (same selection as mask) instead of unlabeling; non-selected keep TRUE labels; no-op on test / when frac=0
         train_exclude_anomaly_segments: bool = False,  # [2026-06-24] splice out anomaly timesteps from TRAIN + boundary at junctions; no-op on test
     ):
         self.window_size = window_size
@@ -1200,20 +1201,30 @@ class SlidingWindowDataset(Dataset):
                 if train_label_mask_random:
                     # [2026-07-03] GROUP-level random: bin the anomaly timepoints into
                     # `group_size`-timestamp windows (idx // group_size, chronological), pick a RANDOM
-                    # `frac` of the GROUPS (fixed-seed RandomState → reproducible), and unlabel every
+                    # `frac` of the GROUPS (fixed-seed RandomState → reproducible), and select every
                     # anomaly point in the chosen groups. Coarser/meaningful vs scattered point masking;
-                    # frac=1.0 ⇒ all groups ⇒ all anomaly labels zeroed. Normal labels untouched.
+                    # frac=1.0 ⇒ all groups ⇒ all anomaly points. Normal labels untouched.
                     _gs = max(1, int(train_label_mask_group_size))
                     _grp = _anom_idx // _gs
                     _ug = np.unique(_grp)                                  # non-empty 100-ts groups
                     _ng = int(round(float(train_label_mask_frac) * len(_ug)))
                     if _ng > 0:
                         _selg = np.random.RandomState(42).choice(_ug, size=_ng, replace=False)
-                        self.point_labels[_anom_idx[np.isin(_grp, _selg)]] = 0
+                        _sel = _anom_idx[np.isin(_grp, _selg)]
+                    else:
+                        _sel = np.empty(0, dtype=_anom_idx.dtype)
                 else:
                     _k = int(round(float(train_label_mask_frac) * len(_anom_idx)))
-                    if _k > 0:
-                        self.point_labels[_anom_idx[-_k:]] = 0  # unlabel the latest k anomaly timepoints
+                    _sel = _anom_idx[-_k:] if _k > 0 else np.empty(0, dtype=_anom_idx.dtype)  # latest k
+                if train_label_mask_exclude:
+                    # [2026-07-04] EXCLUDE companion: mark the SAME selected anomaly timepoints for
+                    # removal (splice) instead of unlabeling. Non-selected anomalies keep TRUE labels,
+                    # so recon_snr / GRL / anomaly_loss still see them. Splice happens below (after
+                    # run_boundaries are set) so boundaries land at the removed-gap junctions.
+                    self._mask_exclude_keep = np.ones(len(self.point_labels), dtype=bool)
+                    self._mask_exclude_keep[_sel] = False
+                else:
+                    self.point_labels[_sel] = 0  # unlabel the selected anomaly timepoints (keep data)
             offset = 0
         else:  # test
             self.signals = signals[train_end:]
@@ -1265,6 +1276,38 @@ class SlidingWindowDataset(Dataset):
                 self.point_labels = self.point_labels[_keep]  # all 0 (anomalies removed)
                 self.run_boundaries = sorted(_newb)
                 self.anomaly_regions = []  # no anomalies remain in train
+
+        # [label-mask EXCLUDE 2026-07-04] Splice the frac-SELECTED anomaly timepoints out of TRAIN
+        # (train_label_mask_exclude=True). Same selection as the label-mask sweep, but the hidden
+        # anomalies are REMOVED rather than kept as unlabeled data — a direct ablation of the two.
+        # Non-selected anomaly groups survive with TRUE labels (their point_labels==1 stay), so this
+        # differs from train_exclude_anomaly_segments (which drops ALL anomalies). Boundaries inserted
+        # at junctions; surviving anomaly_regions remapped to spliced coords. Test split: no-op.
+        _mek = getattr(self, '_mask_exclude_keep', None)
+        if _mek is not None and split == 'train':
+            _keep = _mek
+            if not _keep.all():
+                _orig = np.nonzero(_keep)[0]  # original train-local indices retained (sorted)
+                _newb = set((np.nonzero(np.diff(_orig) != 1)[0] + 1).tolist())  # removed-gap junctions
+                for _b in (self.run_boundaries or []):  # preserve existing boundaries in new coords
+                    _i = int(np.searchsorted(_orig, _b))
+                    if 0 < _i < len(_orig):
+                        _newb.add(_i)
+                # Remap surviving anomaly_regions (train regions are unused by scoring — all consumers
+                # read test_dataset.anomaly_regions — but remap for hygiene): keep regions fully inside
+                # the retained span, translate to spliced coords via searchsorted.
+                _keptset = _keep
+                _remapped = []
+                for _r in self.anomaly_regions:
+                    if _r.start < len(_keptset) and _r.end <= len(_keptset) and _keptset[_r.start:_r.end].all():
+                        _remapped.append(AnomalyRegion(
+                            start=int(np.searchsorted(_orig, _r.start)),
+                            end=int(np.searchsorted(_orig, _r.end - 1)) + 1,
+                            anomaly_type=_r.anomaly_type))
+                self.signals = self.signals[_keep]
+                self.point_labels = self.point_labels[_keep]  # non-selected anomalies keep label 1
+                self.run_boundaries = sorted(_newb)
+                self.anomaly_regions = _remapped
 
         # Epoch offset for train augmentation
         self._epoch_offset = 0
