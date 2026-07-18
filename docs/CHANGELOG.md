@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-19: `scripts/generate_results_md.py` — 논문(v22) LASAD 전 표 채움용 results.md 생성기
+
+`results/experiments/official/results.md` 생성: 논문 전 표(Table 2/4/B.1/A.6/B.2, Fig 6/B.1) 대응 조건
+(baseline/blind/exclanom/ablation5종/unlabXr4종/maskrX7종) × seeds 40-44 × 5셀 × 6지표를 **recon_snr ES
+epoch 규약**(post-warmup EMA α=0.2, patience 2; 라벨無 조건은 같은-seed baseline proxy; excl22는 full과
+epoch 공유)으로 추출, per-seed + Mean±Std(ddof=1, n표기), 미완 run은 "—", 하이퍼파라미터·조건별 override·
+provenance(선택 epoch) 포함. **하드 앵커 내장**(seed40 PSM ES16 지표 1e-6 일치 등 3종, 실패 시 생성 거부) +
+독립 적대검증(14+셀 재유도, 커버리지·override·proxy 감사) 통과. blind@42는 unlab100@42 등가(42*) 표기.
+재생성: `python scripts/generate_results_md.py` (idempotent).
+
 ## 2026-07-13: 자원누적 근본원인 완결 — graceful backstop + startup self-heal reaper (재부팅 불필요화)
 
 **증상**: 캠페인이 길어질수록 하드웨어 부담↑ → 반복 재부팅. **근본원인(4-에이전트 적대 워크플로우로 확정, high-conf)**:
