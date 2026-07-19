@@ -133,7 +133,14 @@ def _dir_pattern(seed, tag):
 
 
 def _is_complete(run_dir):
-    return all(os.path.exists(os.path.join(run_dir, sub, "epoch_metrics.json")) for _, sub in CELLS)
+    # [2026-07-20] A run mid-finalization can have epoch_metrics.json but not yet best_config.json /
+    # training_histories.json (observed race: regenerated right after PSM 'Completed' → crash).
+    # Require ALL files the extractor reads, so an in-flight run is treated as pending, not fatal.
+    return all(
+        os.path.exists(os.path.join(run_dir, sub, f))
+        for _, sub in CELLS
+        for f in ("epoch_metrics.json", "best_config.json", "training_histories.json")
+    )
 
 
 _ALL_DIRS = None
