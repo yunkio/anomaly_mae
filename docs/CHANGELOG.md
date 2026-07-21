@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-07-22: Feat — TEP Table 4 5-seed 파이프라인 (seeded Random + per-seed 런처 + 다중-seed 집계)
+
+논문 Table 4의 seed-의존 행(Random/A/B/D) 5-seed(40..44)화. seed-42 경로는 전부 byte-호환 유지, GPU 실행 없음(스크립트 작성만). 백업 `.trash/260722/tep_5seed/`.
+
+**`scripts/TEP/run_tep_simple.py`**: random baseline 5 draws를 `RANDOM_SEEDS=[40,41,42,43,44]`로 각각 시드(`RandomBaseline.seed` 주입 — predict 내 `np.random.seed` 경로). per-fault를 draw별 계산 → (a) draw-평균이 기존 `per_fault_metrics.json` 자리(기존 "마지막 draw 단독" 결함 수정), (b) seed별 원값 신규 `per_fault_by_seed.json`. `_aggregate_run_metrics` mean±std 불변, metadata에 `random_seeds` 기록. deterministic 4모델 byte-identical(구버전 대조 smoke 실증).
+
+**`scripts/run_tep_seeds.sh`** (신규): seed별 `TEP_phase2_win100_ep30_s{seed}` root에 Phase2-A/B만(B0 제외) × 4 folds, `random_seed={seed}` override, run_base_experiments 내장 skip으로 resumable, 완료 후 pak_fill(--root)+build_table4(--seed) 자동. seed 42는 REFUSE(canonical 보호). 무인자=40 41 43 44 순차.
+
+**`scripts/TEP/pak_fill.py`**: `--root` 인자(기본=기존 ROOT, 기본 재실행 시 pak_fill.json 값 동일 검증). root에 phase2_B0/noisy 없으면 해당 항목·출력 섹션 자동 skip.
+
+**`scripts/TEP/build_table4.py`**: `--seed` 인자(기본 42=기존 출력 byte-diff 0 검증). seed N: MAE=`..._s{N}/pak_fill.json`(B/A/D), Random=`per_fault_by_seed.json` seed-N 원값(부재 시 null 허용), deterministic 4모델=seed-42 재사용(meta 각주), 출력 `table4_data_s{N}.json`+`table4_values_s{N}.txt`(BASE root — build_results_md 생성기 규약).
+
+## 2026-07-22: Feat — GCN-LSTM 옵션 A: Keras init semantics 이식(`keras_init`) + dead-head guard (default-off, base byte-identical)
+
+R4 스펙(dead ReLU head 붕괴의 기여 요인 = Keras initializer 미이식)에 따른 재실험 옵션 A 구현. QuoVadisTAD upstream(TF 2.11 Keras 기본값) 기준.
+
+**`comparison/baselines/gcn_lstm/model.py`**:
+- `_apply_keras_init_()`: keras_init=True 시 전 파라미터 Keras semantics 재초기화 — `graph_conv.weight` xavier 재추첨(동일 분포), `lstm.weight_ih` glorot_uniform(fan=(20,256)), `lstm.weight_hh` (semi-)orthogonal(열 orthonormal ≡ Keras recurrent_kernel 전치), lstm bias 전부 0 + **unit_forget_bias**(bias_ih[h:2h]=1, bias_hh=0 → 합=Keras 단일 bias), `dense`(head Linear(64,1))·`extra_node_dense` glorot + **bias 정확히 0**(dead-head 핵심 항목).
+- `_DeadHeadGuard`: `model.dense` forward hook(pre-activation, training 중만 기록). epoch 전체 max≤0 → 경고 로그 + head 재초기화(**1회 한도**, glorot/zeros, Adam moment 제거). `mode='reinit'|'warn'`. epoch_callback **이전** 판정, try/finally로 ES 예외 시에도 hook 해제.
+- `GCNLSTM.__init__(keras_init=False)` / `GCNLSTMBaseline.__init__(keras_init=False, dead_head_guard=True, dead_head_action='reinit')` — **명시 파라미터**(extra_kwargs 흡수 금지). guard는 **keras_init=True일 때만 arm**. save/load config 키 3개 추가(과거 checkpoint는 `.get` 기본값 False로 무변화).
+
+**`comparison/run_baseline.py`**: `--gcnlstm-keras-init` 플래그(기본 off) — gcn_lstm 생성 직후 wrapper attr만 set(preset 불변, 타 모델 경로 무접촉). metadata schema2가 attr 자동 기록.
+
+**`scripts/run_gcnlstm_redo.sh`** (신규, 작성만 — GPU 체인 완주 후 실행): 5 seeds(42,43,40,41,44→8-1..8-5) × 4 normalonly 실험(psm/swat_a1a2/wadi_A1/A2) × gcn_lstm, `--seed --early-stop --neural-epochs 50 --normalize-mode minmax --gcnlstm-keras-init`. 시작 시 기존 gcn_lstm 결과 20셀을 `.trash/<YYMMDD>/gcnlstm_pre_redo/`로 **1회성 MOVE 백업**(재실행 시 백업 존재→skip으로 신규 결과 보호, run_baseline auto-skip으로 resumable). 타 run_baseline 프로세스 감지 시 시작 거부(ALLOW_CONCURRENT=1 override).
+
+**검증**(CPU, 27/27 PASS): flag-off 생성·2-epoch fit 궤적이 수정 전 백업본과 state_dict/train_loss까지 **완전 동일**(byte-identical); flag-on head bias==0·forget bias==1·`weight_hh` 직교 오차 4.8e-7; guard 사멸 감지/1회 재초기화/캡/무관측(-inf) 가드 동작 확인. 백업 `.trash/260722/gcnlstm_optA/`.
+
 ## 2026-07-19: Feat — LASAD 논문용 baseline 5-seed 결과 집계기 (`comparison/build_results_md.py`)
 
 LASAD.pdf(본문+appendix) 요구사항 추출에 따라 `comparison/results/experiments/results.md`를 생성하는 재실행형 집계기.

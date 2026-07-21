@@ -231,6 +231,117 @@ class GraphConvLayer(nn.Module):
 
 
 # ============================================================
+# Keras init semantics + dead-head guard (R4 option A, 2026-07-22)
+# ============================================================
+
+def _apply_keras_init_(model: "GCNLSTM") -> None:
+    """Re-init all parameters to TF/Keras semantics (QuoVadisTAD upstream, TF 2.11).
+
+    Upstream refs:
+      - GraphConv.weight: explicit glorot_uniform          (gnn.py L105-110)
+      - layers.LSTM(64, activation="tanh") defaults        (gnn.py L200)
+        kernel=glorot_uniform, recurrent=orthogonal, bias=zeros + unit_forget_bias
+      - layers.Dense(1, activation='relu') defaults        (gnn.py L202)
+      - top-level layers.Dense(num_nodes) defaults         (model_def.py L171)
+
+    MUST be called AFTER default construction and ONLY when keras_init=True —
+    the default path performs no extra RNG draws (byte-identical base).
+    """
+    # 1) GraphConv shared weight — already xavier in __init__; re-draw for a
+    #    single well-defined RNG order under the flag (same distribution).
+    nn.init.xavier_uniform_(model.graph_conv.weight)
+
+    # 2) LSTM (num_layers=1 fixed in this model)
+    lstm = model.lstm
+    h = lstm.hidden_size
+    for name, p in lstm.named_parameters():
+        if name.startswith("weight_ih"):
+            # PT (4h, in): xavier fan_in=in, fan_out=4h == Keras kernel (in, 4h) glorot
+            nn.init.xavier_uniform_(p)
+        elif name.startswith("weight_hh"):
+            # PT (4h, h) column-orthonormal == Keras recurrent_kernel (h, 4h)
+            # row-orthonormal, transposed. Gate order (i,f,g,o) matches Keras
+            # (i,f,c,o) — whole-matrix orthogonal slices identically.
+            nn.init.orthogonal_(p)
+        elif name.startswith("bias"):
+            # Keras has ONE bias (zeros); PT adds bias_ih + bias_hh → zero both.
+            nn.init.zeros_(p)
+    # unit_forget_bias=True: forget-gate slice of exactly ONE bias = 1.0 so the
+    # effective total forget bias (bias_ih + bias_hh) == Keras' 1.0.
+    with torch.no_grad():
+        lstm.bias_ih_l0[h:2 * h].fill_(1.0)
+
+    # 3) Dense(output_seq_len, relu) head — Keras Dense defaults.
+    #    glorot a=sqrt(6/65)≈0.304 (vs PT default 0.125) + bias exactly 0.
+    nn.init.xavier_uniform_(model.dense.weight)
+    nn.init.zeros_(model.dense.bias)
+
+    # 4) Top-level Dense(num_nodes) — Keras Dense defaults.
+    nn.init.xavier_uniform_(model.extra_node_dense.weight)
+    nn.init.zeros_(model.extra_node_dense.bias)
+
+
+class _DeadHeadGuard:
+    """Dead ReLU head detector: dense PRE-activation never > 0 for a full epoch.
+
+    Hook attaches to model.dense (its output IS the pre-activation; the ReLU is
+    the separate `dense_act` in forward). Records only while model.training so
+    mid-training eval (epoch_callback → predict) does not pollute the epoch
+    statistic. An all-negative pre-activation for a full epoch means the ReLU
+    emitted all-zeros the whole epoch → the head receives zero gradient and is
+    permanently dead unless re-initialized.
+
+    mode='reinit' (default wiring, task decision 2026-07-22): warn + re-init the
+    head with the Keras scheme (glorot weight, EXACTLY-zero bias), at most
+    MAX_REINITS times per fit, and drop the head params' stale Adam moments.
+    mode='warn': log only, never intervene.
+    """
+
+    MAX_REINITS = 1  # one-shot re-init cap per fit()
+
+    def __init__(self, model: "GCNLSTM", mode: str = "reinit"):
+        self.model = model
+        self.mode = mode                       # "reinit" | "warn"
+        self.reinits_done = 0
+        self.epoch_max = float("-inf")
+        self._handle = model.dense.register_forward_hook(self._hook)
+
+    def _hook(self, module, inputs, output):
+        if module.training:
+            m = float(output.detach().max())
+            if m > self.epoch_max:
+                self.epoch_max = m
+
+    def end_epoch(self, epoch: int, optimizer=None) -> bool:
+        # -inf == no training forward observed this epoch → no verdict.
+        dead = np.isfinite(self.epoch_max) and self.epoch_max <= 0.0
+        if dead:
+            print(f"\n[DEAD-HEAD] epoch={epoch}: dense pre-activation max="
+                  f"{self.epoch_max:.4g} <= 0 for the ENTIRE epoch — ReLU head "
+                  f"emitted all-zeros; head gradients are 0 (permanent unless "
+                  f"re-initialized).", flush=True)
+            if self.mode == "reinit":
+                if self.reinits_done < self.MAX_REINITS:
+                    self.reinits_done += 1
+                    nn.init.xavier_uniform_(self.model.dense.weight)  # Keras glorot
+                    nn.init.zeros_(self.model.dense.bias)             # Keras zeros
+                    if optimizer is not None:  # drop stale Adam moments for head params
+                        optimizer.state.pop(self.model.dense.weight, None)
+                        optimizer.state.pop(self.model.dense.bias, None)
+                    print(f"[DEAD-HEAD] dense re-initialized (glorot/zeros, "
+                          f"{self.reinits_done}/{self.MAX_REINITS}) + Adam state "
+                          f"cleared for head params.", flush=True)
+                else:
+                    print("[DEAD-HEAD] re-init limit reached — warning only.",
+                          flush=True)
+        self.epoch_max = float("-inf")
+        return dead
+
+    def close(self):
+        self._handle.remove()
+
+
+# ============================================================
 # GCNLSTM (port of gnn.py::LSTMGC + model_def.py::gcn_sequense_sensor_error_model_v1)
 # ============================================================
 
@@ -260,6 +371,7 @@ class GCNLSTM(nn.Module):
         aggregation_type: str = "max",
         combination_type: str = "concat",
         graph_conv_activation: str = "relu",
+        keras_init: bool = False,
     ):
         super().__init__()
 
@@ -293,6 +405,15 @@ class GCNLSTM(nn.Module):
 
         # Extra Linear(num_nodes, num_nodes) over node axis (reference top-level Dense(num_nodes))
         self.extra_node_dense = nn.Linear(n_features, n_features)
+
+        # Keras/TF init semantics port (R4 option A, 2026-07-22). Default OFF —
+        # flag-off takes NO extra RNG draws, so default construction stays
+        # byte-identical to the legacy path. Applied inside __init__ so BOTH the
+        # fit() and load() construction paths run the same code (load_state_dict
+        # immediately overwrites the values in the load path — value-irrelevant).
+        self.keras_init = keras_init
+        if keras_init:
+            _apply_keras_init_(self)
 
     def set_graph(self, edges: torch.Tensor, num_nodes: int) -> None:
         self.graph_conv.set_graph(edges, num_nodes)
@@ -372,6 +493,9 @@ class GCNLSTMBaseline:
         score_norm: str = "median-iqr",
         score_smooth_window: int = 5,
         score_iqr_epsilon: float = 1e-2,
+        keras_init: bool = False,
+        dead_head_guard: bool = True,
+        dead_head_action: str = "reinit",
         device: Optional[str] = None,
         verbose: bool = True,
         # legacy params (ignored but accepted for backwards compat)
@@ -395,6 +519,14 @@ class GCNLSTMBaseline:
         self.score_norm = score_norm
         self.score_smooth_window = score_smooth_window
         self.score_iqr_epsilon = score_iqr_epsilon
+        # R4 option A (2026-07-22): Keras init semantics + dead-head guard.
+        # keras_init=False (default) => byte-identical legacy path. The guard is
+        # ARMED ONLY while keras_init=True (dead_head_guard merely allows opting
+        # out under the flag; it is inert while keras_init=False). Explicit
+        # params (NOT **extra_kwargs) so a typo cannot become a silent no-op.
+        self.keras_init = bool(keras_init)
+        self.dead_head_guard = bool(dead_head_guard)
+        self.dead_head_action = dead_head_action  # 'reinit' (warn + 1-shot re-init) | 'warn'
         self.verbose = verbose
         # `extra_kwargs` 흡수 — preset 에 future keys 추가 시 silent fail 방지.
         # 사용되지 않는 키는 그대로 무시되며 wrapper 동작에 영향 없음.
@@ -486,8 +618,12 @@ class GCNLSTMBaseline:
             aggregation_type=self.aggregation_type,
             combination_type=self.combination_type,
             graph_conv_activation=self.graph_conv_activation,
+            keras_init=self.keras_init,
         ).to(self.device)
         self.model.set_graph(self.edges, self.n_features)
+        if self.verbose and self.keras_init:
+            print(f"{self.name}: keras_init=True (TF/Keras init semantics; "
+                  f"dead-head guard={'on:' + self.dead_head_action if self.dead_head_guard else 'off'})")
 
         if self.verbose:
             total_params = sum(p.numel() for p in self.model.parameters())
@@ -531,47 +667,65 @@ class GCNLSTMBaseline:
         )
         criterion = nn.MSELoss()
 
+        # Dead-head guard (R4 option A) — ARMED ONLY under keras_init=True.
+        # Default path (keras_init=False) registers no hook, prints nothing:
+        # byte-identical legacy training.
+        guard = (_DeadHeadGuard(self.model, mode=self.dead_head_action)
+                 if (self.keras_init and self.dead_head_guard) else None)
+
         self.train_loss_history = []
         self.model.train()
         start_time = time.time()
 
         n_batches = len(dataloader)
-        for epoch in range(self.epochs):
-            epoch_start = time.time()
-            epoch_losses = []
+        try:
+            for epoch in range(self.epochs):
+                epoch_start = time.time()
+                epoch_losses = []
 
-            for batch_idx, (batch_windows, batch_targets) in enumerate(dataloader):
-                batch_start = time.time()
-                batch_windows = batch_windows.to(self.device)
-                batch_targets = batch_targets.to(self.device)
+                for batch_idx, (batch_windows, batch_targets) in enumerate(dataloader):
+                    batch_start = time.time()
+                    batch_windows = batch_windows.to(self.device)
+                    batch_targets = batch_targets.to(self.device)
 
-                optimizer.zero_grad()
-                outputs = self.model(batch_windows)
-                loss = criterion(outputs, batch_targets)
+                    optimizer.zero_grad()
+                    outputs = self.model(batch_windows)
+                    loss = criterion(outputs, batch_targets)
 
-                loss.backward()
-                optimizer.step()
-                epoch_losses.append(loss.item())
-                print(f"[BATCH] model={self.name} epoch={epoch + 1}/{self.epochs} batch={batch_idx + 1}/{n_batches} time={time.time() - batch_start:.3f}s", flush=True)
+                    loss.backward()
+                    optimizer.step()
+                    epoch_losses.append(loss.item())
+                    print(f"[BATCH] model={self.name} epoch={epoch + 1}/{self.epochs} batch={batch_idx + 1}/{n_batches} time={time.time() - batch_start:.3f}s", flush=True)
 
-            avg_loss = float(np.mean(epoch_losses)) if epoch_losses else float('nan')
-            self.train_loss_history.append(avg_loss)
+                avg_loss = float(np.mean(epoch_losses)) if epoch_losses else float('nan')
+                self.train_loss_history.append(avg_loss)
 
-            epoch_time = time.time() - epoch_start
-            elapsed = time.time() - start_time
-            remaining = elapsed / (epoch + 1) * (self.epochs - epoch - 1)
+                # Dead-head verdict at epoch end, BEFORE epoch_callback (whose
+                # eval predict() would otherwise run extra forwards — the hook
+                # only records under model.training, but keep ordering per spec).
+                if guard is not None:
+                    guard.end_epoch(epoch + 1, optimizer)
 
-            if self.verbose:
-                progress = (epoch + 1) / self.epochs * 100
-                print(f"\r  Training: [{epoch + 1}/{self.epochs}] {progress:5.1f}% | "
-                      f"Loss: {avg_loss:.6f} | "
-                      f"Time: {epoch_time:.1f}s/epoch | "
-                      f"ETA: {remaining:.0f}s", end="")
-                sys.stdout.flush()
+                epoch_time = time.time() - epoch_start
+                elapsed = time.time() - start_time
+                remaining = elapsed / (epoch + 1) * (self.epochs - epoch - 1)
 
-            if epoch_callback is not None:
-                epoch_callback(self, epoch + 1)
-                self.model.train()
+                if self.verbose:
+                    progress = (epoch + 1) / self.epochs * 100
+                    print(f"\r  Training: [{epoch + 1}/{self.epochs}] {progress:5.1f}% | "
+                          f"Loss: {avg_loss:.6f} | "
+                          f"Time: {epoch_time:.1f}s/epoch | "
+                          f"ETA: {remaining:.0f}s", end="")
+                    sys.stdout.flush()
+
+                if epoch_callback is not None:
+                    epoch_callback(self, epoch + 1)
+                    self.model.train()
+        finally:
+            # Always detach the guard hook — epoch_callback may raise
+            # _BaselineEarlyStop (actual early stopping) through fit().
+            if guard is not None:
+                guard.close()
 
         if self.verbose:
             total_time = time.time() - start_time
@@ -805,6 +959,9 @@ class GCNLSTMBaseline:
             "score_norm": self.score_norm,
             "score_smooth_window": self.score_smooth_window,
             "score_iqr_epsilon": self.score_iqr_epsilon,
+            "keras_init": self.keras_init,
+            "dead_head_guard": self.dead_head_guard,
+            "dead_head_action": self.dead_head_action,
             "n_features": self.n_features,
             "train_loss_history": self.train_loss_history,
         }
@@ -831,6 +988,11 @@ class GCNLSTMBaseline:
         self.score_norm = config.get("score_norm", "median-iqr")
         self.score_smooth_window = config.get("score_smooth_window", 5)
         self.score_iqr_epsilon = config.get("score_iqr_epsilon", 1e-2)
+        # Pre-R4 checkpoints have no keras_init key → .get default False keeps
+        # every historical (8/9/10/11/12) load byte-identical to legacy.
+        self.keras_init = config.get("keras_init", False)
+        self.dead_head_guard = config.get("dead_head_guard", True)
+        self.dead_head_action = config.get("dead_head_action", "reinit")
         self.n_features = config["n_features"]
         self.train_loss_history = config.get("train_loss_history", [])
 
@@ -845,6 +1007,7 @@ class GCNLSTMBaseline:
             aggregation_type=self.aggregation_type,
             combination_type=self.combination_type,
             graph_conv_activation=self.graph_conv_activation,
+            keras_init=self.keras_init,
         ).to(self.device)
         self.model.set_graph(self.edges, self.n_features)
         self.model.load_state_dict(torch.load(save_dir / "model.pt", map_location=self.device))
