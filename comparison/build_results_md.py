@@ -340,31 +340,96 @@ A('> 2026-07-19 사용자 결정: rank 행(Table 2 rank·mean Rank·Table A.6) �
 A('')
 
 # --- 6. TEP Table 4 (source: results/experiments/TEP_phase2_win100_ep30/table4_data.json) ---
-A('## 6. TEP type-disjoint — Table 4 대응 (simple 5 baselines 40셀 + MAE 참조행)')
+A('## 6. TEP type-disjoint — Table 4 대응 (5-seed 구조: 42 채움, 40/41/43/44 빈칸 예비)')
 A('')
-TEP_T4 = ROOT / 'results' / 'experiments' / 'TEP_phase2_win100_ep30' / 'table4_data.json'
-_tep = json.load(open(TEP_T4)) if TEP_T4.exists() else None
+TEP_DIR = ROOT / 'results' / 'experiments' / 'TEP_phase2_win100_ep30'
+TEP_SEEDS = [42, 43, 40, 41, 44]      # 규약: s42=table4_data.json, 기타=table4_data_s{seed}.json
 _FOLDS = ['f_step', 'f_rand', 'f_ds', 'f_unk']
-A('| Method | F-STEP Seen | F-STEP Unseen | F-RAND Seen | F-RAND Unseen | F-DS Seen | F-DS Unseen | F-UNK Seen | F-UNK Unseen |')
-A('|---|---|---|---|---|---|---|---|---|')
 
 
-def _tep_row(label, rec):
+def _tep_load(s):
+    p = TEP_DIR / ('table4_data.json' if s == 42 else f'table4_data_s{s}.json')
+    return json.load(open(p)) if p.exists() else None
+
+
+_teps = {s: _tep_load(s) for s in TEP_SEEDS}
+# (label, section, json key, seed-dependent?)
+TEP_ROWS = [('Random score', 'simple', 'Random', True),
+            ('PCA recon.', 'simple', 'PCA recon.', False),
+            ('NN-distance', 'simple', 'NN-distance', False),
+            ('Sensor range', 'simple', 'Sensor range', False),
+            ('L2-norm', 'simple', 'L2-norm', False),
+            ('*(참조) Unlabeled (B)*', 'mae', 'B', True),
+            ('*(참조) LASAD (A)*', 'mae', 'A', True),
+            ('*(참조) Recon-only (D)*', 'mae', 'D', True),
+            ('*(참조) clean ref (B0)*', 'mae', 'B0', True)]
+_HDR6 = ('| Method | F-STEP Seen | F-STEP Unseen | F-RAND Seen | F-RAND Unseen '
+         '| F-DS Seen | F-DS Unseen | F-UNK Seen | F-UNK Unseen |')
+_SEP6 = '|---|---|---|---|---|---|---|---|---|'
+
+
+def _tep_cell(sec, key, fold, su):
+    """seed별 값 리스트 -> (mean, std, n)"""
+    xs = []
+    for s in TEP_SEEDS:
+        t = _teps.get(s)
+        v = (((t or {}).get(sec, {}) or {}).get(key) or {}).get(fold, {}).get(su)
+        if isinstance(v, (int, float)):
+            xs.append(float(v))
+    if not xs:
+        return None, None, 0
+    return float(np.mean(xs)), (float(np.std(xs, ddof=1)) if len(xs) > 1 else None), len(xs)
+
+
+A('### 6.1 논문 기입용 (가용 seed mean; 결정적 모델은 seed 무관)')
+A('')
+A(_HDR6)
+A(_SEP6)
+for label, sec, key, seeddep in TEP_ROWS:
+    row = f'| {label}{"" if seeddep else " ᵈ"} |'
+    for f in _FOLDS:
+        for su in ('S', 'U'):
+            m, sd, n = _tep_cell(sec, key, f, su)
+            row += f' {f4(m)} |'
+    A(row)
+A('')
+A('ᵈ = deterministic(seed 무관, 재실험 불필요).')
+A('')
+A('### 6.2 mean ± std (seed-의존 행만; 현재 n=1 → std 미정)')
+A('')
+A(_HDR6)
+A(_SEP6)
+for label, sec, key, seeddep in TEP_ROWS:
+    if not seeddep:
+        continue
     row = f'| {label} |'
     for f in _FOLDS:
-        c = (rec or {}).get(f) or {}
-        row += f" {f4(c.get('S'))} | {f4(c.get('U'))} |"
+        for su in ('S', 'U'):
+            m, sd, n = _tep_cell(sec, key, f, su)
+            row += f' {ms(m, sd, n) if m is not None else ""} |'
     A(row)
-
-
-for pname, jkey in [('Random score', 'Random'), ('PCA recon.', 'PCA recon.'),
-                    ('NN-distance', 'NN-distance'), ('Sensor range', 'Sensor range'),
-                    ('L2-norm', 'L2-norm')]:
-    _tep_row(pname, (_tep or {}).get('simple', {}).get(jkey))
-for label, jkey in [('*(참조) Unlabeled (B)*', 'B'), ('*(참조) LASAD (A)*', 'A'),
-                    ('*(참조) Recon-only (D)*', 'D'), ('*(참조) clean ref (B0)*', 'B0')]:
-    _tep_row(label, (_tep or {}).get('mae', {}).get(jkey))
 A('')
+A('> (n=k) 표기는 가용 seed 수 < 5. Random·A·B·D·B0가 seed-의존; 40/41/43/44 데이터가 '
+  '`table4_data_s{seed}.json`으로 생성되면 재실행 시 자동 집계.')
+A('')
+A('### 6.3 Per-seed 부록 (seed-의존 행 × seed)')
+A('')
+for s in TEP_SEEDS:
+    have = _teps.get(s) is not None
+    A(f'**seed {s}** {"" if have else "*(미실행 — 빈칸)*"}')
+    A('')
+    A(_HDR6)
+    A(_SEP6)
+    for label, sec, key, seeddep in TEP_ROWS:
+        if not seeddep:
+            continue
+        row = f'| {label} |'
+        t = _teps.get(s)
+        for f in _FOLDS:
+            rec = (((t or {}).get(sec, {}) or {}).get(key) or {}).get(f, {})
+            row += f" {f4(rec.get('S'))} | {f4(rec.get('U'))} |"
+        A(row)
+    A('')
 A('- **소스**: `results/experiments/TEP_phase2_win100_ep30/table4_data.json` (`scripts/TEP/build_table4.py` 산출). '
   'simple 5행 원천 = `scripts/TEP/results/12_20260610_211815_tep_typegen_simple/<fold>/<model>/per_fault_metrics.json`, '
   'MAE행 = `pak_fill.json`(train mean-fixed scoring).')
