@@ -19,9 +19,12 @@ experiments (8-1..8-5 unsup / 9-1..9-5 weak), following the paper protocol
     available seeds with n annotated when n<5.
 
 Re-runnable: as more seeds finish, re-run to fill blanks.
-Aux inputs (optional, from the requirements workflow):
-  scratchpad .../lasad_requirements/printed_values.json   (paper printed values)
-  scratchpad .../lasad_requirements/param_verification.json (code-vs-paper params)
+Aux inputs (optional, from the requirements workflow) — permanent repo dir
+comparison/results/experiments/_aux/ (moved from /tmp scratchpad 2026-07-22;
+scratchpad was wiped on reboot):
+  _aux/printed_values.json     (paper printed values, LASAD.pdf Table 2 p.7,
+                                2-pass verified transcription 2026-07-22)
+  _aux/param_verification.json (code-vs-paper params; not yet regenerated)
 """
 import json
 import os
@@ -35,8 +38,7 @@ EXP = ROOT / 'comparison' / 'results' / 'experiments'
 OUT_MD = EXP / 'results.md'
 OUT_JSON = EXP / 'results_data.json'
 NEG_CACHE = EXP / '_dcdetector_neg_cache.json'
-AUX_DIR = Path('/tmp/claude-1000/-home-ykio-notebooks-claude/'
-               'e7052938-c36a-454b-99c0-00488e1852d8/scratchpad/lasad_requirements')
+AUX_DIR = EXP / '_aux'                                 # permanent (repo) — was /tmp scratchpad, wiped on reboot
 
 SUFFIX = '20260606_175756'
 SEEDS = [42, 43, 40, 41, 44]                            # k=1..5
