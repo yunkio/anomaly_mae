@@ -541,7 +541,12 @@ A('## 9. 미해결 사항 트래커')
 A('')
 A('| # | 항목 | 상태 |')
 A('|---|---|---|')
-A('| 1 | 8-4(seed41) 진행 중, 9-4·8-5(seed44)·9-5 대기 — 완료 시 본 스크립트 재실행 | 진행 |')
+A('| 1 | reseed 체인 10/10 + TEP 5-seed(40/41/43/44) 전체 완료(2026-07-24) — baseline 674/675·TEP §6 n=5 | 완료 |')
+A('| 1b | **GCN-LSTM 채택 근거(2026-07-24)**: keras_init 재실험(5-seed×4entity) vs 기존 deadhead를 '
+  '4-entity 5-seed mean pak으로 비교 → kerasinit 0.3826 vs deadhead 0.3831(사실상 동률, Δ0.0005) → '
+  '규약대로 **deadhead(기존값) 채택**. entity별 상반: kerasinit이 SWaT excl22 +0.047·WaDi_A1 +0.010, '
+  'deadhead가 WaDi_A2 +0.056·PSM +0.004. kerasinit 결과는 각 실험 dir `gcn_lstm__kerasinit/` 영구 보존, '
+  'deadhead 백업은 `.trash/260724/gcnlstm_pre_redo/` | 확정 |')
 A('| 2 | catch×WaDi_A1 seed42: 학습 NaN 발산으로 **결측**(재현 불가 fail) → 해당 셀 n=4 | 확정(각주) |')
 A('| 3 | Aff(`affiliation_f1_ar`)=0.0 케이스의 정체: 이산/동률 스코어(예: random의 binary {0,1}, dcdetector-neg의 tie-mass)에서 '
   'AR quantile threshold + strict `>` 비교가 예측 0개를 만들어 0.0 — **draft도 Random Aff=0.0을 인쇄(정합 확인)**. '
