@@ -42,6 +42,16 @@ from tep_common import (
 )
 
 sys.path.insert(0, REPO_ROOT)
+
+# Random-baseline draw seeds (paper 5-seed protocol). Draw k is seeded with
+# RANDOM_SEEDS[k] so each draw is reproducible and joinable with the MAE
+# per-seed runs (results.md generator convention: seeds 40..44).
+RANDOM_SEEDS = [40, 41, 42, 43, 44]
+
+# per-fault lite metric keys (per_fault_metrics.json / per_fault_by_seed.json)
+PER_FAULT_KEYS = ('pak_auc_f1', 'pak_auc_prc_auc', 'prc_auc', 'roc_auc',
+                  'f1_t', 'aff_f1', 'pa_0_f1', 'pa_100_f1')
+
 from comparison.baseline_common import (          # noqa: E402
     _aggregate_run_metrics, compute_all_metrics, save_epoch_metrics,
     save_metadata, save_scores_npz,
@@ -112,9 +122,12 @@ def pca_predict_boundary_safe(model: PCAError, test_X: np.ndarray,
 # ---------------------------------------------------------------------------
 # partition machinery
 # ---------------------------------------------------------------------------
-def load_test():
-    d = np.load(os.path.join(DATA_DIR, 'test_stream.npz'))
-    with open(os.path.join(DATA_DIR, 'test_run_table.json')) as fp:
+def load_test(data_dir=None):
+    """data_dir=None -> canonical DATA_DIR (unchanged default for all importers);
+    data-seed axis passes an explicit dir (e.g. scripts/TEP/data_dataseed40)."""
+    base = data_dir or DATA_DIR
+    d = np.load(os.path.join(base, 'test_stream.npz'))
+    with open(os.path.join(base, 'test_run_table.json')) as fp:
         run_table = json.load(fp)
     return d['X'], d['y'], d['fault_id'], d['run_boundaries'], run_table
 
@@ -170,13 +183,14 @@ def score_test(model_name, model, test_Xn, run_starts):
 def run_condition(train_npz, model_name: str, out_dir: Path,
                   test_X, test_y, fault_id, run_bounds, run_table,
                   fold_partitions: dict, experiment_name: str,
-                  per_fault: bool, smoke: bool):
+                  per_fault: bool, smoke: bool, data_dir=None):
     """fold_partitions: {prefix: fault_set} evaluated on this score vector.
     '' (full) and 'exclhard_' are always evaluated.
-    train_npz: filename in DATA_DIR, or a ready (n, F) train array (sweep use)."""
+    train_npz: filename in data_dir (default DATA_DIR), or a ready (n, F) train
+    array (sweep use). data_dir: data-seed axis override (None -> canonical)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     if isinstance(train_npz, str):
-        d = np.load(os.path.join(DATA_DIR, train_npz))
+        d = np.load(os.path.join(data_dir or DATA_DIR, train_npz))
         train_X = d['X']
     else:
         train_X, train_npz = train_npz, '<in-memory>'
@@ -196,12 +210,19 @@ def run_condition(train_npz, model_name: str, out_dir: Path,
 
     # Paper §4.2 convention (baseline_common.run_simple_baseline): the random
     # baseline reports mean±std over 5 independent draws; deterministic models
-    # run once. scores.npz keeps the LAST draw (representative artifact).
-    n_runs = 5 if model_name == 'random' else 1
+    # run once. Each draw is SEEDED with RANDOM_SEEDS[draw] (reproducible,
+    # per-seed values saved to per_fault_by_seed.json). scores.npz keeps the
+    # LAST draw (representative artifact).
+    n_runs = len(RANDOM_SEEDS) if model_name == 'random' else 1
     per_run_metrics, inference_time, eval_time = [], 0.0, 0.0
     scores = None
     part_info = {}
+    pf_draws = []          # per-draw per-fault metrics (when per_fault)
     for run_idx in range(n_runs):
+        if model_name == 'random':
+            # RandomBaseline.predict() calls np.random.seed(self.seed) itself —
+            # inject the draw seed here so every draw is deterministic.
+            model.seed = RANDOM_SEEDS[run_idx]
         t0 = time.time()
         scores = score_test(model_name, model, test_Xn, run_starts)
         inference_time += time.time() - t0
@@ -223,18 +244,37 @@ def run_condition(train_npz, model_name: str, out_dir: Path,
         eval_time += time.time() - t0
         per_run_metrics.append(m_all)
         if n_runs > 1:
-            print(f"    [draw {run_idx + 1}/{n_runs}] full pak_auc_f1="
-                  f"{m_all.get('pak_auc_f1', 0):.4f}")
+            print(f"    [draw {run_idx + 1}/{n_runs} seed={RANDOM_SEEDS[run_idx]}] "
+                  f"full pak_auc_f1={m_all.get('pak_auc_f1', 0):.4f}")
+        if per_fault and not smoke:
+            # per-fault computed PER DRAW (deterministic models: single draw)
+            d_pf = {}
+            for f in all_faults:
+                m, _, _ = partition_eval(scores, test_y, run_table, {f}, lite=True)
+                d_pf[str(f)] = {k: m.get(k) for k in PER_FAULT_KEYS}
+            pf_draws.append(d_pf)
     metrics = _aggregate_run_metrics(per_run_metrics)
 
     pf = {}
     if per_fault and not smoke:
-        # per-fault from the last draw (single-draw for random — noted in report)
-        for f in all_faults:
-            m, _, _ = partition_eval(scores, test_y, run_table, {f}, lite=True)
-            pf[str(f)] = {k: m.get(k) for k in
-                          ('pak_auc_f1', 'pak_auc_prc_auc', 'prc_auc', 'roc_auc',
-                           'f1_t', 'aff_f1', 'pa_0_f1', 'pa_100_f1')}
+        if n_runs == 1:
+            pf = pf_draws[0]                    # deterministic: unchanged output
+        else:
+            # (a) draw-average in the legacy slot (format-compatible with the
+            #     single-draw per_fault_metrics.json consumed by build_table4)
+            for f in all_faults:
+                pf[str(f)] = {}
+                for k in PER_FAULT_KEYS:
+                    vals = [d[str(f)][k] for d in pf_draws]
+                    if all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                           for v in vals):
+                        pf[str(f)][k] = float(np.mean(vals))
+                    else:
+                        pf[str(f)][k] = vals[0]  # None passthrough (e.g. lite-skipped)
+            # (b) raw per-seed values: {seed: {fault_id: {metric: v}}}
+            with open(out_dir / 'per_fault_by_seed.json', 'w') as fp:
+                json.dump({str(s): d for s, d in zip(RANDOM_SEEDS, pf_draws)},
+                          fp, indent=2)
         with open(out_dir / 'per_fault_metrics.json', 'w') as fp:
             json.dump(pf, fp, indent=2)
 
@@ -247,7 +287,9 @@ def run_condition(train_npz, model_name: str, out_dir: Path,
                          'eval_time': eval_time,
                          'boundary_policy': ('per-run smoothing' if model_name == 'pca_error'
                                              else 'pointwise (no temporal mixing)'),
-                         'partitions': part_info})
+                         'partitions': part_info,
+                         **({'data_dir': str(data_dir)} if data_dir else {}),
+                         **({'random_seeds': list(RANDOM_SEEDS)} if n_runs > 1 else {})})
     return metrics
 
 
@@ -260,6 +302,9 @@ def main():
                     help='existing results dir to resume into')
     ap.add_argument('--smoke', action='store_true',
                     help='lite metrics (skip VUS), skip per-fault')
+    ap.add_argument('--data-dir', default=None,
+                    help='stream dir override (data-seed axis, e.g. '
+                         'scripts/TEP/data_dataseed40); default = canonical data/')
     args = ap.parse_args()
 
     models = args.models.split(',')
@@ -270,8 +315,10 @@ def main():
         results_dir = Path(RESULTS_BASE) / f'{EXPERIMENT_NUMBER}_{ts}_tep_typegen_simple'
     results_dir.mkdir(parents=True, exist_ok=True)
     print(f"Results dir: {results_dir}")
+    if args.data_dir:
+        print(f"Data dir override (data-seed axis): {args.data_dir}")
 
-    test_X, test_y, fault_id, run_bounds, run_table = load_test()
+    test_X, test_y, fault_id, run_bounds, run_table = load_test(args.data_dir)
     print(f"Test stream: {test_X.shape}, anomaly {test_y.mean():.2%}, "
           f"runs {len(run_table)}")
 
@@ -290,7 +337,8 @@ def main():
                               results_dir / fold / model_name,
                               test_X, test_y, fault_id, run_bounds, run_table,
                               parts, f'tep_typegen_{fold}',
-                              per_fault=True, smoke=args.smoke)
+                              per_fault=True, smoke=args.smoke,
+                              data_dir=args.data_dir)
 
     # ---- ffonly (clean-normal reference; fold-independent scores) ----
     if do_ffonly:
@@ -304,7 +352,8 @@ def main():
                           results_dir / 'ffonly' / model_name,
                           test_X, test_y, fault_id, run_bounds, run_table,
                           parts, 'tep_typegen_ffonly',
-                          per_fault=True, smoke=args.smoke)
+                          per_fault=True, smoke=args.smoke,
+                          data_dir=args.data_dir)
 
     print(f"\nAll done. Results: {results_dir}")
 

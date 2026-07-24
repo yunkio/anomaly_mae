@@ -341,8 +341,12 @@ A('')
 A('> 2026-07-19 사용자 결정: rank 행(Table 2 rank·mean Rank·Table A.6) 불필요 — 산출하지 않음.')
 A('')
 
-# --- 6. TEP Table 4 (source: results/experiments/TEP_phase2_win100_ep30/table4_data.json) ---
-A('## 6. TEP type-disjoint — Table 4 대응 (5-seed 구조: 42 채움, 40/41/43/44 빈칸 예비)')
+# --- 6. TEP Table 4 (source: results/experiments/TEP_phase2_win100_ep30/table4_data*.json) ---
+# 이원화 (2026-07-24): 6-A = 데이터셋 고정(학습 seed만 변화, 기존 축) /
+#                     6-B = 데이터셋 구성 seed화(run 할당 자체가 seed, 신규 축)
+A('## 6. TEP type-disjoint — Table 4 대응')
+A('')
+A('### 6-A. 데이터셋 고정 5-seed (데이터 canonical 고정, 학습 seed 42/43/40/41/44 — 기존 축)')
 A('')
 TEP_DIR = ROOT / 'results' / 'experiments' / 'TEP_phase2_win100_ep30'
 TEP_SEEDS = [42, 43, 40, 41, 44]      # 규약: s42=table4_data.json, 기타=table4_data_s{seed}.json
@@ -383,7 +387,7 @@ def _tep_cell(sec, key, fold, su):
     return float(np.mean(xs)), (float(np.std(xs, ddof=1)) if len(xs) > 1 else None), len(xs)
 
 
-A('### 6.1 논문 기입용 (가용 seed mean; 결정적 모델은 seed 무관)')
+A('#### 6-A.1 논문 기입용 (가용 seed mean; 결정적 모델은 seed 무관)')
 A('')
 A(_HDR6)
 A(_SEP6)
@@ -397,7 +401,7 @@ for label, sec, key, seeddep in TEP_ROWS:
 A('')
 A('ᵈ = deterministic(seed 무관, 재실험 불필요).')
 A('')
-A('### 6.2 mean ± std (seed-의존 행만; 현재 n=1 → std 미정)')
+A('#### 6-A.2 mean ± std (seed-의존 행만; 현재 n=1 → std 미정)')
 A('')
 A(_HDR6)
 A(_SEP6)
@@ -414,7 +418,7 @@ A('')
 A('> (n=k) 표기는 가용 seed 수 < 5. Random·A·B·D·B0가 seed-의존; 40/41/43/44 데이터가 '
   '`table4_data_s{seed}.json`으로 생성되면 재실행 시 자동 집계.')
 A('')
-A('### 6.3 Per-seed 부록 (seed-의존 행 × seed)')
+A('#### 6-A.3 Per-seed 부록 (seed-의존 행 × seed)')
 A('')
 for s in TEP_SEEDS:
     have = _teps.get(s) is not None
@@ -443,6 +447,92 @@ A('- Fault taxonomy (Table A.4): Step={IDV 1,2,4,5,6,7}→F-STEP; Random-var={8,
   'Slow-drift={13}+Sticking={14}→F-DS; Unknown={16–20}→F-UNK; Excluded={3,9,15}. '
   'Fold: train=240 normal+60 seen-family faulty runs(오염≈16.7%), test/fault=20 faulty+40 shared normal(양성≈27.8%), '
   'run 960 samples, onset 161.')
+A('')
+
+# --- 6-B. 데이터셋 변경 5-seed (data-seed axis, 2026-07-24) -------------------
+# run 할당 자체를 seed로 재추출(build_tep_data.py --data-seed N): canonical 42 +
+# ds40/41/43/44. 결정적 모델도 데이터가 다르므로 seed-의존으로 취급.
+A('### 6-B. 데이터셋 변경 5-seed (데이터셋 구성 seed화: canonical 42 + data-seed 40/41/43/44 — 신규 축)')
+A('')
+TEP_DS_SEEDS = [42, 40, 41, 43, 44]   # 규약: 42=canonical table4_data.json(대표), 기타=table4_data_ds{N}.json
+
+
+def _tep_ds_load(s):
+    p = TEP_DIR / ('table4_data.json' if s == 42 else f'table4_data_ds{s}.json')
+    return json.load(open(p)) if p.exists() else None
+
+
+_teps_ds = {s: _tep_ds_load(s) for s in TEP_DS_SEEDS}
+
+
+def _tep_ds_cell(sec, key, fold, su):
+    """data-seed별 값 리스트 -> (mean, std, n)"""
+    xs = []
+    for s in TEP_DS_SEEDS:
+        t = _teps_ds.get(s)
+        v = (((t or {}).get(sec, {}) or {}).get(key) or {}).get(fold, {}).get(su)
+        if isinstance(v, (int, float)):
+            xs.append(float(v))
+    if not xs:
+        return None, None, 0
+    return float(np.mean(xs)), (float(np.std(xs, ddof=1)) if len(xs) > 1 else None), len(xs)
+
+
+A('#### 6-B.1 논문 기입용 (가용 seed mean; 이 축에선 결정적 모델도 데이터-의존 → 전 행 seed-의존)')
+A('')
+A(_HDR6)
+A(_SEP6)
+for label, sec, key, _seeddep in TEP_ROWS:
+    row = f'| {label} |'
+    for f in _FOLDS:
+        for su in ('S', 'U'):
+            m, sd, n = _tep_ds_cell(sec, key, f, su)
+            row += f' {f4(m)} |'
+    A(row)
+A('')
+A('#### 6-B.2 mean ± std (전 행; 데이터 미생성 seed는 자동 제외 → n 표기)')
+A('')
+A(_HDR6)
+A(_SEP6)
+for label, sec, key, _seeddep in TEP_ROWS:
+    row = f'| {label} |'
+    for f in _FOLDS:
+        for su in ('S', 'U'):
+            m, sd, n = _tep_ds_cell(sec, key, f, su)
+            row += f' {ms(m, sd, n) if m is not None else ""} |'
+    A(row)
+A('')
+A('> (n=k) = 가용 data-seed 수 < 5. ds40/41/43/44 데이터가 `table4_data_ds{N}.json`으로 '
+  '생성되면 재실행 시 자동 집계.')
+A('')
+A('#### 6-B.3 Per-seed 부록 (전 행 × data-seed)')
+A('')
+for s in TEP_DS_SEEDS:
+    have = _teps_ds.get(s) is not None
+    tag = ' *(canonical — 6-A seed 42와 동일 원천)*' if s == 42 else ''
+    A(f'**data-seed {s}**{tag} {"" if have else "*(미실행 — 빈칸)*"}')
+    A('')
+    A(_HDR6)
+    A(_SEP6)
+    for label, sec, key, _seeddep in TEP_ROWS:
+        row = f'| {label} |'
+        t = _teps_ds.get(s)
+        for f in _FOLDS:
+            rec = (((t or {}).get(sec, {}) or {}).get(key) or {}).get(f, {})
+            row += f" {f4(rec.get('S'))} | {f4(rec.get('U'))} |"
+        A(row)
+    A('')
+A('- **소스**: data-seed 42 = `table4_data.json`(canonical 대표 — 데이터·학습 seed 모두 42), '
+  'data-seed N∈{40,41,43,44} = `results/experiments/TEP_phase2_win100_ep30/table4_data_ds{N}.json` '
+  '(`scripts/TEP/build_table4.py --dataseed N` 산출; MAE = `TEP_phase2_win100_ep30_dataseed{N}/pak_fill.json`, '
+  'simple 5행 = `scripts/TEP/results/simple_dataseed{N}/`).')
+A('- **축 정의**: run 할당 자체를 `np.random.default_rng(N)` 비복원 샘플링으로 재추출 '
+  '(`scripts/TEP/build_tep_data.py --data-seed N` → `scripts/TEP/data_dataseed{N}/`; '
+  '집합 크기·fold 구성·onset·스트림 배치 규칙은 canonical과 동일). 학습 seed도 N으로 동기화'
+  '(`scripts/run_tep_dataseed.sh`).')
+A('- **⚠ 이 축에선 PCA/NN/Sensor/L2도 seed-의존**(데이터가 다름) — 6-A의 ᵈ 표기 미적용. '
+  'B0는 data-seed 축 미실행(canonical 42만 존재 → n=1 유지). '
+  'Random 행은 seed N 단일 draw 원값(`per_fault_by_seed.json[N]`).')
 A('')
 
 # --- 7. parameter table ---
