@@ -5044,3 +5044,8 @@ docs/
 **Status**: All changes implemented, tested, and documented.
 
 **Next Steps**: Run full experiments with updated architecture and training logic.
+
+## 2026-07-24 (nrdetector refix)
+- **Fix: nrdetector gate threshold float64화** (`comparison/baselines/nrdetector/wrapper.py`) — float32 mean의 상수 배열 1-ulp 반올림 knife-edge로 발생하던 all-zero gate(pak=0.0 셀 8개, epoch별 0.61↔0.0 이진 진동)를 수학 정의대로 결정론 all-pass로 복원.
+- **Fix: nrdetector BCE backstop 제거** — 2026-06-13 절대 threshold(0.05)가 저-prevalence 데이터(WaDi 자연 BCE 바닥 0.030-0.038, SWaT 0.044)에서 ep1-2에 오발동해 encoder 학습을 원천 차단(만성 저성능의 실체). 근본 수정은 encoder_lr=1e-4(deepmil/wetas 동일 encoder 50ep 무붕괴 실증)이며 upstream에 backstop 부재 → 제거로 충실도 복원. `encoder_bce_min`은 config 호환 위해 unused 유지.
+- 재실험: `scripts/run_nrdetector_refix.sh` — nrdetector+nrdetector_full × 4 exp × 5 seeds = 40 runs, 기존 결과는 `temp/0724/nrdetector_pre_fix/`로 구조 보존 백업 후 동일 dir 재실험. 논문 A.2 "BCE backstop 0.05" 표기 정정 필요(재실험 완료 후).

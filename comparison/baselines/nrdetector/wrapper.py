@@ -165,7 +165,7 @@ class NRdetectorBaseline:
         self.gamma = hparams.get('gamma', 0.1)  # soft-DTW smoothing (main.py:74)
         self.encoder_epochs = hparams.get('encoder_epochs', 50)  # Stage-0 cap (recipe not in repo; see docs)
         self.encoder_lr = hparams.get('encoder_lr', 1e-4)        # Stage-0 Adam lr = WETAS DiCNN recipe (donalee/WETAS train_classifier.py:113,232-234); 1e-3 over-fit BCE->0, 1e-5 was classifier lr (wrong component)
-        self.encoder_bce_min = hparams.get('encoder_bce_min', 0.05)  # Stage-0 BCE early-stop: halt when epoch-mean BCE <= this (prevents actmap-collapsing memorization; see docs)
+        self.encoder_bce_min = hparams.get('encoder_bce_min', 0.05)  # UNUSED since 2026-07-24 (backstop removed — misfired on low-prevalence data; kept for config/checkpoint compat)
 
         # ---- classifier / optimization (main.py:78-80, solver.py:109) ----
         self.classifier_hidden = hparams.get('classifier_hidden', 128)
@@ -275,15 +275,14 @@ class NRdetectorBaseline:
             if self.verbose and (ep + 1) % 10 == 0:
                 print(f"  [NRdetector enc] epoch {ep+1}/{self.encoder_epochs} "
                       f"bce={ep_bce:.4f} dtw={ep_dtw:.4f}", flush=True)
-            # BCE early-stop (2026-06-13): halt BEFORE the encoder memorizes the weak
-            # segment labels. BCE->0 saturates the per-window dense logit and collapses
-            # the min-max actmap that IS the point-level anomaly score (wrapper.py:809,878).
-            # Threshold self.encoder_bce_min (default 0.05) is a sweepable knob.
-            if ep_bce <= self.encoder_bce_min:
-                if self.verbose:
-                    print(f"  [NRdetector enc] early-stop at epoch {ep+1}/{self.encoder_epochs} "
-                          f"(epoch-mean bce={ep_bce:.4f} <= {self.encoder_bce_min})", flush=True)
-                break
+            # BCE backstop REMOVED (2026-07-24): the 2026-06-13 absolute threshold
+            # (encoder_bce_min=0.05) misfired on low-prevalence datasets whose natural
+            # epoch-1 BCE floor is already below 0.05 (WaDi 0.030-0.038, SWaT 0.044),
+            # halting encoder training at ep1-2 and causing the chronic WaDi/SWaT
+            # collapse it was meant to prevent. The root-cause fix is encoder_lr=1e-4
+            # (WETAS DiCNN recipe): deepmil/wetas train the same encoder at the same lr
+            # for the full 50 epochs with no collapse. Upstream NRdetector has no such
+            # backstop; removing it restores upstream fidelity.
 
     @torch.no_grad()
     def _encode(self, windows: torch.Tensor):
@@ -871,8 +870,14 @@ class NRdetectorBaseline:
         seg_all = (np.concatenate([blk[0] for blk in _seg_blocks])
                    if _seg_blocks else np.zeros(0, np.float32))   # (Nw_total,) window-level
         if len(seg_all) > 0:
-            seg_thr = seg_all.mean() + anomaly_thre * (seg_all.max() - seg_all.min())
-            gate_win = (seg_all >= seg_thr).astype(np.float32)    # (Nw_total,) binary, window-level
+            # float64 arithmetic (2026-07-24): with float32, mean() of a constant array
+            # can round 1 ulp ABOVE the constant, making `seg >= thr` reject every
+            # window (all-zero gate -> F1=0 knife-edge observed on degenerate runs).
+            # float64 keeps mean(const)==const exactly, so the mathematical definition
+            # of the upstream threshold (all-pass on constant seg) holds deterministically.
+            seg64 = seg_all.astype(np.float64)
+            seg_thr = seg64.mean() + anomaly_thre * (seg64.max() - seg64.min())
+            gate_win = (seg64 >= seg_thr).astype(np.float32)      # (Nw_total,) binary, window-level
         else:
             gate_win = np.zeros(0, np.float32)
 
