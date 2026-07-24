@@ -3,7 +3,7 @@
 (w/o GRL / w/o FM / w/o anomaly-priority masking / w/o Student / symmetric decoders).
 
 [2026-07-11 — user] The main table + ablation currently report seed42 only. We add the SAME top-5
-seeds' remaining 4 seeds {40,41,45,46} for each of these 7 conditions (seed42 already exists), so the
+seeds' remaining seeds {40,41,43,44} for each of these 7 conditions (seed42 already exists), so the
 paper can report the 5-seed mean for LASAD(ours) AND its architecture-matched variants consistently.
 
 Order (user): excised -> blind -> ablations, seeds within each. official=True, 30ep, keep=False, 4
@@ -19,15 +19,20 @@ Placement: runs FIRST (WAIT_TOKENS empty; run_base guard only). The caller preem
 
 Usage: PYTHONHASHSEED=<seed> is set per run. python scripts/run_official_paper5seed_after.py
 """
-import json, os, sys, subprocess, datetime, time
+import json, os, sys, subprocess, datetime, time, glob
 sys.path.insert(0, '/home/ykio/notebooks/TSMAE')
 PROJECT = '/home/ykio/notebooks/TSMAE'
 ALL4 = ['PSM', 'SWaT_A1A2', 'WaDi_A1', 'WaDi_A2']
 SUBDIRS = {'SWaT_A1A2': ['SWaT/A1A2_full', 'SWaT/A1A2_excl22'],
            'WaDi_A1': ['WaDi/A1'], 'WaDi_A2': ['WaDi/A2'], 'PSM': ['PSM']}
 BASE = 'official=True num_epochs=30 official_keep_checkpoints=False'
-WAIT_TOKENS = []  # runs first; run_base-active guard in queue_alive() is the only gate.
-SEEDS = [40, 41, 45, 46]
+# [2026-07-19 reorder — user] 3-SEED-FIRST: this launcher now WAITS for run_official_sens3seed_after
+# (sparsity+rho seeds {40,41}) so every paper table reaches 3-seed {42,40,41} before ANY 5-seed work.
+WAIT_TOKENS = ['run_official_sens3seed_after']
+# [2026-07-19 — user] Paper 5-seed set fixed to CONSECUTIVE {40,41,42,43,44}; seeds 45/46 REMOVED
+# (non-paper runs are not to be executed). seed42 already exists for every condition (blind@42
+# stand-in = unlab100@42, user-approved equivalence for 3-seed AND 5-seed).
+SEEDS = [40, 41, 43, 44]
 # (tag, condition override, use_reconsnr_es_halt) — order: excised -> blind -> ablations
 CONDITIONS = [
     ('exclanom',  'train_exclude_anomaly_segments=True',                       False),  # excised (no labels → no halt)
@@ -38,6 +43,17 @@ CONDITIONS = [
     ('nostudent', 'use_student=False',                                         True),   # w/o Student (Teacher-only)
     ('td3sd3',    'num_teacher_decoder_layers=3 num_student_decoder_layers=3', True),   # symmetric decoders
 ]
+
+
+def already_done(seed, tag):
+    """Resume-safe skip: True if a completed run dir for (seed, tag) exists (all 4 datasets finalized).
+    keep=False makes each condition a self-contained run, so a completed dir is safe to reuse."""
+    cells = ['PSM', 'SWaT/A1A2_full', 'WaDi/A1', 'WaDi/A2']
+    for d in glob.glob(f"{PROJECT}/results/experiments/official/271_*_30ep_{seed}_{tag}"):
+        if all(os.path.exists(os.path.join(d, c, _f)) for c in cells
+               for _f in ('epoch_metrics.json', 'best_config.json', 'training_histories.json')):
+            return True
+    return False
 
 
 def _pgrep(tok):
@@ -98,20 +114,31 @@ def main():
     except Exception:
         pass
     print(f"[p5s] START {datetime.datetime.now():%Y%m%d_%H%M%S} — waiting for any active run_base to "
-          f"clear, then running 5-seed variant fill (excised->blind->ablations, seeds 40/41/45/46).",
+          f"clear, then running 5-seed variant fill (excised->blind->ablations); SEEDS=[40,41,43,44] (40/41 already done, skipped).",
           flush=True)
     waited = 0
     while queue_alive():
         time.sleep(15); waited += 1
     print(f"[p5s] no run_base after {waited*15}s — settling 10s then running.", flush=True)
     time.sleep(10)
-    for tag, cond_ov, halt in CONDITIONS:
-        ov = cond_ov + (' use_reconsnr_es_halt=True' if halt else '')
-        for seed in SEEDS:
+    for seed in SEEDS:                                   # SEED-MAJOR: all conditions per seed
+        for tag, cond_ov, halt in CONDITIONS:            # excised -> blind -> ablations
+            if already_done(seed, tag):                  # resume-safe: skip completed (seed, condition)
+                print(f"[p5s] SKIP {tag} seed{seed} (already complete)", flush=True)
+                continue
+            ov = cond_ov + (' use_reconsnr_es_halt=True' if halt else '')
             ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
             outdir = f"{PROJECT}/results/experiments/official/271_{ts}_30ep_{seed}_{tag}"
             run(outdir, ov, tag, seed)
             reviz(outdir, tag, seed)
+            if not already_done(seed, tag):  # [2026-07-24] rc!=0 / cut-off before final files -> retry ONCE
+                ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                outdir = f"{PROJECT}/results/experiments/official/271_{ts}_30ep_{seed}_{tag}"
+                print(f"[p5s] RETRY {tag} seed{seed} (incomplete after 1st attempt)", flush=True)
+                run(outdir, ov, tag, seed)
+                reviz(outdir, tag, seed)
+                if not already_done(seed, tag):
+                    print(f"[p5s] WARN {tag} seed{seed} STILL INCOMPLETE after retry -- manual attention", flush=True)
     print(f"[p5s] ALL DONE {datetime.datetime.now():%Y%m%d_%H%M%S}", flush=True)
 
 
