@@ -27,6 +27,7 @@ build/
 *.ipynb
 .vscode/
 .idea/
+/.codex/
 *.swp
 *.swo
 .DS_Store
