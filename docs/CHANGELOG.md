@@ -42,6 +42,27 @@ provenance(선택 epoch) 포함. **하드 앵커 내장**(seed40 PSM ES16 지표
 **왜 결과가 사후방식과 동일한가**: 사후 `es()`도 첫 patience-소진에서 break해 그 이후 epoch을 무시한다. halt는 바로 그 지점에서 학습을 멈추므로 ES epoch(best_ep)과 그 모델 상태·scores NPZ가 불변. 사후 VUS 스윕은 저장된 **전 epoch**(`glob('epoch_*_scores.npz')`)을 계산하므로 halt로 18ep만 저장돼도 ES epoch(16)의 VUS가 채워진다.
 
 **검증**: (1) 스트리밍 기준이 사후 `es()`와 동일 ES epoch — 실데이터 5시드×4셀 20/20 일치. (2) **end-to-end 수용검증**: PSM seed40 baseline+halt 실행 → e18 halt(12ep skip), e16의 8개 지표(pak/vus_pr/vus_roc/aff/prc/f1_t/pa_0_f1/r_based_f1_ar) **전부 기존 30ep 런과 소수 8자리까지 bit-identical**. (3) flag off → 블록 미실행 byte-identical. py_compile OK.
+
+## 2026-07-28: Docs — weak-supervised label 공개 규칙 정정
+
+- DeepMIL/WETAS/TreeMIL은 전체 training point annotation으로 파생한 bag/window label을 모두 사용하고, NRDetector의 `noisy_rate=0.4`는 point-label 비율이 아니라 100-timestep 비중첩 양성 window 중 첫 `floor(0.4P)`개의 PU-stage 공개 비율임을 명시했다.
+- NRDetector의 checkpoint-free encoder는 전체 파생 window label을 사용하며, 40% 제한은 PU selection과 stage-2 classifier의 labeled-positive subset에 적용된다는 구현 범위를 함께 기록했다.
+- `results_baseline.md`, Table A.2용 설명, Section 4.2 및 Appendix A.1 문구를 갱신하고, 원본 PDF를 보존한 weak-label 수정본을 별도 생성했다.
+
+## 2026-07-27: Docs — baseline 결과 정본 확장 및 `results_baseline.md` 명명
+
+- `comparison/results/experiments/results.md`를 `results_baseline.md`로 명확히 이름 변경하고, 생성기와 관련 주석의 참조를 함께 갱신했다.
+- 논문 Table 1/2/3/A.2/A.3/A.4/A.5/A.6의 baseline·TEP 소관을 안정적인 `RB-*` 표 ID로 인덱싱하고, 논문 기입 대상과 진단용 표를 구분했다. Table A.1/C.1처럼 baseline 범위 밖인 표도 소관을 명시했다.
+- Table 2/A.5에 paper early-stopping 값과 test-side PAK best-epoch 진단값을 분리하고, 모든 지표에 5-seed mean/sample std/min/max 및 선택 epoch 통계를 추가했다. 통계표는 참조 결과표 ID를 명시하며, 비통계 결과표는 원자료 디렉터리를 명시한다.
+- Table A.5 baseline-only rank 분포를 추가했다. TEP는 논문 Table 3 지표인 VUS-PR로 다시 집계하고, (1) canonical 데이터 분할 고정 + 모델/random seed 5개와 (2) 데이터 분할 seed + 모델/random seed 동시 변경 5개를 서로 독립된 표로 정리했다. 두 축 모두 mean/sample std/min/max, seed별 원값, 원자료 경로를 포함한다.
+- `scripts/TEP/build_vus_seed_axes.py`와 `table3_vus_{fixed_seed,data_seed}.json`을 추가했다. 각 17개 fault mode의 VUS-PR를 먼저 계산한 뒤 fold별 Seen/Unseen을 비가중 평균하며, PAK 집계는 Table 3에 사용하지 않는다. 기존 score가 30/15-epoch·test-PAK 선택 산출물이므로 v22의 10/5-epoch 확정 실험 전까지 provisional이고, `w/o GRL`은 실제로 존재하는 canonical seed 42만 n=1로 유지한다.
+- 기계가독 산출물은 paper ES `results_data.json`과 best-epoch `results_best_epoch_data.json`으로 분리했다.
+
+## 2026-07-25: Docs — catch×WaDi_A1 seed42 결측 복원 및 results 트래커 갱신
+
+- 최초 런의 비결정적 NaN 발산으로 누락됐던 catch×WaDi_A1 seed42를 프로토콜 내 재시도 1회로 2/2 epoch 완주했다. `epoch_metrics.json` 2개 epoch와 주요 지표가 모두 finite이며 NaN/Inf는 0건이다.
+- `comparison/build_results_md.py`의 §9 트래커를 원본 baseline 675/675 및 catch 5-seed n=5 복원 상태로 갱신했다. nrdetector refix로 임시 제거된 교체 셀은 현재 재생성 중임을 별도로 표기한다.
+
 ## 2026-07-22: Feat — TEP Table 4 5-seed 파이프라인 (seeded Random + per-seed 런처 + 다중-seed 집계)
 
 논문 Table 4의 seed-의존 행(Random/A/B/D) 5-seed(40..44)화. seed-42 경로는 전부 byte-호환 유지, GPU 실행 없음(스크립트 작성만). 백업 `.trash/260722/tep_5seed/`.
@@ -71,7 +92,7 @@ R4 스펙(dead ReLU head 붕괴의 기여 요인 = Keras initializer 미이식)�
 
 ## 2026-07-19: Feat — LASAD 논문용 baseline 5-seed 결과 집계기 (`comparison/build_results_md.py`)
 
-LASAD.pdf(본문+appendix) 요구사항 추출에 따라 `comparison/results/experiments/results.md`를 생성하는 재실행형 집계기.
+LASAD.pdf(본문+appendix) 요구사항 추출에 따라 `comparison/results/experiments/results_baseline.md`를 생성하는 재실행형 집계기.
 
 - **소스**: reseed 8-1..8-5(unsup, anomaly-excised)/9-1..9-5(weak, contaminated), seeds {42,43,40,41,44}. 미완료 셀은 빈칸(재실행 시 자동 충전).
 - **Epoch 선택 = 논문 A.1.1 프로토콜**: trained→argmin(train_loss)(ES restore-best), NO_ES 5모델→final epoch, stateless→단일 평가. 기존 test-side best-epoch(max pak) 미사용.
@@ -5096,5 +5117,41 @@ docs/
 - **데이터 4벌 빌드**: `scripts/TEP/data_dataseed{40,41,43,44}/` — seed별 train/test 겹침 0, 규격(shape/dtype/양성비) canonical 동일, 할당 상호·canonical 상이. **test 스트림 layout 불변**(y/fault_id/run_boundaries/run_table이 canonical과 동일 — pak_fill/build_table4가 데이터 override 없이 유효한 근거).
 - **Feat: loader env override** (`mae_anomaly/datasets/loaders.py::load_tep_typegen`) — `TEP_TYPEGEN_DATA_DIR` 설정 시 해당 dir 로드, 미설정 시 기존 경로(동작 불변).
 - **Feat: `build_table4.py --dataseed N`** — MAE(B/A/D)=`TEP_phase2_win100_ep30_dataseed{N}/pak_fill.json`, simple 5행=`scripts/TEP/results/simple_dataseed{N}/`(부재 시 null), Random=`per_fault_by_seed.json[N]` → `table4_data_ds{N}.json`. 기존 기본/--seed 모드 byte-호환 유지(md5 검증). `run_tep_simple.py --data-dir` 추가(기본 불변).
-- **Feat: results.md §6 이원화** (`comparison/build_results_md.py`) — 6-A 데이터셋 고정 5-seed(기존 값 무변화, 제목만 명시) / 6-B 데이터셋 변경 5-seed(canonical 42 + ds40/41/43/44, `table4_data_ds{N}.json` 소비, 결정적 모델도 seed-의존 취급, 6.1/6.2/6.3 동형).
+- **Feat: results_baseline.md §6 이원화** (`comparison/build_results_md.py`) — 6-A 데이터셋 고정 5-seed(기존 값 무변화, 제목만 명시) / 6-B 데이터셋 변경 5-seed(canonical 42 + ds40/41/43/44, `table4_data_ds{N}.json` 소비, 결정적 모델도 seed-의존 취급, 6.1/6.2/6.3 동형).
 - 실행 스크립트(작성만, GPU queue 종료 후 가동): `scripts/run_tep_dataseed.sh`(대기 게이트 `pgrep run_baseline.py|run_nrdetector_refix` → seed별 Phase2-A/B + pak_fill + build_table4 --dataseed, resumable), `scripts/run_tep_simple_dataseed.sh`(CPU simple 5모델×4폴드, resumable). 원본 백업: `temp/0724/tep_dataseed_backup/`.
+
+## 2026-07-27 (TEP data-seed 축 및 최종 집계 완료)
+- data-seed 44의 중단된 Phase2-B를 셀 단위로 재개해 A/B × 4 folds, fold당 epoch score 10개, `pak_fill.json` 12키와 `table4_data_ds44.json` 전 셀을 완성했다. data-seed 40/41/43/44와 canonical 42를 포함한 §6-B 5-seed 집계를 최종 재생성했다.
+- `comparison/build_results_md.py`의 오래된 진행 문구와 launcher 이력 기반 상태표를 제거하고, 실제 `results_data` 존재 여부에 따른 seed별 집계 셀 완결성(unsup 110/110, weak 25/25)을 표시하도록 정정했다.
+
+## 2026-07-27 (TEP v22 지표·표 번호 정정)
+
+- `paper writing/LASAD v22.pdf`를 기준으로 TEP headline을 **Table 3 / VUS-PR**로 정정했다. `comparison/build_results_md.py`와 생성물 `results_baseline.md`는 `vus_results.json`·`vus_verify.json`의 per-fault-mode VUS-PR를 Seen/Unseen 비가중 평균해 표시한다.
+- 기존 `table4_data*.json` 기반 PAK 5-seed/data-seed 표는 논문 비수록 진단으로 격리하고 `RB-TEP-PAK-*` ID로 변경했다. v22의 Table 4는 LASAD component ablation임을 인덱스에 반영했다.
+- v22 부록 표 번호에 맞춰 rank distribution을 Table A.5, supplementary PRC/VUS-ROC/oracle F1PA를 Table A.6으로 바로잡았다.
+- v22 Appendix A.3의 TEP 규약(10 total epochs / Teacher-only 5 epochs)과 현재 30/15-epoch VUS 원천의 불일치를 명시했다. 현재 fold 값은 논문 인쇄값을 재현하지만 새 10/5-epoch 실행 전에는 protocol-faithful 확정값으로 취급하지 않는다.
+
+## 2026-07-28 (NRDetector encoder LR=1e-5 민감도 queue)
+
+- `comparison/run_baseline.py`에 `--nrdetector-encoder-lr`를 추가하고 `baseline_common.create_model`의 NRDetector family에만 전달하도록 했다. Stage-2 classifier LR는 변경하지 않는다.
+- `scripts/run_nrdetector_encoder_lr_1e5_5seed.sh`를 추가했다. 공식 `nrdetector`만 대상으로 5 seeds × PSM/SWaT/WaDi A1/WaDi A2 = 20개 50-epoch run을 별도 root에 저장하고, epoch·score·seed·effective encoder LR를 모두 검증한다.
+- `scripts/queue_nrdetector_encoder_lr_after_tep.sh`는 현재 TEP 전체 completion marker 뒤에만 위 queue를 시작한다. `comparison/build_nrdetector_encoder_lr_summary.py`는 final epoch 50 통계와 분리된 best-PAK 진단, 기본 encoder LR=1e-4 대비 delta를 생성한다.
+
+## 2026-07-28 (NRDetector-full encoder/classifier LR grid queue)
+
+- Added `--nrdetector-classifier-lr` to `comparison/run_baseline.py`; the
+  override is applied only to `nrdetector` and `nrdetector_full` through the
+  model factory, independently of the encoder LR.
+- Added `scripts/run_nrdetector_full_lr_grid_5seed.sh` for two isolated
+  `nrdetector_full` arms: encoder/classifier `1e-4/1e-5` and `1e-5/1e-5`.
+  Each arm runs five seeds over PSM, SWaT, WaDi A1, and WaDi A2 (40 runs total,
+  50 epochs each), validates model/seed/noisy-rate/LRs/epoch-score completeness,
+  and quarantines partial cells before rerun.
+- Results use the unambiguous common root
+  `comparison/results/experiments/nrdetector_full_lr_grid_5seed/`, with the
+  complete LR pair encoded in each arm directory. An experiment manifest is
+  written before training. `comparison/build_nrdetector_full_lr_grid_summary.py`
+  generates final-epoch and separately labeled best-PAK statistics.
+- Added `scripts/queue_nrdetector_full_lr_grid_after_nrd.sh`; it starts the full
+  grid only after the already-registered paper NRDetector LR queue exits with
+  its completion marker, without signaling or modifying any live process.

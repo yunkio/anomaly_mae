@@ -60,6 +60,7 @@ from comparison.baseline_common import (
     load_data_from_config,
     generate_excl22_directory,
     augment_run_metadata,
+    set_baseline_seed,
 )
 from comparison.visualization import (
     plot_baseline_epoch_metrics,
@@ -171,6 +172,14 @@ def main():
                        help='Epochs for SOTA models')
     parser.add_argument('--at-epochs', type=int, default=None,
                        help='Epochs for Anomaly Transformer')
+    parser.add_argument('--nrdetector-encoder-lr', type=float, default=None,
+                       help=('Override the Stage-0 encoder learning rate for '
+                             'nrdetector/nrdetector_full only. The Stage-2 '
+                             'classifier learning rate is unchanged.'))
+    parser.add_argument('--nrdetector-classifier-lr', type=float, default=None,
+                       help=('Override the Stage-2 classifier learning rate for '
+                             'nrdetector/nrdetector_full only. The Stage-0 '
+                             'encoder learning rate is unchanged.'))
 
     # Eval control
     parser.add_argument('--eval-interval', type=int, default=1,
@@ -188,6 +197,39 @@ def main():
     parser.add_argument('--normalize-mode', type=str, default=None,
                        choices=['zscore', 'minmax'],
                        help='Override normalization mode (default: zscore)')
+
+    # Train-label masking (unlabel a fraction of TRAIN anomaly timepoints).
+    parser.add_argument('--train-label-mask-frac', type=float, default=None,
+                       help='Unlabel this fraction of TRAIN anomaly timepoints '
+                            '(rank-based among anomaly points). 0=off, 1=all. '
+                            'normalonly → masked anomalies stay in train as contamination; '
+                            'weak → masked train labels.')
+    parser.add_argument('--train-label-mask-random', action='store_true',
+                       help='Mask a RANDOM fraction (seeded RandomState(42)) of anomaly GROUPS '
+                            '(group_size-ts bins) instead of the chronologically-last frac. '
+                            'Only with --train-label-mask-frac>0.')
+    parser.add_argument('--train-label-mask-group-size', type=int, default=None,
+                       help='Bin width (timestamps) for grouped random masking (default 100). '
+                            'Only used with --train-label-mask-random.')
+
+    # Reproducibility
+    parser.add_argument('--seed', type=int, default=None,
+                       help='Random seed (set for ALL RNGs: torch/cuda/numpy/random + '
+                            'threaded into random/deepmil/nrdetector internal RNG). '
+                            'Re-seeded before EACH model. None = unseeded (legacy).')
+    parser.add_argument('--early-stop', action='store_true',
+                       help='Apply ACTUAL early stopping during training '
+                            '(train_loss, patience 3, restore-best = min-train_loss epoch). '
+                            'Models without usable train_loss (dcdetector/tfmae/nrdetector/'
+                            'nrdetector_full/treemil) run full epochs.')
+
+    # gcn_lstm R4 option A (2026-07-22): Keras/TF init semantics port
+    parser.add_argument('--gcnlstm-keras-init', action='store_true',
+                       help='gcn_lstm ONLY: enable the TF/Keras init-semantics port '
+                            '(glorot kernels, orthogonal recurrent, unit_forget_bias, '
+                            'EXACTLY-zero dense biases) + dead-head guard (warn + '
+                            'one-shot head re-init). No other model reads this flag. '
+                            'Default off = legacy byte-identical init.')
 
     # Other
     parser.add_argument('--nn-subsample', type=int, default=None,
@@ -217,6 +259,19 @@ def main():
     # Load experiment config
     config = get_experiment_config(args.experiment)
     experiment_name = config['results_dir_name']
+
+    # Inject train-label masking into loader_kwargs (copy to avoid mutating the
+    # shared EXPERIMENT_CONFIGS entry). Passed through to UnifiedLoader.
+    if args.train_label_mask_frac is not None or args.train_label_mask_random:
+        _lk = dict(config.get('loader_kwargs', {}))
+        if args.train_label_mask_frac is not None:
+            _lk['train_label_mask_frac'] = args.train_label_mask_frac
+        if args.train_label_mask_random:
+            _lk['train_label_mask_random'] = True
+        if args.train_label_mask_group_size is not None:
+            _lk['train_label_mask_group_size'] = args.train_label_mask_group_size
+        config = {**config, 'loader_kwargs': _lk}
+
     if args.output_base:
         results_dir = Path(args.output_base) / experiment_name
     else:
@@ -318,6 +373,14 @@ def main():
         epoch_overrides['sota_epochs'] = args.sota_epochs
     if args.at_epochs is not None:
         epoch_overrides['at_epochs'] = args.at_epochs
+    if args.nrdetector_encoder_lr is not None:
+        if args.nrdetector_encoder_lr <= 0:
+            parser.error('--nrdetector-encoder-lr must be positive')
+        epoch_overrides['nrdetector_encoder_lr'] = args.nrdetector_encoder_lr
+    if args.nrdetector_classifier_lr is not None:
+        if args.nrdetector_classifier_lr <= 0:
+            parser.error('--nrdetector-classifier-lr must be positive')
+        epoch_overrides['nrdetector_classifier_lr'] = args.nrdetector_classifier_lr
 
     results_dir.mkdir(parents=True, exist_ok=True)
     print_status(results_dir, all_models, experiment_name)
@@ -378,25 +441,38 @@ def main():
             print(f"\n[SKIP] {model_name} not available (import failed)", flush=True)
             continue
 
-        # 8번-parity epoch cap (mirror of the _WADI_BATCH_DIVISORS memory-pressure
-        # handling below). The 8번 baseline ran catch×WaDi at sota_epochs=5 (set via
-        # the queue config) — catch is extreme-slow on WaDi's ~130 features even at
-        # batch÷8. Pin catch×WaDi to 5 epochs here so any run (incl. the contaminated
-        # 10번) reproduces 8번's applied params regardless of the queue's sota_epochs
-        # value. Per-iteration copy avoids leaking the cap to other models under
-        # --model all; non-catch / non-WaDi entries are untouched.
+        # catch×WaDi epoch CAP (mirror of the _WADI_BATCH_DIVISORS memory-pressure
+        # handling below). catch is extreme-slow on WaDi's ~130 features even at
+        # batch÷8 (~3.9h/epoch). The 8번 baseline pinned catch×WaDi to sota_epochs=5.
+        # Behaviour: cap at 5 when the queue leaves it UNSET or asks for MORE than 5
+        # (preserves 8번/10번/labelmask parity for --model all and those queues), but
+        # RESPECT an explicit LOWER value. The 2026-07-08 reseed sets sota_epochs=2
+        # because catch's best epoch on WaDi is ep1(A1)/ep2(A2) — later epochs only
+        # over-fit (pak_auc_f1 declines), so 2ep both saves ~60% time AND captures the
+        # actual peak. Per-iteration copy avoids leaking the cap under --model all.
         _epoch_overrides = dict(epoch_overrides)
-        if model_name == 'catch' and 'wadi' in args.experiment.lower() \
-                and _epoch_overrides.get('sota_epochs') != 5:
-            print(
-                f"[CONFIG] {model_name} × {args.experiment}: "
-                f"sota_epochs {_epoch_overrides.get('sota_epochs')} → 5 "
-                f"(8번 parity: catch×WaDi epoch cap)",
-                flush=True,
-            )
-            _epoch_overrides['sota_epochs'] = 5
+        if model_name == 'catch' and 'wadi' in args.experiment.lower():
+            _cur = _epoch_overrides.get('sota_epochs')
+            if _cur is None or _cur > 5:
+                print(
+                    f"[CONFIG] {model_name} × {args.experiment}: "
+                    f"sota_epochs {_cur} → 5 (catch×WaDi parity cap)",
+                    flush=True,
+                )
+                _epoch_overrides['sota_epochs'] = 5
+            else:
+                print(
+                    f"[CONFIG] {model_name} × {args.experiment}: "
+                    f"respecting explicit sota_epochs={_cur} (≤5 catch×WaDi cap)",
+                    flush=True,
+                )
 
         try:
+            # Re-seed ALL RNGs before EACH model so its weight init + shuffle +
+            # dropout stream is deterministic given --seed AND independent of the
+            # order/count of preceding models under --model all. (2026-07-08 reseed)
+            set_baseline_seed(args.seed)
+
             # Model creation is split out: TypeError here = preset/wrapper signature
             # mismatch, which used to silently skip the model. Now it surfaces as
             # an [ERROR] line AND a nonzero exit at the end of the run so the queue
@@ -406,6 +482,7 @@ def main():
                 model = create_model(
                     model_name, n_features, config['model_preset'],
                     _epoch_overrides, config.get('train_stride'), args.nn_subsample,
+                    seed=args.seed,
                 )
             except TypeError as type_e:
                 print(
@@ -418,6 +495,17 @@ def main():
                 failed_models.append((model_name, 'TypeError', str(type_e)))
                 continue
 
+            # gcn_lstm ONLY (R4 option A, 2026-07-22): flip the live wrapper's
+            # keras_init BEFORE fit() so the GCNLSTM torch module is built with
+            # TF/Keras init semantics and the dead-head guard arms. Set on the
+            # wrapper attribute (not the preset) so the default preset stays
+            # untouched and every other model's code path is unaffected.
+            # augment_run_metadata captures the attribute automatically (schema2).
+            if model_name == 'gcn_lstm' and args.gcnlstm_keras_init:
+                model.keras_init = True
+                print("[CONFIG] gcn_lstm: keras_init=True (Keras init semantics "
+                      "+ dead-head guard armed)", flush=True)
+
             # Dataset-specific memory-pressure override:
             # - dcdetector dual-attention OOM-thrashes on WaDi 1.3M train at default
             #   batch_size=128 (GPU mem hits 98% and forward stalls). Halve.
@@ -425,9 +513,21 @@ def main():
             #   Quartered (32) gave more headroom but still extremely slow on 130 features.
             #   Eighth-ed (16) per user request 2026-06-10: combined with sota_epochs=5
             #   override in queue file for catch×WaDi entries.
-            _WADI_BATCH_DIVISORS = {'dcdetector': 2, 'catch': 8}
-            divisor = _WADI_BATCH_DIVISORS.get(model_name)
-            if divisor and 'wadi' in args.experiment.lower():
+            _WADI_BATCH_DIVISORS = {'dcdetector': 4, 'catch': 8}  # 2026-07-05: dcdetector 2→4 (batch 128→32) — ÷2(64)에서 WaDi normalonly가 batch당 340s로 진행성 슬로다운(GPU mem 압박). 반으로 재축소.
+            # catch×SWaT ALSO OOM-thrashes at full batch=128: GPU mem hits 98% (12GB) and
+            # per-batch time explodes to ~50min (191-day ETA stall, observed 2026-07-10 on
+            # the reseed 8-1 run). The divisor logic was previously WaDi-only so SWaT was
+            # never covered. SWaT has fewer features (45) than WaDi (~130) so ÷4 (batch 32)
+            # gives ample headroom. Applied to any experiment whose name contains 'swat'.
+            _SWAT_BATCH_DIVISORS = {'catch': 4}
+            _exp_l = args.experiment.lower()
+            if 'wadi' in _exp_l:
+                divisor = _WADI_BATCH_DIVISORS.get(model_name)
+            elif 'swat' in _exp_l:
+                divisor = _SWAT_BATCH_DIVISORS.get(model_name)
+            else:
+                divisor = None
+            if divisor:
                 if hasattr(model, 'batch_size'):
                     _orig_bs = model.batch_size
                     model.batch_size = _orig_bs // divisor
@@ -444,7 +544,7 @@ def main():
                 run_simple_baseline(
                     model, train_X, test_X, test_y, anomaly_regions,
                     model_name, output_dir, experiment_name,
-                    excl_region=excl_region,
+                    excl_region=excl_region, seed=args.seed,
                 )
 
             # Boundary safety (all multi-segment datasets): drop sliding
@@ -497,6 +597,7 @@ def main():
                     train_windows=sa_windows,
                     train_targets=sa_targets,
                     test_segments=norm_te,
+                    early_stop=args.early_stop,
                 )
 
             elif model_name in SOTA_MODELS and not args.no_epoch_eval:
@@ -521,6 +622,7 @@ def main():
                     train_segments=sa_segments,
                     norm_train_segments=norm_tr,
                     test_segments=norm_te,
+                    early_stop=args.early_stop,
                 )
 
             elif model_name in WEAK_SUPERVISED_MODELS and not args.no_epoch_eval:
@@ -548,6 +650,7 @@ def main():
                     norm_train_segments=norm_tr,
                     test_segments=norm_te,
                     resume=args.resume,
+                    early_stop=args.early_stop,
                 )
 
             else:
@@ -580,12 +683,14 @@ def main():
                     train_shape=getattr(train_X, 'shape', None),
                     test_shape=getattr(test_X, 'shape', None),
                     epoch_overrides=_epoch_overrides,
-                    wadi_batch_divisor=(
-                        divisor if (divisor and 'wadi' in args.experiment.lower())
-                        else None
-                    ),
+                    wadi_batch_divisor=divisor,  # now covers WaDi + SWaT (catch); None otherwise
                     eval_interval=args.eval_interval,
                     train_stride=config.get('train_stride'),
+                    train_label_mask_frac=config.get('loader_kwargs', {}).get('train_label_mask_frac'),
+                    train_label_mask_random=config.get('loader_kwargs', {}).get('train_label_mask_random'),
+                    train_label_mask_group_size=config.get('loader_kwargs', {}).get('train_label_mask_group_size'),
+                    seed=args.seed,
+                    early_stop=args.early_stop,
                 )
             except Exception as _meta_e:
                 print(f"  [METADATA] augment wrapper error (non-fatal): {_meta_e}",

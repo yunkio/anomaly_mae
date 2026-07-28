@@ -1,10 +1,10 @@
 {
   "model_name": "random",
   "experiment": "tep_typegen_f_unk",
-  "timestamp": "2026-06-11T01:42:37.361534",
+  "timestamp": "2026-07-24T01:42:24.513312",
   "timing": {
-    "train_time": 0.5777187347412109,
-    "inference_time": 0.006390094757080078
+    "train_time": 0.34433531761169434,
+    "inference_time": 0.005568504333496094
   },
   "normalize_mode": "minmax_noclip",
   "n_runs": 5,
@@ -12,7 +12,7 @@
     "seed": "None"
   },
   "train_npz": "train_f_unk.npz",
-  "eval_time": 2789.7558336257935,
+  "eval_time": 2609.953211069107,
   "boundary_policy": "pointwise (no temporal mixing)",
   "partitions": {
     "full": {
@@ -79,5 +79,12 @@
         14
       ]
     }
-  }
+  },
+  "random_seeds": [
+    40,
+    41,
+    42,
+    43,
+    44
+  ]
 }

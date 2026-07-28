@@ -400,3 +400,53 @@ Stage 2 uses a 3-phase diverse selection strategy:
 ---
 
 **Status**: ✅ All ablation studies verified and ready for experimentation.
+
+## NRDetector encoder learning-rate sensitivity
+
+The paper-ranked `nrdetector` can be run with a Stage-0 encoder learning-rate
+override without changing its Stage-2 classifier optimizer:
+
+```bash
+conda run -n dc_vis python comparison/run_baseline.py \
+  --experiment psm --model nrdetector \
+  --output-base comparison/results/experiments/nrdetector_encoder_lr_1e-5_5seed/seed42 \
+  --sota-epochs 50 --eval-interval 1 --normalize-mode minmax \
+  --seed 42 --early-stop --nrdetector-encoder-lr 1e-5
+```
+
+`scripts/run_nrdetector_encoder_lr_1e5_5seed.sh` executes the controlled
+five-seed comparison over PSM, SWaT, WaDi A1, and WaDi A2. Only the encoder LR
+changes from `1e-4` to `1e-5`; classifier LR remains `1e-5`. The official
+`nrdetector` row (`noisy_rate=0.4`) is included, while the non-paper
+`nrdetector_full` ablation is excluded. Complete cells require epochs 1-50,
+50 epoch-score files, matching seed metadata, and `encoder_lr=1e-5` in both
+the saved model config and effective run metadata.
+
+Primary reporting uses fixed final epoch 50 because NRDetector is a NO_ES
+model. `comparison/build_nrdetector_encoder_lr_summary.py` also emits a clearly
+separated test-PAK-best diagnostic and candidate-minus-default deltas.
+
+### NRDetector-full two-arm LR grid
+
+The non-paper `nrdetector_full` ablation is scheduled separately so that it
+cannot be confused with the paper-ranked `nrdetector` result. It uses
+`noisy_rate=1.0` (all positive windows revealed; negatives remain unlabeled)
+and two explicit arms:
+
+- `encoder_lr=1e-4`, `classifier_lr=1e-5`
+- `encoder_lr=1e-5`, `classifier_lr=1e-5`
+
+`--nrdetector-classifier-lr` provides an explicit Stage-2 override rather than
+relying on the preset default. `scripts/run_nrdetector_full_lr_grid_5seed.sh`
+runs both arms over the same five seeds and four paper entities as the
+NRDetector LR sensitivity experiment. Results are isolated under
+`comparison/results/experiments/nrdetector_full_lr_grid_5seed/`, with one
+subdirectory per complete LR pair. Completion validation requires epochs
+1-50, score files 1-50, model name `nrdetector_full`, `noisy_rate=1.0`, the
+expected seed, and matching effective encoder/classifier LRs. Partial cells
+are quarantined before a clean cell-level restart.
+
+After both arms finish,
+`comparison/build_nrdetector_full_lr_grid_summary.py` writes `summary.json`
+and `results_nrdetector_full_lr_grid.md`. Fixed final epoch 50 remains the
+primary selection and test-PAK-best remains a separate diagnostic.

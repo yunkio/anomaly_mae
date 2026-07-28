@@ -654,3 +654,17 @@ Consistent colors across all visualizations:
 ---
 
 **Status**: Documentation complete. Visualization module modularized (Update 9). All visualizers use dynamic color management.
+
+## NRDetector encoder-LR sensitivity outputs
+
+`--nrdetector-encoder-lr` changes only the model hyperparameter supplied to
+NRDetector; it does not alter baseline visualization generation. Each run keeps
+the standard `visualization/epoch_metrics` and `visualization/best_model`
+outputs under its isolated experiment directory. The five-seed LR=1e-5 queue
+uses `comparison/results/experiments/nrdetector_encoder_lr_1e-5_5seed/seed*/`.
+
+The `nrdetector_full` LR grid is deliberately kept in a different root:
+`comparison/results/experiments/nrdetector_full_lr_grid_5seed/`. Its two arms
+are `encoder_lr_1e-4__classifier_lr_1e-5/` and
+`encoder_lr_1e-5__classifier_lr_1e-5/`; each retains the normal per-run
+visualization layout below `seed*/<dataset>/nrdetector_full/`.

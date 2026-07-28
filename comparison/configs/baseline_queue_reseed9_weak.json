@@ -1,0 +1,165 @@
+{
+  "description": "RESEED EXP9 \u2014 5 weak-SSL \u00d7 4 large datasets [psm,swat,wadi_A1,wadi_A2], plain variant, minmax(eff none), 50ep, model-major. Seed+ES forwarded at launch.",
+  "experiments": [
+    {
+      "name": "deepmil_psm",
+      "experiment": "psm",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_psm",
+      "experiment": "psm",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_psm",
+      "experiment": "psm",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_psm",
+      "experiment": "psm",
+      "model": "nrdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "nrdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "nrdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "nrdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_full_psm",
+      "experiment": "psm",
+      "model": "nrdetector_full",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_full_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "nrdetector_full",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_full_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "nrdetector_full",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_full_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "nrdetector_full",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "sota_epochs": 50
+    }
+  ]
+}

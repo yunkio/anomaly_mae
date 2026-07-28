@@ -1,0 +1,957 @@
+{
+  "description": "EXP11 time-order 50% mask \u2014 27 models \u00d7 4 large [psm,swat,wadi_A1,wadi_A2], model-major",
+  "experiments": [
+    {
+      "name": "random_psm",
+      "experiment": "psm_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "random_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "random_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "random_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "random",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "sensor_range_psm",
+      "experiment": "psm_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "sensor_range_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "sensor_range_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "sensor_range_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "sensor_range",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "pca_error_psm",
+      "experiment": "psm_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "pca_error_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "pca_error_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "pca_error_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "pca_error",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "l2_norm_psm",
+      "experiment": "psm_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "l2_norm_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "l2_norm_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "l2_norm_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "l2_norm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "nn_distance_psm",
+      "experiment": "psm_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "nn_distance_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "nn_distance_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "nn_distance_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "nn_distance",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5
+    },
+    {
+      "name": "mlp_psm",
+      "experiment": "psm_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlp_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "mlp",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_psm",
+      "experiment": "psm_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "mlpmixer_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "mlpmixer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_psm",
+      "experiment": "psm_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "transformer_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_psm",
+      "experiment": "psm_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "gcn_lstm_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "gcn_lstm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "neural_epochs": 50
+    },
+    {
+      "name": "anomaly_transformer_psm",
+      "experiment": "psm_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "at_epochs": 10
+    },
+    {
+      "name": "anomaly_transformer_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "at_epochs": 10
+    },
+    {
+      "name": "anomaly_transformer_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "at_epochs": 10
+    },
+    {
+      "name": "anomaly_transformer_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "anomaly_transformer",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "at_epochs": 10
+    },
+    {
+      "name": "tranad_psm",
+      "experiment": "psm_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "tranad_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "tranad_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "tranad_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "tranad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "usad_psm",
+      "experiment": "psm_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "usad_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "usad_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "usad_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "usad",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "dagmm_psm",
+      "experiment": "psm_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "dagmm_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "dagmm_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "dagmm_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "dagmm",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "gdn_psm",
+      "experiment": "psm_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "gdn_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "gdn_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "gdn_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "gdn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "omnianomaly_psm",
+      "experiment": "psm_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "omnianomaly_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "omnianomaly_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "omnianomaly_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "omnianomaly",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "tfmae_psm",
+      "experiment": "psm_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "tfmae_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "tfmae_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "tfmae_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "tfmae",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "timesnet_psm",
+      "experiment": "psm_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "timesnet_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "timesnet_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "timesnet_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "timesnet",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "dcdetector_psm",
+      "experiment": "psm_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "dcdetector_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "dcdetector_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "dcdetector_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "dcdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "memto_psm",
+      "experiment": "psm_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "memto_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "memto_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "memto_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "memto",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "moderntcn_psm",
+      "experiment": "psm_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "moderntcn_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "moderntcn_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "moderntcn_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "moderntcn",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "catch_psm",
+      "experiment": "psm_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "catch_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "catch_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "catch_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "catch",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "npsr_psm",
+      "experiment": "psm_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "npsr_swat_a1a2",
+      "experiment": "swat_a1a2_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "npsr_wadi_14days_A1",
+      "experiment": "wadi_14days_A1_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "npsr_wadi_14days_A2",
+      "experiment": "wadi_14days_A2_normalonly",
+      "model": "npsr",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 10
+    },
+    {
+      "name": "deepmil_psm",
+      "experiment": "psm",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "deepmil_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "deepmil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_psm",
+      "experiment": "psm",
+      "model": "nrdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "nrdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "nrdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "nrdetector",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_full_psm",
+      "experiment": "psm",
+      "model": "nrdetector_full",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_full_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "nrdetector_full",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_full_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "nrdetector_full",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "nrdetector_full_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "nrdetector_full",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_psm",
+      "experiment": "psm",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "treemil_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "treemil",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_psm",
+      "experiment": "psm",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_swat_a1a2",
+      "experiment": "swat_a1a2",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_wadi_14days_A1",
+      "experiment": "wadi_14days_A1",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    },
+    {
+      "name": "wetas_wadi_14days_A2",
+      "experiment": "wadi_14days_A2",
+      "model": "wetas",
+      "normalize_mode": "minmax",
+      "eval_interval": 1,
+      "train_label_mask_frac": 0.5,
+      "sota_epochs": 50
+    }
+  ]
+}

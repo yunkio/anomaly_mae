@@ -6,7 +6,7 @@
 # existing seed-42 root is never touched. After both groups finish, pak_fill.py
 # (--root) and build_table4.py (--seed) run automatically, producing
 # results/experiments/TEP_phase2_win100_ep30/table4_data_s{seed}.json
-# (results.md generator convention).
+# (results_baseline.md generator convention).
 #
 # Config: identical to run_tep_phase2_pipeline.sh except random_seed.
 # Resumable: run_base_experiments.py skips any dataset whose results dir already

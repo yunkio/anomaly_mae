@@ -121,6 +121,10 @@ class UnifiedLoader:
         app: int = None,
         # SMAP/MSL per-channel parameter (Pattern B)
         channel: str = None,
+        # Train-label masking (mirror mae_anomaly.dataset_sliding train_label_mask_*)
+        train_label_mask_frac: float = 0.0,
+        train_label_mask_random: bool = False,
+        train_label_mask_group_size: int = 100,
     ):
         """
         Args:
@@ -162,6 +166,9 @@ class UnifiedLoader:
         self.margin = margin
         self.app = app
         self.channel = channel
+        self.train_label_mask_frac = float(train_label_mask_frac or 0.0)
+        self.train_label_mask_random = bool(train_label_mask_random)
+        self.train_label_mask_group_size = int(train_label_mask_group_size or 100)
 
         # Populated by load()
         self.features: Optional[np.ndarray] = None    # z-score normalized
@@ -269,6 +276,47 @@ class UnifiedLoader:
               f"anomaly ratio: {self.train_labels.mean():.2%}")
         print(f"    Test:  {len(self.test_labels):,} samples, "
               f"anomaly ratio: {self.test_labels.mean():.2%}")
+
+        # --- Step 3b: Train-label masking (mirror mae_anomaly.dataset_sliding) ---
+        # Unlabel `frac` of the TRAIN ANOMALY timepoints (rank-based among anomaly
+        # points, NOT the back-frac of the timeline). random=False → chronologically
+        # LAST k; random=True → RANDOM k (fixed-seed RandomState(42), reproducible).
+        # frac=1.0 ⇒ all train anomaly labels zeroed (≡ blind / contaminated).
+        # Normal labels never touched. `.copy()` keeps self.labels (test/eval) TRUE.
+        # For normalonly: masked anomalies are NOT removed (see _apply_normalonly),
+        # so they remain in train as contamination. For standard (weak): get_train_data
+        # returns these masked labels directly.
+        if self.train_label_mask_frac > 0:
+            self.train_labels = self.train_labels.copy()
+            _anom_idx = np.nonzero(self.train_labels)[0]  # train anomaly timepoints (chronological)
+            _n_tot = len(_anom_idx)
+            _n_masked = 0
+            _detail = ''
+            if self.train_label_mask_random:
+                # [group 2026-07-03] GROUP-level random: bin anomaly timepoints into
+                # group_size-timestamp windows (idx // group_size), pick a RANDOM `frac`
+                # of the GROUPS (seeded RandomState(42)), unlabel every anomaly point in
+                # the chosen groups. Coarser/contiguous vs scattered point masking.
+                _gs = max(1, int(self.train_label_mask_group_size))
+                _grp = _anom_idx // _gs
+                _ug = np.unique(_grp)
+                _ng = int(round(self.train_label_mask_frac * len(_ug)))
+                if _ng > 0:
+                    _selg = np.random.RandomState(42).choice(_ug, size=_ng, replace=False)
+                    _msel = _anom_idx[np.isin(_grp, _selg)]
+                    self.train_labels[_msel] = 0
+                    _n_masked = len(_msel)
+                _detail = f'grouped {_ng}/{len(_ug)} groups (gs={_gs})'
+            else:
+                _k = int(round(self.train_label_mask_frac * _n_tot))
+                if _k > 0:
+                    self.train_labels[_anom_idx[-_k:]] = 0
+                _n_masked = _k
+                _detail = 'time-order latest'
+            print(f"\n  Train-label mask: frac={self.train_label_mask_frac} "
+                  f"random={self.train_label_mask_random} ({_detail}) → unlabeled "
+                  f"{_n_masked}/{_n_tot} train anomaly timepoints "
+                  f"(remaining anomaly ratio: {self.train_labels.mean():.2%})")
 
         # --- Step 4: Variant ---
         if self.variant == 'normalonly':
@@ -407,12 +455,24 @@ class UnifiedLoader:
         # run_boundaries, plus the actual anomaly intervals.
         cut_intervals = []  # list of (start, end) with end exclusive; end > start means removal
 
-        for region in self.anomaly_regions:
-            if region.start < self.train_end:
-                clipped_start = region.start
-                clipped_end = min(region.end, self.train_end)
-                if clipped_end > clipped_start:
-                    cut_intervals.append((clipped_start, clipped_end))
+        if self.train_label_mask_frac > 0:
+            # Masked run: cut only the STILL-labeled (unmasked) anomalies, derived
+            # from the (already-masked) train_labels. Masked (now-0) anomaly
+            # timepoints are KEPT in train as contamination — the whole point of
+            # partial masking. Contiguous 1-runs → (start, end-exclusive) intervals.
+            _lab = (self.train_labels[:self.train_end] > 0).astype(np.int8)
+            _d = np.diff(np.concatenate(([0], _lab, [0])))
+            _starts = np.where(_d == 1)[0]
+            _ends = np.where(_d == -1)[0]
+            for _s, _e in zip(_starts, _ends):
+                cut_intervals.append((int(_s), int(_e)))
+        else:
+            for region in self.anomaly_regions:
+                if region.start < self.train_end:
+                    clipped_start = region.start
+                    clipped_end = min(region.end, self.train_end)
+                    if clipped_end > clipped_start:
+                        cut_intervals.append((clipped_start, clipped_end))
 
         # Add run_boundaries as zero-length cut points (split segments without removing data).
         run_boundaries = self.data_info.get('run_boundaries') or []

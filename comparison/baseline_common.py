@@ -234,6 +234,104 @@ WEAK_SUPERVISED_AVAILABILITY = {
 # Expose weak-model availability through the same dict the runner already consults.
 SOTA_AVAILABILITY.update(WEAK_SUPERVISED_AVAILABILITY)
 
+
+# ============================================================
+# Reproducibility seed + early-stopping (2026-07-08 reseed runs)
+# ============================================================
+
+def set_baseline_seed(seed):
+    """Set ALL RNGs for reproducibility (mirror of mae_anomaly.config.set_seed).
+
+    Seeds python `random`, numpy, torch (+cuda all-devices), and PYTHONHASHSEED.
+    Matches MAE's speed-vs-bit-exact tradeoff: cudnn.deterministic=False +
+    benchmark=True (RNG-stream reproducible for same seed, NOT bitwise-deterministic
+    on GPU — use_deterministic_algorithms deliberately NOT set). No-op if seed None."""
+    if seed is None:
+        return
+    import random as _random
+    import torch as _torch
+    seed = int(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    _random.seed(seed)
+    np.random.seed(seed)
+    _torch.manual_seed(seed)
+    if _torch.cuda.is_available():
+        _torch.cuda.manual_seed(seed)
+        _torch.cuda.manual_seed_all(seed)
+    _torch.backends.cudnn.deterministic = False
+    _torch.backends.cudnn.benchmark = True
+
+
+# Models that CANNOT do train_loss-based early stopping (2026-07-08, user decision:
+# run FULL epochs, no ES). nrdetector/nrdetector_full/treemil log train_loss=None;
+# dcdetector/tfmae log a constant-0.0 train_loss (no signal). Everything else
+# trainable (15 unsup + weak deepmil/wetas) has a usable decreasing train_loss.
+NO_ES_MODELS = frozenset({'dcdetector', 'tfmae', 'nrdetector', 'nrdetector_full', 'treemil'})
+
+# Early-stopping policy (Notion methodology: train_loss, patience 3, min_delta 0,
+# no min_epochs floor, restore-best = min-train_loss epoch).
+ES_PATIENCE = 3
+ES_MIN_DELTA = 0.0
+
+
+class _BaselineEarlyStop(Exception):
+    """Raised from a training epoch_callback to STOP training (actual early stop).
+    Caught around the wrapper's model.fit() — wrappers ignore callback returns, so
+    an exception is the leak-free way to break their internal epoch loops."""
+
+
+def _es_should_stop(train_loss, es_state):
+    """Update early-stop state with this epoch's train_loss; return True if training
+    should STOP now (train_loss not strictly improved for ES_PATIENCE epochs).
+    es_state = dict(best=inf, wait=0). min_delta=0 strict (< best). None train_loss
+    (or non-finite) never triggers a stop (treated as no signal)."""
+    if not isinstance(train_loss, (int, float)) or not np.isfinite(train_loss):
+        return False
+    if train_loss < es_state['best'] - ES_MIN_DELTA:
+        es_state['best'] = train_loss
+        es_state['wait'] = 0
+    else:
+        es_state['wait'] += 1
+        if es_state['wait'] >= ES_PATIENCE:
+            return True
+    return False
+
+
+def _get_train_loss(model, ep):
+    """This epoch's mean train loss from model.train_loss_history[ep-1] (npsr stores
+    a (point,seq) tuple -> summed). None if missing/non-numeric. Mirrors
+    _attach_train_loss so ES sees the same value logged into epoch_metrics."""
+    hist = getattr(model, 'train_loss_history', None)
+    if not hist:
+        return None
+    idx = (ep - 1) if isinstance(ep, int) and ep >= 1 else len(hist) - 1
+    if not (0 <= idx < len(hist)):
+        return None
+    v = hist[idx]
+    if isinstance(v, (tuple, list)):
+        nums = [float(x) for x in v if isinstance(x, (int, float))]
+        return float(sum(nums)) if nums else None
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def _restore_best_idx(epoch_metrics_list, model_name):
+    """Index of the RESTORE-BEST epoch in epoch_metrics_list.
+
+    ES-capable models (train_loss usable): min-train_loss epoch (restore-best-weights,
+    consistent with the train_loss ES criterion, no test peeking). No-ES models
+    (NO_ES_MODELS / no usable train_loss) fall back to max-pak_auc_f1 (previous
+    behavior). Empty list -> None handled by caller."""
+    if not epoch_metrics_list:
+        return 0
+    tls = [(m.get('train_loss'), i) for i, m in enumerate(epoch_metrics_list)]
+    usable = [(v, i) for v, i in tls if isinstance(v, (int, float)) and np.isfinite(v)]
+    # 'usable' also excludes the constant-0.0 degenerate series (all equal) -> pak fallback
+    if (model_name not in NO_ES_MODELS and usable
+            and len({round(v, 12) for v, _ in usable}) > 1):
+        return min(usable, key=lambda x: x[0])[1]
+    return max(range(len(epoch_metrics_list)),
+               key=lambda i: epoch_metrics_list[i].get('pak_auc_f1', 0) or 0)
+
 # MAE-only metric keys that baselines set to null
 _MAE_ONLY_KEYS = [
     'teacher_prc_auc', 'teacher_f1_t', 'teacher_pa_20_f1',
@@ -830,6 +928,11 @@ def augment_run_metadata(
     wadi_batch_divisor=None,
     eval_interval=None,
     train_stride=None,
+    train_label_mask_frac=None,
+    train_label_mask_random=None,
+    train_label_mask_group_size=None,
+    seed=None,
+    early_stop=None,
 ):
     """Merge a detailed, FACT-ONLY ``parameters`` + ``environment`` block into
     the driver-written ``metadata.json``.
@@ -909,6 +1012,14 @@ def augment_run_metadata(
             'test_shape': list(test_shape) if test_shape is not None else None,
             'eval_interval': eval_interval,
             'train_stride_config': train_stride,
+            'train_label_mask_frac': train_label_mask_frac,
+            'train_label_mask_random': train_label_mask_random,
+            'train_label_mask_group_size': train_label_mask_group_size,
+            'seed': seed,
+            'early_stop': bool(early_stop) if early_stop is not None else None,
+            'early_stop_policy': ({'metric': 'train_loss', 'patience': ES_PATIENCE,
+                                   'min_delta': ES_MIN_DELTA, 'restore_best': 'min_train_loss_epoch',
+                                   'no_es_models': sorted(NO_ES_MODELS)} if early_stop else None),
             'raw_experiment': raw_experiment,
         }
         meta['environment'] = _capture_environment()
@@ -968,6 +1079,7 @@ def run_simple_baseline(
     output_dir: Path,
     experiment_name: str,
     excl_region=None,
+    seed=None,
 ) -> dict:
     """Run a simple (non-DL) baseline: fit, predict, evaluate, save.
 
@@ -997,7 +1109,10 @@ def run_simple_baseline(
     # Paper §4.2 (QuoVadis): the random baseline reports "the score achieved over
     # five independent runs". With seed=None, each model.predict() re-seeds NumPy
     # from OS entropy → independent draw. Deterministic baselines run once.
-    n_runs = 5 if model_name == 'random' else 1
+    # random: 5 OS-entropy draws (legacy §4.2) ONLY when unseeded; with a fixed
+    # seed it is one reproducible draw (4/5-seed variance replaces the 5-run
+    # aggregate). All other simple models are deterministic → 1 run. (2026-07-08)
+    n_runs = 5 if (model_name == 'random' and seed is None) else 1
 
     per_run_metrics = []
     inference_time = 0.0
@@ -1189,6 +1304,7 @@ def run_dl_baseline_with_epoch_eval(
     train_windows: np.ndarray = None,
     train_targets: np.ndarray = None,
     test_segments=None,
+    early_stop: bool = False,
 ) -> dict:
     """Run a DL baseline with per-epoch inference + synchronous CPU eval.
 
@@ -1253,6 +1369,9 @@ def run_dl_baseline_with_epoch_eval(
     best_pak_f1 = 0.0
     best_saved = False  # True once model/ holds the BEST-epoch model (2026-06-15)
     train_start = time.time()
+
+    _es = {'best': float('inf'), 'wait': 0}  # early-stop state (train_loss)
+    _es_stopped_ep = None
 
     # ---- Training loop ----
     for epoch in range(model.epochs):
@@ -1328,6 +1447,14 @@ def run_dl_baseline_with_epoch_eval(
               f"{epoch_time:.1f}s/ep | ETA: {remaining:.0f}s", end="")
         sys.stdout.flush()
 
+        # ACTUAL early stop: stop training when train_loss has not strictly
+        # improved for ES_PATIENCE epochs (restore-best handled below). (2026-07-08)
+        if early_stop and model_name not in NO_ES_MODELS and _es_should_stop(avg_loss, _es):
+            _es_stopped_ep = ep
+            print(f"\n  [EARLY STOP] {model_name}: train_loss no-improve "
+                  f"x{ES_PATIENCE} → stop at ep{ep} (restore-best = min-train_loss)")
+            break
+
     train_time = time.time() - train_start
     print(f"\n  Training complete: {train_time:.1f}s")
 
@@ -1335,10 +1462,7 @@ def run_dl_baseline_with_epoch_eval(
     # scores.npz must correspond to the BEST epoch (by pak_auc_f1) so that any
     # downstream visualization or recomputation matches the reported best metric.
     if epoch_metrics_list:
-        best_idx = max(
-            range(len(epoch_metrics_list)),
-            key=lambda i: epoch_metrics_list[i].get('pak_auc_f1', 0) or 0,
-        )
+        best_idx = _restore_best_idx(epoch_metrics_list, model_name)
         final_metrics = epoch_metrics_list[best_idx]
         best_ep_num = final_metrics.get('epoch', best_idx + 1)
         best_scores_file = output_dir / 'epoch_scores' / f'epoch_{best_ep_num:03d}_scores.npz'
@@ -1461,6 +1585,7 @@ def run_sota_baseline_with_epoch_eval(
     train_segments=None,
     norm_train_segments=None,
     test_segments=None,
+    early_stop: bool = False,
 ) -> dict:
     """Run a SOTA baseline with per-epoch inference + synchronous CPU eval.
 
@@ -1494,6 +1619,8 @@ def run_sota_baseline_with_epoch_eval(
     epoch_metrics_list = []
     best_pak_f1 = 0.0
     best_saved = False  # True once model/ holds the BEST-epoch model (2026-06-15)
+
+    _es_sota = {'best': float('inf'), 'wait': 0}  # early-stop state (train_loss)
 
     def epoch_callback(model_instance, ep):
         """Called by model.fit() after each epoch. Synchronous eval."""
@@ -1542,6 +1669,15 @@ def run_sota_baseline_with_epoch_eval(
         except Exception as e:
             print(f"\n  [Epoch {ep}] EVAL ERROR: {e}")
 
+        # ACTUAL early stop (train_loss patience-3). Raise to break the wrapper's
+        # internal fit() epoch loop — wrappers ignore the callback return. (2026-07-08)
+        if early_stop and model_name not in NO_ES_MODELS:
+            _tl = _get_train_loss(model_instance, ep)
+            if _tl is not None and _es_should_stop(_tl, _es_sota):
+                print(f"\n  [EARLY STOP] {model_name}: train_loss no-improve "
+                      f"x{ES_PATIENCE} → stop at ep{ep} (restore-best = min-train_loss)")
+                raise _BaselineEarlyStop(ep)
+
     # ---- Train with callback ----
     start_time = time.time()
     if train_segments is not None:
@@ -1555,7 +1691,10 @@ def run_sota_baseline_with_epoch_eval(
     # SEPARATE per-file NORM segments (window-safety train_segments is unchanged):
     # forwarded as `norm_train_segs=` only to wrappers whose fit declares it.
     _fit_kw = _fit_kwargs_with_norm(model, _fit_kw, norm_train_segments)
-    model.fit(train_X, **_fit_kw)
+    try:
+        model.fit(train_X, **_fit_kw)
+    except _BaselineEarlyStop:
+        pass  # ACTUAL early stop fired from the callback; training halted here.
     train_time = time.time() - start_time
 
     print(f"\n  Training complete: {train_time:.1f}s")
@@ -1564,10 +1703,7 @@ def run_sota_baseline_with_epoch_eval(
     # scores.npz must correspond to the BEST epoch (by pak_auc_f1) so that any
     # downstream visualization or recomputation matches the reported best metric.
     if epoch_metrics_list:
-        best_idx = max(
-            range(len(epoch_metrics_list)),
-            key=lambda i: epoch_metrics_list[i].get('pak_auc_f1', 0) or 0,
-        )
+        best_idx = _restore_best_idx(epoch_metrics_list, model_name)
         final_metrics = epoch_metrics_list[best_idx]
         best_ep_num = final_metrics.get('epoch', best_idx + 1)
         best_scores_file = output_dir / 'epoch_scores' / f'epoch_{best_ep_num:03d}_scores.npz'
@@ -1629,6 +1765,7 @@ def run_weak_sota_baseline_with_epoch_eval(
     norm_train_segments=None,
     test_segments=None,
     resume: bool = False,
+    early_stop: bool = False,
 ) -> dict:
     """Weakly-supervised SOTA execution path (2026-05-29/30 SSL porting).
 
@@ -1739,6 +1876,8 @@ def run_weak_sota_baseline_with_epoch_eval(
     if hasattr(model, 'set_checkpoint_dir'):
         model.set_checkpoint_dir(ckpt_dir)
 
+    _es_weak = {'best': float('inf'), 'wait': 0}  # early-stop state (train_loss)
+
     def epoch_callback(model_instance, ep):
         """Called by model.fit() after each epoch. Synchronous eval (same as SOTA path)."""
         nonlocal best_pak_f1, best_saved
@@ -1791,6 +1930,15 @@ def run_weak_sota_baseline_with_epoch_eval(
         except Exception as e:
             print(f"\n  [Epoch {ep}] EVAL ERROR: {e}")
 
+        # ACTUAL early stop (train_loss patience-3). deepmil/wetas eligible; the
+        # NO_ES weak models (treemil/nrdetector/nrdetector_full) run full. (2026-07-08)
+        if early_stop and model_name not in NO_ES_MODELS:
+            _tl = _get_train_loss(model_instance, ep)
+            if _tl is not None and _es_should_stop(_tl, _es_weak):
+                print(f"\n  [EARLY STOP] {model_name}: train_loss no-improve "
+                      f"x{ES_PATIENCE} → stop at ep{ep} (restore-best = min-train_loss)")
+                raise _BaselineEarlyStop(ep)
+
     # ---- Train with callback — ONLY behavioral delta vs SOTA path: forward train_y ----
     start_time = time.time()
     if train_segments is not None:
@@ -1804,17 +1952,17 @@ def run_weak_sota_baseline_with_epoch_eval(
     # TRANSDUCTIVE graph support (nrdetector #1=B): forward TEST features (label-free)
     # + per-entity test_segments ONLY to wrappers whose fit declares them (inspect-gated).
     _fit_kw = _fit_kwargs_with_test(model, _fit_kw, test_X, test_segments)
-    model.fit(train_X, **_fit_kw)
+    try:
+        model.fit(train_X, **_fit_kw)
+    except _BaselineEarlyStop:
+        pass  # ACTUAL early stop fired from the callback; training halted here.
     train_time = time.time() - start_time
 
     print(f"\n  Training complete: {train_time:.1f}s")
 
     # Final scores = BEST epoch (by pak_auc_f1) — identical to SOTA path.
     if epoch_metrics_list:
-        best_idx = max(
-            range(len(epoch_metrics_list)),
-            key=lambda i: epoch_metrics_list[i].get('pak_auc_f1', 0) or 0,
-        )
+        best_idx = _restore_best_idx(epoch_metrics_list, model_name)
         final_metrics = epoch_metrics_list[best_idx]
         best_ep_num = final_metrics.get('epoch', best_idx + 1)
         best_scores_file = output_dir / 'epoch_scores' / f'epoch_{best_ep_num:03d}_scores.npz'
@@ -2071,16 +2219,28 @@ def create_model(
     epoch_overrides: dict = None,
     train_stride: int = None,
     nn_subsample: int = None,
+    seed: int = None,
 ):
     """Create a baseline model instance with the correct hyperparameters."""
     params_fn = MODEL_PRESETS.get(model_preset, _get_default_model_params)
     all_params = params_fn()
     params = dict(all_params.get(model_name, {}))
 
+    # Thread the run seed into the models whose OWN internal RNG would otherwise
+    # override the global set_baseline_seed and make all seed dirs identical
+    # (2026-07-08 reseed). random: np.random.seed(self.seed) in predict; deepmil:
+    # bag-sampling default_rng; nrdetector/_full: torch.manual_seed(self.seed) at
+    # fit (default 0 -> fixed). The other 5 internal-RNG-free stateless / all
+    # neural+SOTA models are covered by the global seed alone.
+    if seed is not None and model_name in ('random', 'deepmil', 'nrdetector', 'nrdetector_full'):
+        params['seed'] = int(seed)
+
     epoch_overrides = epoch_overrides or {}
     neural_epochs = epoch_overrides.get('neural_epochs')
     sota_epochs = epoch_overrides.get('sota_epochs')
     at_epochs = epoch_overrides.get('at_epochs')
+    nrdetector_encoder_lr = epoch_overrides.get('nrdetector_encoder_lr')
+    nrdetector_classifier_lr = epoch_overrides.get('nrdetector_classifier_lr')
 
     if train_stride is not None and model_name not in SIMPLE_MODELS:
         params['train_stride'] = train_stride
@@ -2241,6 +2401,10 @@ def create_model(
             raise ValueError("NRdetectorBaseline not available")
         if sota_epochs is not None:
             params['epochs'] = sota_epochs
+        if nrdetector_encoder_lr is not None:
+            params['encoder_lr'] = float(nrdetector_encoder_lr)
+        if nrdetector_classifier_lr is not None:
+            params['lr'] = float(nrdetector_classifier_lr)
         params['verbose'] = True
         return NRdetectorBaseline(**params)
     elif model_name == 'deepmil':

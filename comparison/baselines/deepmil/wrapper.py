@@ -108,6 +108,7 @@ class DeepMILBaseline:
         self.batch_size = self.bags_per_batch                    # alias for contract
         self.train_stride = hparams.get('train_stride', 1)
         self.verbose = hparams.get('verbose', True)
+        self.seed = hparams.get('seed', 42)  # bag-sampling RNG seed (2026-07-08 reseed)
 
         # Per-batch positive/negative split (half/half, official 30+30).
         self.pos_per_batch = self.bags_per_batch // 2
@@ -223,8 +224,9 @@ class DeepMILBaseline:
 
         # Bag-sampling RNG: promoted to instance attribute so its bit-generator
         # state can be persisted across resume (B option, see _checkpoint.py).
-        # seed=42 unchanged from the original from-scratch implementation.
-        self._bag_rng = np.random.default_rng(42)
+        # seed = run seed (2026-07-08 reseed; was hardcoded 42) so each seed dir
+        # gets a distinct bag-sampling stream.
+        self._bag_rng = np.random.default_rng(self.seed)
         self.train_loss_history = []
         self.model.train()
 

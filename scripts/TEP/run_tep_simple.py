@@ -45,7 +45,7 @@ sys.path.insert(0, REPO_ROOT)
 
 # Random-baseline draw seeds (paper 5-seed protocol). Draw k is seeded with
 # RANDOM_SEEDS[k] so each draw is reproducible and joinable with the MAE
-# per-seed runs (results.md generator convention: seeds 40..44).
+# per-seed runs (results_baseline.md generator convention: seeds 40..44).
 RANDOM_SEEDS = [40, 41, 42, 43, 44]
 
 # per-fault lite metric keys (per_fault_metrics.json / per_fault_by_seed.json)

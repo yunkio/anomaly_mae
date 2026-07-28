@@ -1,8 +1,12 @@
-"""build_table4.py — full data backbone for the Table 4 (type-disjoint generalization) page.
+"""build_table4.py — legacy PAK diagnostic aggregator for TEP type-disjoint runs.
+
+The current paper (LASAD v22) reports TEP as Table 3 with VUS-PR.  This script
+only aggregates pak_auc_f1 into historically named table4_data*.json files;
+those files are diagnostic and must not be used as the paper Table 3 source.
 MAE conditions (A/B/B0/D) = train mean-fixed pak from pak_fill.json.
 Simple baselines (Random/PCA/NN/Sensor/L2) = #12 per_fault_metrics pak_auc_f1, fold-matched,
 cross-checked against partition_eval. Discriminants: ΔU(A−B)+Γ̂_A(vs B), ΔU(A−PCA)+Γ̂(vs PCA).
-Output: table4_data.json + table4_values.txt (fill-ready, exact format of the paper table).
+Output: table4_data.json + table4_values.txt (legacy filenames retained for compatibility).
 
 Multi-seed (2026-07-22): --seed N (default 42).
   seed 42  → unchanged legacy behavior (byte-compatible table4_data.json / table4_values.txt).
@@ -11,7 +15,7 @@ Multi-seed (2026-07-22): --seed N (default 42).
              per_fault_by_seed.json seed-N raw values (empty if not yet re-run), the 4
              deterministic baselines reuse the seed-42 values (seed-independent — footnoted
              in meta), output table4_data_s{N}.json + table4_values_s{N}.txt in the BASE
-             root (results.md generator convention).
+             root (results_baseline.md generator convention).
 
 Data-seed axis (2026-07-24): --dataseed N (dataset allocation itself re-drawn with seed N;
   streams from scripts/TEP/data_dataseed{N}). MAE (B/A/D) from

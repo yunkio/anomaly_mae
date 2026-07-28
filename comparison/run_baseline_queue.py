@@ -190,6 +190,20 @@ class BaselineExperimentRunner:
         if 'normalize_mode' in self.config:
             cmd += ['--normalize-mode', self.config['normalize_mode']]
 
+        # Train-label masking (experiment 11 = time-order, 12 = random)
+        if 'train_label_mask_frac' in self.config:
+            cmd += ['--train-label-mask-frac', str(self.config['train_label_mask_frac'])]
+        if self.config.get('train_label_mask_random'):
+            cmd += ['--train-label-mask-random']
+        if 'train_label_mask_group_size' in self.config:
+            cmd += ['--train-label-mask-group-size', str(self.config['train_label_mask_group_size'])]
+
+        # Reproducibility + early stopping (2026-07-08 reseed runs)
+        if self.config.get('seed') is not None:
+            cmd += ['--seed', str(self.config['seed'])]
+        if self.config.get('early_stop'):
+            cmd += ['--early-stop']
+
         # Other
         if self.config.get('force'):
             cmd += ['--force']
@@ -539,6 +553,12 @@ Examples:
                               'Only weak SSL models (deepmil/wetas/treemil/nrdetector/'
                               'nrdetector_full) honor it; others SKIP with an explicit '
                               '"resume not applicable" message. See GUIDE_SSL.md §4.4.'))
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Forward --seed to every run_baseline.py subprocess (one seed '
+                             'for the whole queue run). 2026-07-08 reseed runs.')
+    parser.add_argument('--early-stop', action='store_true',
+                        help='Forward --early-stop to every run_baseline.py subprocess '
+                             '(actual train_loss patience-3 early stopping).')
 
     args = parser.parse_args()
 
@@ -575,6 +595,10 @@ Examples:
         # applicable" and skip cleanly (see run_baseline.py auto-skip path).
         if args.resume:
             exp['resume'] = True
+        if args.seed is not None:
+            exp['seed'] = args.seed
+        if args.early_stop:
+            exp['early_stop'] = True
 
     # Determine output base
     if args.output_base:

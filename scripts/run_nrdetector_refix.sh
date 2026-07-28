@@ -30,13 +30,29 @@ for k in 1 2 3 4 5; do
   out=$(ls -d $EXPROOT/9-${k}_*weak_ssl)
   for model in nrdetector nrdetector_full; do
     for exp in psm swat_a1a2 wadi_14days_A1 wadi_14days_A2; do
-      # skip if already done (resume safety)
+      # skip ONLY if fully complete (nrdetector family is NO_ES fixed 50 epochs;
+      # epoch_metrics.json is written EVERY epoch, so bare existence would treat an
+      # interrupted partial run (e.g. 10/50) as done — strengthened 2026-07-25).
       case $exp in
         psm) sub=PSM;; swat_a1a2) sub=SWaT/A1A2_full;;
         wadi_14days_A1) sub=WaDi/A1;; wadi_14days_A2) sub=WaDi/A2;;
       esac
-      if [ -f "$out/$sub/$model/epoch_metrics.json" ]; then
-        log "SKIP 9-$k $model $exp (exists)"; continue
+      mfile="$out/$sub/$model/epoch_metrics.json"
+      if [ -f "$mfile" ]; then
+        nep=$("$PY" -c "
+import json,sys
+try:
+    d=json.load(open('$mfile')); eps=d.get('epochs',d) if isinstance(d,dict) else d
+    print(len(eps) if isinstance(eps,list) else 0)
+except Exception: print(0)")
+        if [ "$nep" = "50" ]; then
+          log "SKIP 9-$k $model $exp (complete 50/50)"; continue
+        fi
+        # partial run: quarantine (preserve) then re-run from scratch
+        qdir="temp/0724/nrdetector_partial_quarantine/9-${k}_${model}_${exp}_$(date +%H%M%S)"
+        mkdir -p "$qdir"
+        mv "$out/$sub/$model" "$qdir/"
+        log "PARTIAL 9-$k $model $exp (n_ep=$nep != 50) -> quarantined to $qdir, re-running"
       fi
       rlog="$RUNDIR/nrdetector_refix_9-${k}_${model}_${exp}_${TS}.log"
       log ">>> RUN 9-$k seed=$seed $model x $exp"

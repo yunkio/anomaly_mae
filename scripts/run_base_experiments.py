@@ -416,6 +416,19 @@ TEP_TYPEGEN_DATASETS += [
      'train_stride': 1, 'normal50': False, 'results_subdir': f'TEP/typegen_lofo_{_h}{_c}'}
     for _h in ('step', 'rand', 'ds', 'unk') for _c in ('', '_cont')
 ]
+# Label-BREADTH sweep: TRAIN DATA FIXED (held-out excluded; the other 3 families' faulty runs all
+# present), vary how many of those 3 families are LABELED (k=0,1,2; k=3 == lofo_<ho>, reused).
+# Tests "more labeled TYPES -> better unseen" free of the within-type partial-label confound.
+import itertools as _itb
+for _h in ('step', 'rand', 'ds', 'unk'):
+    _tf = [_x for _x in ('step', 'rand', 'ds', 'unk') if _x != _h]
+    for _k in (0, 1, 2):
+        for _sub in _itb.combinations(_tf, _k):
+            _tag = 'k0' if _k == 0 else '-'.join(_sub)
+            TEP_TYPEGEN_DATASETS.append(
+                {'key': f'TEP_typegen_breadth_{_h}_{_tag}', 'loader': f'tep_typegen_breadth_{_h}_{_tag}',
+                 'train_stride': 1, 'normal50': False, 'results_subdir': f'TEP/typegen_breadth_{_h}_{_tag}'})
+del _h, _tf, _k, _sub, _tag, _itb
 
 
 # =============================================================================
