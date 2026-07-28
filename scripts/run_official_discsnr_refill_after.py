@@ -23,10 +23,12 @@ ALL4 = ['PSM', 'SWaT_A1A2', 'WaDi_A1', 'WaDi_A2']
 SUBDIRS = {'SWaT_A1A2': ['SWaT/A1A2_full', 'SWaT/A1A2_excl22'],
            'WaDi_A1': ['WaDi/A1'], 'WaDi_A2': ['WaDi/A2'], 'PSM': ['PSM']}
 # wait for the WHOLE remaining queue: campaign (3 orchestrators) + seeds
-WAIT_TOKENS = ['run_official_resume_full_queue_after_pause',
-               'run_official_odoff_featurewise_after_full_queue',
-               'run_official_unlab_rankfix_after',
-               'run_official_seeds_after']
+# [2026-07-08 reorder] seeds now run FIRST, so waiting on seeds alone would let discsnr race the
+# dense/exclR exclude sweeps (discsnr has no run_base guard). Wait on ALL upstream so discsnr stays
+# last-but-one: seeds -> dense -> exclR must all finish first.
+WAIT_TOKENS = ['run_official_paper5seed_after',   # [2026-07-11] paper 5-seed fill preempts everything
+               'run_official_unlabexcl_dense_after',
+               'run_official_exclude_grouprandom_after']
 BASE = 'official=True num_epochs=30 random_seed=42 official_keep_checkpoints=False'
 # (dir-tag, extra override) — faithful to each original; `_v2` keeps dirs distinct.
 EXPERIMENTS = [

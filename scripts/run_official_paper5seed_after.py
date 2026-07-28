@@ -56,6 +56,26 @@ def already_done(seed, tag):
     return False
 
 
+def resumable_dir(seed, tag):
+    """Newest incomplete run that has a durable per-dataset resume checkpoint."""
+    pattern = f"{PROJECT}/results/experiments/official/271_*_30ep_{seed}_{tag}"
+    for d in sorted(glob.glob(pattern), reverse=True):
+        checkpoints = glob.glob(os.path.join(d, '**', 'checkpoints', 'latest_checkpoint.pt'),
+                                recursive=True)
+        if any(os.path.getsize(p) > 0 for p in checkpoints):
+            return d
+    return None
+
+
+def next_outdir(seed, tag):
+    d = resumable_dir(seed, tag)
+    if d:
+        print(f"[p5s] RESUME {tag} seed{seed} -> {os.path.relpath(d, PROJECT)}", flush=True)
+        return d
+    ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    return f"{PROJECT}/results/experiments/official/271_{ts}_30ep_{seed}_{tag}"
+
+
 def _pgrep(tok):
     r = subprocess.run(['pgrep', '-f', tok], capture_output=True, text=True)
     return [p for p in r.stdout.split() if p and int(p) != os.getpid()]
@@ -127,13 +147,11 @@ def main():
                 print(f"[p5s] SKIP {tag} seed{seed} (already complete)", flush=True)
                 continue
             ov = cond_ov + (' use_reconsnr_es_halt=True' if halt else '')
-            ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            outdir = f"{PROJECT}/results/experiments/official/271_{ts}_30ep_{seed}_{tag}"
+            outdir = next_outdir(seed, tag)
             run(outdir, ov, tag, seed)
             reviz(outdir, tag, seed)
             if not already_done(seed, tag):  # [2026-07-24] rc!=0 / cut-off before final files -> retry ONCE
-                ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-                outdir = f"{PROJECT}/results/experiments/official/271_{ts}_30ep_{seed}_{tag}"
+                outdir = next_outdir(seed, tag)
                 print(f"[p5s] RETRY {tag} seed{seed} (incomplete after 1st attempt)", flush=True)
                 run(outdir, ov, tag, seed)
                 reviz(outdir, tag, seed)

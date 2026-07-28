@@ -13,9 +13,10 @@ so it is intentionally NOT re-run here.
 
 official=True, 30ep, seed 42, keep=False, 4 datasets. Dir tag `excl<X>r`.
 
-Placement: waits for the ENTIRE existing chain (seeds → discsnr_refill → odofffeat_redo) to finish
-AND for no run_base to be active, then runs. discsnr has no run_base-active guard, so gating on the
-whole chain (not just seeds) is required to avoid a concurrent run_base collision.
+Placement [2026-07-05 reorder — user]: runs FIRST. The seed campaign was stopped mid-seed43 and
+re-ordered to exclude-first; this launcher now waits only for any active run_base to clear (no token
+wait), then runs. run_official_seeds_after (SEEDS=[43,44]) waits on THIS launcher's token, so the
+resumed order is: exclR → seed43 → seed44 → discsnr_refill → odofffeat_redo.
 
 Usage: PYTHONHASHSEED=42 python scripts/run_official_exclude_grouprandom_after.py
 """
@@ -27,12 +28,15 @@ ALL4 = ['PSM', 'SWaT_A1A2', 'WaDi_A1', 'WaDi_A2']
 SUBDIRS = {'SWaT_A1A2': ['SWaT/A1A2_full', 'SWaT/A1A2_excl22'],
            'WaDi_A1': ['WaDi/A1'], 'WaDi_A2': ['WaDi/A2'], 'PSM': ['PSM']}
 BASE = 'official=True num_epochs=30 random_seed=42 official_keep_checkpoints=False'
-# Run AFTER the whole running chain. run_base guard included because discsnr lacks one.
-WAIT_TOKENS = ['run_official_seeds_after',
-               'run_official_discsnr_refill_after',
-               'run_official_odofffeat_redo_after']
+# [2026-07-05 reorder — user] Originally ran first; now the dense sweep (unlab/excl 30/70/90%)
+# runs ahead of it, so wait on that launcher's token. Resumed order:
+#   dense[unlab30/70/90r, excl30/70/90r] -> exclR[excl25r,50r,75r] -> seeds -> discsnr -> odofffeat.
+WAIT_TOKENS = ['run_official_unlabexcl_dense_after']
 EXPERIMENTS = [
-    ('excl10r', 'train_label_mask_frac=0.10 train_label_mask_random=True train_label_mask_exclude=True'),
+    # [2026-07-05 pause/resume] excl10r COMPLETED (271_20260705_024006_..._excl10r) — dropped so a
+    # resume does not redo it. excl25r was interrupted mid-run (partial dir removed) → resume redoes
+    # it fresh from here. Restore the excl10r line only if a full re-run of all four is ever wanted.
+    # ('excl10r', 'train_label_mask_frac=0.10 train_label_mask_random=True train_label_mask_exclude=True'),
     ('excl25r', 'train_label_mask_frac=0.25 train_label_mask_random=True train_label_mask_exclude=True'),
     ('excl50r', 'train_label_mask_frac=0.50 train_label_mask_random=True train_label_mask_exclude=True'),
     ('excl75r', 'train_label_mask_frac=0.75 train_label_mask_random=True train_label_mask_exclude=True'),

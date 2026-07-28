@@ -1,14 +1,14 @@
 #!/usr/bin/env python
-"""Generate results/experiments/official/results.md — every number needed for the LASAD paper (v22) tables.
+"""Generate results/experiments/official/results_lasad.md — every number needed for the LASAD paper (v22) tables.
 
 Deterministic + idempotent: re-run any time (`conda activate dc_vis && python scripts/generate_results_md.py`);
 it re-scans results/experiments/official/, picks the newest COMPLETE run dir per (condition, seed), extracts
 metrics at the per-cell recon_snr early-stop epoch (the paper's convention — NOT the oracle pak-best), and
-rewrites results.md. Pending (condition, seed) runs render as "—" and fill in automatically as the campaign
+rewrites results_lasad.md. Pending (condition, seed) runs render as "—" and fill in automatically as the campaign
 (sens3seed -> paper5seed -> p5sens) completes them.
 
-READ-ONLY on everything except results.md. Hard verification anchors are asserted before writing; on any
-anchor failure the script exits non-zero WITHOUT touching results.md.
+READ-ONLY on everything except results_lasad.md. Hard verification anchors are asserted before writing; on any
+anchor failure the script exits non-zero WITHOUT touching results_lasad.md.
 
 Epoch-selection recipe (recon_snr ES, per cell):
   - series = training_histories.json["0"]["train_recon_snr"] (1-indexed epochs)
@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 
 # ----------------------------------------------------------------------------- constants
 OFFICIAL = "/home/ykio/notebooks/TSMAE/results/experiments/official"
-OUT_PATH = os.path.join(OFFICIAL, "results.md")
+OUT_PATH = os.path.join(OFFICIAL, "results_lasad.md")
 
 # entity name -> cell subdir
 CELLS = [

@@ -1,8 +1,8 @@
 # Changelog
 
-## 2026-07-19: `scripts/generate_results_md.py` — 논문(v22) LASAD 전 표 채움용 results.md 생성기
+## 2026-07-19: `scripts/generate_results_md.py` — 논문(v22) LASAD 전 표 채움용 results_lasad.md 생성기
 
-`results/experiments/official/results.md` 생성: 논문 전 표(Table 2/4/B.1/A.6/B.2, Fig 6/B.1) 대응 조건
+`results/experiments/official/results_lasad.md` 생성: 논문 전 표(Table 2/4/B.1/A.6/B.2, Fig 6/B.1) 대응 조건
 (baseline/blind/exclanom/ablation5종/unlabXr4종/maskrX7종) × seeds 40-44 × 5셀 × 6지표를 **recon_snr ES
 epoch 규약**(post-warmup EMA α=0.2, patience 2; 라벨無 조건은 같은-seed baseline proxy; excl22는 full과
 epoch 공유)으로 추출, per-seed + Mean±Std(ddof=1, n표기), 미완 run은 "—", 하이퍼파라미터·조건별 override·
