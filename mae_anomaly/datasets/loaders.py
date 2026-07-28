@@ -902,7 +902,11 @@ def load_tep_typegen(fold: str, unlabeled_frac: float = 0.0):
     if fold not in _FOLD_FILES:
         raise ValueError(f"Unknown TEP typegen fold: {fold}. Choices: {sorted(_FOLD_FILES)}")
 
-    data_dir = os.path.join(PROJECT_ROOT, 'scripts', 'TEP', 'data')
+    # Data-seed axis (2026-07-24): env TEP_TYPEGEN_DATA_DIR overrides the stream dir
+    # (e.g. scripts/TEP/data_dataseed40 from build_tep_data.py --data-seed 40).
+    # Unset/empty -> canonical path (behavior unchanged).
+    data_dir = (os.environ.get('TEP_TYPEGEN_DATA_DIR')
+                or os.path.join(PROJECT_ROOT, 'scripts', 'TEP', 'data'))
     train_path = os.path.join(data_dir, _FOLD_FILES[fold])
     test_path = os.path.join(data_dir, 'test_stream.npz')
     for _p in (train_path, test_path):
@@ -912,6 +916,8 @@ def load_tep_typegen(fold: str, unlabeled_frac: float = 0.0):
 
     print(f"\n{'='*60}\nLoading TEP type-gen fold='{fold}'  "
           f"(train={_FOLD_FILES[fold]}, test=test_stream.npz)\n{'='*60}")
+    if os.environ.get('TEP_TYPEGEN_DATA_DIR'):
+        print(f"  [data-seed axis] TEP_TYPEGEN_DATA_DIR override: {data_dir}")
 
     _tr = np.load(train_path)
     _te = np.load(test_path)
@@ -1019,7 +1025,7 @@ def load_tep_typegen(fold: str, unlabeled_frac: float = 0.0):
     return signals, point_labels, anomaly_regions, feature_names, train_ratio, data_info
 
 
-def load_tep_typegen_lofo(held_out: str, contaminate_heldout: bool = False):
+def load_tep_typegen_lofo(held_out: str, contaminate_heldout: bool = False, labeled_families=None):
     """TEP Leave-One-Family-Out (LOFO) generalization — ADDITIONAL protocol.
 
     Opposite ratio to the main type-gen folds: here THREE fault families are SEEN in
@@ -1066,10 +1072,13 @@ def load_tep_typegen_lofo(held_out: str, contaminate_heldout: bool = False):
     assert int(ff_y.sum()) == 0 and int(np.asarray(ff_fid).max()) == 0, "FF region not all-normal"
 
     parts_X, parts_y, parts_fid = [ff_X], [ff_y], [np.asarray(ff_fid)]
-    for _fam in seen_fams:                                   # 3 SEEN families: full 60 faulty, LABELED
+    for _fam in seen_fams:                                   # SEEN families' faulty runs (TRAIN DATA FIXED)
         _s = np.load(os.path.join(data_dir, _FAM_FILE[_fam]))
         parts_X.append(_s['X'][_FF_N:].astype(np.float32))
-        parts_y.append(_s['y'][_FF_N:].astype(np.int64))
+        if labeled_families is None or _fam in labeled_families:
+            parts_y.append(_s['y'][_FF_N:].astype(np.int64))                      # LABELED anomaly
+        else:                                                                      # LABEL-BREADTH: present but UNLABELED (y=0, contaminating normal)
+            parts_y.append(np.zeros(_s['X'][_FF_N:].shape[0], dtype=np.int64))
         parts_fid.append(np.asarray(_s['fault_id'][_FF_N:]))
     if contaminate_heldout:                                  # held-out faulty in train but UNLABELED
         _s = np.load(os.path.join(data_dir, _FAM_FILE[held_out]))
@@ -1133,6 +1142,8 @@ def load_tep_typegen_lofo(held_out: str, contaminate_heldout: bool = False):
         'held_out_family': held_out,
         'seen_families': seen_fams,
         'contaminate_heldout': contaminate_heldout,
+        'labeled_families': (sorted(labeled_families) if labeled_families is not None else seen_fams),
+        'protocol_variant': ('breadth' if labeled_families is not None else 'lofo'),
         'n_total': n_total,
         'n_features': int(signals.shape[1]),
         'train_len': train_len,
@@ -3039,6 +3050,20 @@ for _ho in ('step', 'rand', 'ds', 'unk'):
     DATASET_LOADERS[f'tep_typegen_lofo_{_ho}_cont'] = (
         lambda ho=_ho: load_tep_typegen_lofo(ho, contaminate_heldout=True))
 del _ho  # Clean up loop variable
+# Label-BREADTH sweep: TRAIN DATA FIXED (held-out excluded; other 3 families' faulty runs all present),
+# vary how many of those 3 families are LABELED (rest present-but-unlabeled y=0). Tests "more labeled
+# TYPES -> better unseen", free of the within-type partial-label confound (each family all-or-nothing).
+# k=3 (all 3 labeled) == tep_typegen_lofo_<ho>; here register only k=0,1,2 subsets.
+import itertools as _it
+for _ho in ('step', 'rand', 'ds', 'unk'):
+    _train_fams = [f for f in ('step', 'rand', 'ds', 'unk') if f != _ho]
+    for _k in (0, 1, 2):                                   # k=3 reuses lofo_<ho>
+        for _sub in _it.combinations(_train_fams, _k):
+            _tag = 'k0' if _k == 0 else '-'.join(_sub)
+            DATASET_LOADERS[f'tep_typegen_breadth_{_ho}_{_tag}'] = (
+                lambda ho=_ho, lab=list(_sub): load_tep_typegen_lofo(
+                    ho, contaminate_heldout=False, labeled_families=lab))
+del _ho, _train_fams, _k, _sub, _tag, _it
 # Add per-machine SMD loaders dynamically (smd_machine-1-1 through smd_machine-3-11)
 for _mn in SMD_MACHINE_NAMES:
     DATASET_LOADERS[f'smd_{_mn}'] = (lambda mn=_mn: load_smd(machines=[mn]))

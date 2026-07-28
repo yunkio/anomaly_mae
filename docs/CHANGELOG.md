@@ -42,6 +42,76 @@ provenance(선택 epoch) 포함. **하드 앵커 내장**(seed40 PSM ES16 지표
 **왜 결과가 사후방식과 동일한가**: 사후 `es()`도 첫 patience-소진에서 break해 그 이후 epoch을 무시한다. halt는 바로 그 지점에서 학습을 멈추므로 ES epoch(best_ep)과 그 모델 상태·scores NPZ가 불변. 사후 VUS 스윕은 저장된 **전 epoch**(`glob('epoch_*_scores.npz')`)을 계산하므로 halt로 18ep만 저장돼도 ES epoch(16)의 VUS가 채워진다.
 
 **검증**: (1) 스트리밍 기준이 사후 `es()`와 동일 ES epoch — 실데이터 5시드×4셀 20/20 일치. (2) **end-to-end 수용검증**: PSM seed40 baseline+halt 실행 → e18 halt(12ep skip), e16의 8개 지표(pak/vus_pr/vus_roc/aff/prc/f1_t/pa_0_f1/r_based_f1_ar) **전부 기존 30ep 런과 소수 8자리까지 bit-identical**. (3) flag off → 블록 미실행 byte-identical. py_compile OK.
+## 2026-07-22: Feat — TEP Table 4 5-seed 파이프라인 (seeded Random + per-seed 런처 + 다중-seed 집계)
+
+논문 Table 4의 seed-의존 행(Random/A/B/D) 5-seed(40..44)화. seed-42 경로는 전부 byte-호환 유지, GPU 실행 없음(스크립트 작성만). 백업 `.trash/260722/tep_5seed/`.
+
+**`scripts/TEP/run_tep_simple.py`**: random baseline 5 draws를 `RANDOM_SEEDS=[40,41,42,43,44]`로 각각 시드(`RandomBaseline.seed` 주입 — predict 내 `np.random.seed` 경로). per-fault를 draw별 계산 → (a) draw-평균이 기존 `per_fault_metrics.json` 자리(기존 "마지막 draw 단독" 결함 수정), (b) seed별 원값 신규 `per_fault_by_seed.json`. `_aggregate_run_metrics` mean±std 불변, metadata에 `random_seeds` 기록. deterministic 4모델 byte-identical(구버전 대조 smoke 실증).
+
+**`scripts/run_tep_seeds.sh`** (신규): seed별 `TEP_phase2_win100_ep30_s{seed}` root에 Phase2-A/B만(B0 제외) × 4 folds, `random_seed={seed}` override, run_base_experiments 내장 skip으로 resumable, 완료 후 pak_fill(--root)+build_table4(--seed) 자동. seed 42는 REFUSE(canonical 보호). 무인자=40 41 43 44 순차.
+
+**`scripts/TEP/pak_fill.py`**: `--root` 인자(기본=기존 ROOT, 기본 재실행 시 pak_fill.json 값 동일 검증). root에 phase2_B0/noisy 없으면 해당 항목·출력 섹션 자동 skip.
+
+**`scripts/TEP/build_table4.py`**: `--seed` 인자(기본 42=기존 출력 byte-diff 0 검증). seed N: MAE=`..._s{N}/pak_fill.json`(B/A/D), Random=`per_fault_by_seed.json` seed-N 원값(부재 시 null 허용), deterministic 4모델=seed-42 재사용(meta 각주), 출력 `table4_data_s{N}.json`+`table4_values_s{N}.txt`(BASE root — build_results_md 생성기 규약).
+
+## 2026-07-22: Feat — GCN-LSTM 옵션 A: Keras init semantics 이식(`keras_init`) + dead-head guard (default-off, base byte-identical)
+
+R4 스펙(dead ReLU head 붕괴의 기여 요인 = Keras initializer 미이식)에 따른 재실험 옵션 A 구현. QuoVadisTAD upstream(TF 2.11 Keras 기본값) 기준.
+
+**`comparison/baselines/gcn_lstm/model.py`**:
+- `_apply_keras_init_()`: keras_init=True 시 전 파라미터 Keras semantics 재초기화 — `graph_conv.weight` xavier 재추첨(동일 분포), `lstm.weight_ih` glorot_uniform(fan=(20,256)), `lstm.weight_hh` (semi-)orthogonal(열 orthonormal ≡ Keras recurrent_kernel 전치), lstm bias 전부 0 + **unit_forget_bias**(bias_ih[h:2h]=1, bias_hh=0 → 합=Keras 단일 bias), `dense`(head Linear(64,1))·`extra_node_dense` glorot + **bias 정확히 0**(dead-head 핵심 항목).
+- `_DeadHeadGuard`: `model.dense` forward hook(pre-activation, training 중만 기록). epoch 전체 max≤0 → 경고 로그 + head 재초기화(**1회 한도**, glorot/zeros, Adam moment 제거). `mode='reinit'|'warn'`. epoch_callback **이전** 판정, try/finally로 ES 예외 시에도 hook 해제.
+- `GCNLSTM.__init__(keras_init=False)` / `GCNLSTMBaseline.__init__(keras_init=False, dead_head_guard=True, dead_head_action='reinit')` — **명시 파라미터**(extra_kwargs 흡수 금지). guard는 **keras_init=True일 때만 arm**. save/load config 키 3개 추가(과거 checkpoint는 `.get` 기본값 False로 무변화).
+
+**`comparison/run_baseline.py`**: `--gcnlstm-keras-init` 플래그(기본 off) — gcn_lstm 생성 직후 wrapper attr만 set(preset 불변, 타 모델 경로 무접촉). metadata schema2가 attr 자동 기록.
+
+**`scripts/run_gcnlstm_redo.sh`** (신규, 작성만 — GPU 체인 완주 후 실행): 5 seeds(42,43,40,41,44→8-1..8-5) × 4 normalonly 실험(psm/swat_a1a2/wadi_A1/A2) × gcn_lstm, `--seed --early-stop --neural-epochs 50 --normalize-mode minmax --gcnlstm-keras-init`. 시작 시 기존 gcn_lstm 결과 20셀을 `.trash/<YYMMDD>/gcnlstm_pre_redo/`로 **1회성 MOVE 백업**(재실행 시 백업 존재→skip으로 신규 결과 보호, run_baseline auto-skip으로 resumable). 타 run_baseline 프로세스 감지 시 시작 거부(ALLOW_CONCURRENT=1 override).
+
+**검증**(CPU, 27/27 PASS): flag-off 생성·2-epoch fit 궤적이 수정 전 백업본과 state_dict/train_loss까지 **완전 동일**(byte-identical); flag-on head bias==0·forget bias==1·`weight_hh` 직교 오차 4.8e-7; guard 사멸 감지/1회 재초기화/캡/무관측(-inf) 가드 동작 확인. 백업 `.trash/260722/gcnlstm_optA/`.
+
+## 2026-07-19: Feat — LASAD 논문용 baseline 5-seed 결과 집계기 (`comparison/build_results_md.py`)
+
+LASAD.pdf(본문+appendix) 요구사항 추출에 따라 `comparison/results/experiments/results.md`를 생성하는 재실행형 집계기.
+
+- **소스**: reseed 8-1..8-5(unsup, anomaly-excised)/9-1..9-5(weak, contaminated), seeds {42,43,40,41,44}. 미완료 셀은 빈칸(재실행 시 자동 충전).
+- **Epoch 선택 = 논문 A.1.1 프로토콜**: trained→argmin(train_loss)(ES restore-best), NO_ES 5모델→final epoch, stateless→단일 평가. 기존 test-side best-epoch(max pak) 미사용.
+- **Metrics**: Table 2 = pak_auc_f1/vus_pr/**affiliation_f1_ar**(AR-threshold; draft 인쇄값과 키 정합 확인 — Random Aff=0.0까지 일치), Table A.5 = prc_auc/vus_roc/pa_0_f1.
+- **dcdetector = neg convention**(사용자 결정, 부호 반전 검증 2026-07-19): `_dcdetector_neg_cache.json`(mtime-guard, 향후 seed 증분)에서 로드. on-disk 아티팩트는 canonical 유지(집계 시 일괄 변환 — 이중반전/규약 혼선 방지).
+- 산출: Table 2/A.5 대응(mean-only + mean±std), Table A.6 rank 파생(26-way 잠정), TEP Table 4 구조, Table A.2 파라미터 대조(7모델 불일치 플래그: pca_error 50→auto10/30, nn_distance 5NN→1NN, epoch-cap 5종), draft 인쇄값 reconciliation(|Δ|≥0.02 = 84셀), per-seed 부록, 미해결 트래커.
+- 부속: `results_data.json`(기계가독 셀 덤프).
+
+## 2026-07-10: Fix — catch×SWaT batch-128 GPU-mem thrashing (STUCK) → batch÷4
+
+reseed 8-1 실행 중 `catch × SWaT`가 **batch 128**로 돌다 GPU mem 98%(12GB) 포화 → **batch당 ~50분(3512s)**으로 진행성 stall(tqdm ETA 191일). 사용자 stuck 기준(util 100% + mem 꽉 + power 166W + mem-bw 1%)으로 포착.
+
+**근본 원인**: `run_baseline.py`의 batch 축소 로직이 `'wadi' in args.experiment` **전용**이라 SWaT는 divisor를 못 받아 full batch로 실행. (determinism 무관 — set_baseline_seed는 `cudnn.deterministic=False`; kill 후 GPU 811MB로 해제돼 외부 leak도 아님 = 12GB 전부 catch batch-128 몫.)
+
+**수정**(`run_baseline.py`): `_SWAT_BATCH_DIVISORS = {'catch': 4}` 추가 + divisor 분기를 `if 'wadi'→_WADI / elif 'swat'→_SWAT / else None`로 일반화. catch×SWaT batch **128→32**(SWaT 45 feature라 WaDi ÷8보다 완화). WaDi(÷8)·PSM(무변화) 로직 불변. metadata `wadi_batch_divisor`가 SWaT도 캡처. 백업 `.trash/260710/`.
+
+**검증**: 재시작 후 catch×SWaT batch time **3512s→0.15s**(~23000×), GPU mem 98%→55%, mem-bw 1%→43%, power 166W→366W. 성능도 원본 일치(SWaT_full best ep1 pak_auc_f1 0.336 vs 원본 0.337). **미해결 별건**: catch×WaDi_A1은 seed42에서 inference NaN(exit 3)으로 실패 — batch와 무관, 관찰 중.
+
+
+## 2026-07-08: baseline 재현(reseed) 실험 8/9 — `--seed` + `--early-stop` (actual ES) 코드화 & 10-run 인터리브 체인
+
+원본 8번(normalonly, 22 unsup)·9번(weak-SSL, 5 weak) baseline을 **완전히 같은 설정**으로 고정 seed 5개(42,43,44,45,46) × ES 적용해 각 5회 재현. Notion "8-5-2 early stopping" 페이지의 방법론을 코드로 구현.
+
+**seed plumbing** (기존엔 neural/SOTA 무seed — GUIDE.md §7):
+- `baseline_common.set_baseline_seed(N)`: MAE `config.set_seed` 미러(`random`/`numpy`/`torch.manual_seed`/`cuda.manual_seed(+_all)`/`cudnn.deterministic=True`/`PYTHONHASHSEED`). `--seed` 지정 시 매 모델 dispatch 직전 호출. None이면 no-op(기존 동작 보존).
+- 자체 RNG로 전역 seed를 덮어쓰는 모델은 `create_model(seed=N)`이 per-run seed 주입: `random`(np.random.seed in predict), `deepmil`(bag_rng, wrapper.py `default_rng(self.seed)`로 수정), `nrdetector`/`nrdetector_full`(fit 시 torch.manual_seed(self.seed)). → seed dir 간 실제 결과 차이 보장.
+- `random`: seed 지정 시 n_runs=1(단일 deterministic), 미지정 시 기존 5-run mean±std 유지.
+
+**actual early stopping** (`--early-stop`; train_loss patience 3, min_delta 0, floor 없음 = Notion 방법론):
+- 발동 시 **훈련 중단**: in-loop neural(mlp/mlpmixer/transformer)은 epoch loop break; callback-driven(gcn_lstm+13 SOTA, 5 weak)은 `_BaselineEarlyStop` 예외를 `model.fit()` 밖에서 catch(wrapper가 callback 반환값 무시·try/except 없음을 이용).
+- restore-best = **min-train_loss epoch** score(`_restore_best_idx`). ES-불가 모델은 pak_auc_f1 fallback.
+- `NO_ES_MODELS` = {dcdetector, tfmae, nrdetector, nrdetector_full, treemil} — train_loss가 없거나(3개) 상수 0.0(2개)라 ES 제외 → full epochs.
+
+**파일**: `baseline_common.py`(set_baseline_seed·NO_ES_MODELS·_BaselineEarlyStop·_es_should_stop·_get_train_loss·_restore_best_idx·create_model seed·3 drivers early_stop·augment_run_metadata seed/early_stop/policy), `run_baseline.py`(`--seed`/`--early-stop` CLI + set_baseline_seed 호출 + metadata), `run_baseline_queue.py`(per-entry `--seed`/`--early-stop` 주입·build_command), `baselines/deepmil/wrapper.py`(seed hparam). 백업 `.trash/260708/reseed_es/`.
+
+**검증**: seed42 재현·seed42≠43(torch RNG); create_model이 random/deepmil/nrdetector에 seed thread; `_es_should_stop`(plateau→stop, monotone→no); mlp 통합=ep48 ES 발동+restore-best=ep45(min-train_loss) scores.npz 일치; tranad callback 예외경로 무크래시; metadata seed=42/early_stop/policy 기록.
+
+**실행**: `scripts/run_reseed_chain.sh` — 인터리브 8-1,9-1,8-2,9-2,…,8-5,9-5(seed 42..46), 각 `run_baseline_queue.py --seed S --early-stop`. **스코프(2026-07-08 user)**: 4 large 데이터셋만 [psm,swat_a1a2,wadi_A1,wadi_A2] (SMD/MSL/SMAP 제외). **epoch 캡: dcdetector=1ep, catch=2ep(전 데이터셋), timesnet·moderntcn·omnianomaly=5ep**. 큐 `baseline_queue_reseed{8,9}_*.json` = exp8 88 entries(22×4)·exp9 20(5×4). WaDi batch cap(dcdetector÷4, catch÷8) 유지. resumable(epoch_metrics.json 존재 시 [run_baseline.py:371](../comparison/run_baseline.py) auto-skip).
+
+**catch epoch 하드코딩 변경**: run_baseline.py의 catch×WaDi 처리를 "5 강제"→"**5 상한, explicit ≤5 존중**"(_cur None/>5만 5로 cap). 근거=원본 8번 catch best epoch 실측(PSM/SWaT/WaDi_A1=ep1, WaDi_A2=ep2; ep3+ pak_auc_f1 하락). reseed는 catch=2ep, exp10/labelmask는 parity 5 보존. **병목 ETA**(temp/measure_reseed_bottleneck.py): catch 184→74h, GRAND TOTAL 468→**357h(14.9d)** upper bound.
 
 ## 2026-07-04: `train_label_mask_exclude` — 마스킹된 anomaly를 unlabeled로 두지 않고 학습에서 **제거** (기본 False = no-op)
 
@@ -53,6 +123,19 @@ provenance(선택 epoch) 포함. **하드 앵커 내장**(seed40 PSM ES16 지표
 - `scripts/run_base_experiments.py`: 학습 train_dataset에 `train_label_mask_exclude` 전달(getattr default False).
 
 **검증**: (1) **무회귀** — 실데이터 4개(PSM/WaDi_A1/A2/SWaT) 전 frac에서 리팩터 전후 마스킹 byte-identical. (2) **no-op** — exclude=True+frac=0 → baseline 완전 동일, test split 무영향. (3) **의도 동작** — 합성 SlidingWindowDataset 통합테스트로 선택분만 splice, 미선택 TRUE 라벨 유지, boundary 삽입, region remap 정확, frac=1.0≡전량 제거 확인. (4) **선택 동일성** — exclude가 제거하는 지점 = mask가 가리는 지점(동일 RandomState(42)). py_compile OK. official 큐 exclude_grouprandom(excl10r/25r/50r/75r; 100%=exclanom 제외)로 추가(seeds→discsnr→odofffeat 뒤).
+
+## 2026-07-02: baseline 라벨마스킹 실험 11(시간순)/12(무작위) + `train_label_mask_frac` UnifiedLoader 포팅
+
+train split의 anomaly 라벨 중 50%를 정상(0)으로 마스킹하는 baseline 실험 착수. MAE 파이프라인(`dataset_sliding.py`)엔 `train_label_mask_frac`/`train_label_mask_random`이 이미 있으나 baseline 파이프라인(`UnifiedLoader`)엔 없어 **canonical 로직을 그대로 포팅**.
+
+**마스킹**: anomaly timepoint를 rank-based 선택 — 11번=시간순 latest k(`_anom_idx[-k:]=0`), 12번=무작위 k(`RandomState(42).choice`, 재현). frac=1.0≡전부(≡contaminated).
+
+**variant 분리**(검증, PSM): unsup=`normalonly`+mask → masked anomaly가 train에 오염 잔류(**mask 0=8번 165472 / 1.0=10번 176401 / 0.5=170936 완벽 보간**). weak=`standard`+mask → earlier-50% positive 라벨.
+
+**파일**: `comparison/data/unified_loader.py`(파라미터+마스킹+`_apply_normalonly` frac>0시 masked-label cut), `run_baseline.py`(CLI+loader_kwargs+metadata), `run_baseline_queue.py`(command), `baseline_common.augment_run_metadata`. frac=0 byte-identical. 백업 `.trash/260702/`.
+
+**실행**: model-major, (1)11 large→(2)12 large→(3)11 simple→(4)12 simple. 큐 `baseline_queue_labelmask1{1,2}_{large,simple}.json`. end-to-end 검증(실 CLI 실행): 11=`random=False`, 12=`random=True` 로그·metadata 확인.
+
 
 ## 2026-07-02: `train_label_mask_random` — TRAIN 라벨 마스킹을 시간순-마지막 대신 랜덤으로 (그룹-단위, 2026-07-03 개정; 기본 False = no-op)
 
@@ -5002,3 +5085,16 @@ docs/
 **Status**: All changes implemented, tested, and documented.
 
 **Next Steps**: Run full experiments with updated architecture and training logic.
+
+## 2026-07-24 (nrdetector refix)
+- **Fix: nrdetector gate threshold float64화** (`comparison/baselines/nrdetector/wrapper.py`) — float32 mean의 상수 배열 1-ulp 반올림 knife-edge로 발생하던 all-zero gate(pak=0.0 셀 8개, epoch별 0.61↔0.0 이진 진동)를 수학 정의대로 결정론 all-pass로 복원.
+- **Fix: nrdetector BCE backstop 제거** — 2026-06-13 절대 threshold(0.05)가 저-prevalence 데이터(WaDi 자연 BCE 바닥 0.030-0.038, SWaT 0.044)에서 ep1-2에 오발동해 encoder 학습을 원천 차단(만성 저성능의 실체). 근본 수정은 encoder_lr=1e-4(deepmil/wetas 동일 encoder 50ep 무붕괴 실증)이며 upstream에 backstop 부재 → 제거로 충실도 복원. `encoder_bce_min`은 config 호환 위해 unused 유지.
+- 재실험: `scripts/run_nrdetector_refix.sh` — nrdetector+nrdetector_full × 4 exp × 5 seeds = 40 runs, 기존 결과는 `temp/0724/nrdetector_pre_fix/`로 구조 보존 백업 후 동일 dir 재실험. 논문 A.2 "BCE backstop 0.05" 표기 정정 필요(재실험 완료 후).
+
+## 2026-07-24 (TEP 데이터셋 구성 seed화 — data-seed axis)
+- **Feat: TEP typegen run 할당 seed-파라미터화** (`scripts/TEP/tep_common.py::allocate_runs/train_runs_needed/data_dir_for`, `scripts/TEP/build_tep_data.py --data-seed/--out-dir`) — `np.random.default_rng(N)` 비복원 샘플링으로 FF pool(1..500) train 240+test 40, per-fault pool(1..500) test 20+train N_f 재추출(집합 크기·fold 구성·onset·스트림 배치 규칙 canonical 동일). 무인자 재빌드 = canonical **배열 단위 완전 등가** 검증(전 6 npz + test_run_table.json). manifest에 `data_seed`+`run_allocation` 기록.
+- **데이터 4벌 빌드**: `scripts/TEP/data_dataseed{40,41,43,44}/` — seed별 train/test 겹침 0, 규격(shape/dtype/양성비) canonical 동일, 할당 상호·canonical 상이. **test 스트림 layout 불변**(y/fault_id/run_boundaries/run_table이 canonical과 동일 — pak_fill/build_table4가 데이터 override 없이 유효한 근거).
+- **Feat: loader env override** (`mae_anomaly/datasets/loaders.py::load_tep_typegen`) — `TEP_TYPEGEN_DATA_DIR` 설정 시 해당 dir 로드, 미설정 시 기존 경로(동작 불변).
+- **Feat: `build_table4.py --dataseed N`** — MAE(B/A/D)=`TEP_phase2_win100_ep30_dataseed{N}/pak_fill.json`, simple 5행=`scripts/TEP/results/simple_dataseed{N}/`(부재 시 null), Random=`per_fault_by_seed.json[N]` → `table4_data_ds{N}.json`. 기존 기본/--seed 모드 byte-호환 유지(md5 검증). `run_tep_simple.py --data-dir` 추가(기본 불변).
+- **Feat: results.md §6 이원화** (`comparison/build_results_md.py`) — 6-A 데이터셋 고정 5-seed(기존 값 무변화, 제목만 명시) / 6-B 데이터셋 변경 5-seed(canonical 42 + ds40/41/43/44, `table4_data_ds{N}.json` 소비, 결정적 모델도 seed-의존 취급, 6.1/6.2/6.3 동형).
+- 실행 스크립트(작성만, GPU queue 종료 후 가동): `scripts/run_tep_dataseed.sh`(대기 게이트 `pgrep run_baseline.py|run_nrdetector_refix` → seed별 Phase2-A/B + pak_fill + build_table4 --dataseed, resumable), `scripts/run_tep_simple_dataseed.sh`(CPU simple 5모델×4폴드, resumable). 원본 백업: `temp/0724/tep_dataseed_backup/`.
